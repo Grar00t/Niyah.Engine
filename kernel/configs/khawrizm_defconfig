@@ -1,0 +1,161 @@
+# Khawrizm ARM64 defconfig
+# Produced for Linux 6.6 LTS
+# Usage: cp this file to arch/arm64/configs/khawrizm_defconfig
+#        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-musl- khawrizm_defconfig
+
+# ── Architecture ────────────────────────────────────────────────────
+CONFIG_64BIT=y
+CONFIG_ARM64=y
+CONFIG_ARCH_AARCH64=y
+CONFIG_SMP=y
+CONFIG_NR_CPUS=16
+
+# Platform support (RPi5 = BCM2712, QEMU virt)
+CONFIG_ARCH_BCM=y
+CONFIG_ARCH_BCM2835=y
+CONFIG_MACH_BCM2837=y
+CONFIG_ARCH_VIRT=y
+
+# ── Core kernel ──────────────────────────────────────────────────────
+CONFIG_LOCALVERSION="-khawrizm"
+CONFIG_KERNEL_LZ4=y
+CONFIG_HZ_250=y
+CONFIG_PREEMPT=y
+CONFIG_NO_HZ_IDLE=y
+CONFIG_HIGH_RES_TIMERS=y
+CONFIG_CGROUPS=y
+CONFIG_NAMESPACES=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+CONFIG_UTS_NS=y
+CONFIG_IPC_NS=y
+
+# ── Memory ───────────────────────────────────────────────────────────
+CONFIG_MEMORY_HOTPLUG=n
+CONFIG_TRANSPARENT_HUGEPAGE=y
+CONFIG_CMA=y
+CONFIG_CMA_SIZE_MBYTES=64
+CONFIG_ZSMALLOC=y
+CONFIG_ZRAM=y
+
+# ── Block / Storage ──────────────────────────────────────────────────
+CONFIG_BLOCK=y
+CONFIG_BLK_DEV_LOOP=y
+CONFIG_BLK_DEV_SD=y
+CONFIG_BLK_DEV_NVME=y
+CONFIG_MMC=y
+CONFIG_MMC_BLOCK=y
+CONFIG_MMC_BCM2835=y
+
+# ── Filesystems ──────────────────────────────────────────────────────
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_FS_POSIX_ACL=y
+CONFIG_TMPFS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_SECURITYFS=y
+CONFIG_OVERLAY_FS=y
+
+# ── Networking ───────────────────────────────────────────────────────
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_PACKET=y
+CONFIG_UNIX=y
+CONFIG_IPV6=n
+CONFIG_NETFILTER=y
+CONFIG_NF_TABLES=y
+CONFIG_NF_CONNTRACK=y
+# No bluetooth, no WiFi driver (platform-specific additions in .d/)
+CONFIG_WIRELESS=n
+CONFIG_CFG80211=n
+
+# ── USB ──────────────────────────────────────────────────────────────
+CONFIG_USB=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_EHCI_HCD=y
+CONFIG_USB_STORAGE=y
+
+# ── Display / GPU (minimal, no X11 drivers) ──────────────────────────
+CONFIG_DRM=y
+CONFIG_DRM_SIMPLEDRM=y
+CONFIG_DRM_VC4=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_DRM_PANEL=y
+
+# ── Input ────────────────────────────────────────────────────────────
+CONFIG_INPUT=y
+CONFIG_INPUT_EVDEV=y
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_KEYBOARD_GPIO=y
+
+# ── Serial / UART ────────────────────────────────────────────────────
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+
+# ── Security ─────────────────────────────────────────────────────────
+CONFIG_SECURITY=y
+CONFIG_SECURITY_NETWORK=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
+CONFIG_DEFAULT_SECURITY_PHALANX=y
+CONFIG_SECURITY_PHALANX=y
+# Disable SELinux / AppArmor to reduce attack surface
+CONFIG_SECURITY_SELINUX=n
+CONFIG_SECURITY_APPARMOR=n
+# Hardening
+CONFIG_HARDENED_USERCOPY=y
+CONFIG_FORTIFY_SOURCE=y
+CONFIG_RANDOMIZE_BASE=y
+CONFIG_STRICT_KERNEL_RWX=y
+CONFIG_STRICT_MODULE_RWX=y
+CONFIG_STACKPROTECTOR_STRONG=y
+CONFIG_SHADOW_CALL_STACK=y
+CONFIG_CFI_CLANG=n   # enable if building with clang
+CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
+CONFIG_PAGE_POISONING=y
+
+# ── eBPF (needed for audit / tracing) ────────────────────────────────
+CONFIG_BPF=y
+CONFIG_BPF_SYSCALL=y
+CONFIG_BPF_JIT=y
+CONFIG_BPF_JIT_DEFAULT_ON=y
+
+# ── Crypto ───────────────────────────────────────────────────────────
+CONFIG_CRYPTO=y
+CONFIG_CRYPTO_AES=y
+CONFIG_CRYPTO_SHA256=y
+CONFIG_CRYPTO_SHA512=y
+CONFIG_CRYPTO_CHACHA20POLY1305=y
+CONFIG_CRYPTO_ARM64=y
+
+# ── Timekeeping ──────────────────────────────────────────────────────
+CONFIG_RTC_CLASS=y
+CONFIG_RTC_DRV_CMOS=y
+
+# ── Debug (disable for release, enable for dev) ──────────────────────
+CONFIG_DEBUG_KERNEL=n
+CONFIG_DEBUG_INFO=n
+CONFIG_KASAN=n
+CONFIG_UBSAN=n
+# For debug builds, uncomment:
+# CONFIG_DEBUG_KERNEL=y
+# CONFIG_DEBUG_INFO_DWARF4=y
+# CONFIG_KASAN=y
+# CONFIG_KASAN_INLINE=y
+# CONFIG_UBSAN=y
+
+# ── Remove all non-essential subsystems ──────────────────────────────
+CONFIG_SOUND=n
+CONFIG_PCMCIA=n
+CONFIG_HAMRADIO=n
+CONFIG_IR_CORE=n
+CONFIG_MEDIA_SUPPORT=n
+CONFIG_INFINIBAND=n
+CONFIG_VMWARE_VMCI=n
+CONFIG_HYPERV=n
+CONFIG_XEN=n
+CONFIG_KVM=n
+CONFIG_VIRT_DRIVERS=n
