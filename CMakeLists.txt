@@ -1,42 +1,61 @@
-cmake_minimum_required(VERSION 3.10)
-project(Khawrizm C)
+cmake_minimum_required(VERSION 3.16)
+project(niyah-kernel VERSION 1.0.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 
-# ARM64 specific flags
+# ── Compiler flags ────────────────────────────────────────────────
+add_compile_options(-Wall -Wextra -Wcast-align -Wstrict-prototypes)
+
+# ── Platform / SIMD detection ─────────────────────────────────────
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(ARCH_FLAGS "-march=armv8-a+simd")
-    message(STATUS "Building for ARM64 with NEON")
+    add_compile_options(-march=armv8.2-a+simd)
+    message(STATUS "[niyah] Target: ARM64 + NEON")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    add_compile_options(-march=native -mavx2 -mfma)
+    message(STATUS "[niyah] Target: x86_64 + AVX2")
 else()
-    set(ARCH_FLAGS "-march=native")
-    message(STATUS "Building for x86_64")
+    message(STATUS "[niyah] Target: scalar fallback")
 endif()
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARCH_FLAGS} -Wall -Wextra -O3")
+# ── Release / Debug flags ─────────────────────────────────────────
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_C_FLAGS_DEBUG   "-O1 -g -fsanitize=address,undefined")
 
-# Include directories
-include_directories(${CMAKE_SOURCE_DIR}/Downloads)
-include_directories(${CMAKE_SOURCE_DIR}/Downloads/include)
+# ── Source layout ─────────────────────────────────────────────────
+set(SRC_DIR  ${CMAKE_SOURCE_DIR}/niyah/src)
+set(INC_DIR  ${CMAKE_SOURCE_DIR}/niyah/include)
 
-# NIYAH inference engine
-add_executable(niyah 
-    ${CMAKE_SOURCE_DIR}/Downloads/niyah_infer.c
-    ${CMAKE_SOURCE_DIR}/Downloads/niyah_gguf.c
-    ${CMAKE_SOURCE_DIR}/Downloads/niyah_simd.c
-    ${CMAKE_SOURCE_DIR}/Downloads/niyah_tokenizer.c
+include_directories(${INC_DIR})
+
+# ── SIMD primitives library ───────────────────────────────────────
+add_library(niyah_simd STATIC
+    ${SRC_DIR}/niyah_simd.c
 )
-target_link_libraries(niyah m pthread)
+target_include_directories(niyah_simd PUBLIC ${INC_DIR})
+target_link_libraries(niyah_simd m)
 
-# SIMD test
-add_executable(niyah_test
-    ${CMAKE_SOURCE_DIR}/Downloads/test_simd.c
-    ${CMAKE_SOURCE_DIR}/Downloads/niyah_simd.c
+# ── GGUF loader library ───────────────────────────────────────────
+add_library(niyah_gguf STATIC
+    ${SRC_DIR}/niyah_gguf.c
 )
-target_link_libraries(niyah_test m pthread)
+target_include_directories(niyah_gguf PUBLIC ${INC_DIR})
 
-# Phalanx Gate (userspace demo)
-add_executable(phalanx_gate
-    ${CMAKE_SOURCE_DIR}/Downloads/phalanx_gate.c
+# ── SIMD unit test ────────────────────────────────────────────────
+add_executable(niyah_test_simd
+    ${SRC_DIR}/test_simd.c
 )
-target_link_libraries(phalanx_gate m)
+target_link_libraries(niyah_test_simd niyah_simd m)
+
+# ── Install ───────────────────────────────────────────────────────
+install(TARGETS niyah_simd niyah_gguf
+    ARCHIVE DESTINATION lib
+)
+install(DIRECTORY ${INC_DIR}/
+    DESTINATION include/niyah
+    FILES_MATCHING PATTERN "*.h"
+)

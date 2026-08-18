@@ -1,84 +1,66 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║  NIYAH-CORE  Makefile  ·  KHAWRIZM Sovereign Stack              ║
+# ║  NIYAH-KERNEL  Makefile                                          ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
-#  make                   → auto-detect platform
-#  make arm64             → ARM64 + NEON (Snapdragon / Graviton / RPi)
-#  make x86               → x86_64 + AVX2
-#  make win               → Windows ARM64 (cross or native)
-#  make debug             → with sanitizers
-#  make bench             → build + run benchmark
-#  make demo              → build + run architecture demo
-#  make clean
+#  make              → auto-detect platform, release build
+#  make debug        → AddressSanitizer + UBSan
+#  make test         → build + run SIMD unit tests
+#  make clean        → remove build artefacts
 
-CC      ?= gcc
-CFLAGS   = -std=c99 -Wall -Wextra -Wno-unused-function
-LDFLAGS  = -lm
-TARGET   = niyah
-SRCS     = niyah_core.c niyah_main.c
+CC       ?= gcc
+CFLAGS    = -std=c11 -Wall -Wextra -Wcast-align -Wstrict-prototypes
+LDFLAGS   = -lm
 
-# ── detect platform ────────────────────────────────────────────────
-UNAME   := $(shell uname -m)
+SRC_DIR   = niyah/src
+INC_DIR   = niyah/include
+
+SIMD_SRC  = $(SRC_DIR)/niyah_simd.c
+GGUF_SRC  = $(SRC_DIR)/niyah_gguf.c
+TEST_SRC  = $(SRC_DIR)/test_simd.c
+
+SIMD_OBJ  = niyah_simd.o
+GGUF_OBJ  = niyah_gguf.o
+TEST_BIN  = niyah_test_simd
+
+# ── Platform detection ────────────────────────────────────────────
+UNAME := $(shell uname -m 2>/dev/null || echo unknown)
 
 ifeq ($(UNAME),aarch64)
-  OPT  = -O3 -march=armv8.2-a+fp16+dotprod -mcpu=cortex-x1
-  INFO = "ARM64 (aarch64)"
+  OPT  = -O3 -march=armv8.2-a+simd
+  INFO = ARM64 (aarch64)
 else ifeq ($(UNAME),arm64)
-  OPT  = -O3 -march=armv8.2-a -mcpu=apple-m1
-  INFO = "ARM64 (Apple)"
+  OPT  = -O3 -march=armv8.2-a
+  INFO = ARM64 (Apple)
 else
   OPT  = -O3 -march=native -mavx2 -mfma
-  INFO = "x86_64"
+  INFO = x86_64
 endif
 
-# ── default target ─────────────────────────────────────────────────
-all:
-	@echo "╔══════════════════════════════╗"
-	@echo "║  NIYAH-CORE build            ║"
-	@echo "║  Platform: $(INFO)  ║"
-	@echo "╚══════════════════════════════╝"
-	$(CC) $(CFLAGS) $(OPT) $(SRCS) -o $(TARGET) $(LDFLAGS)
-	@echo "✓ Built: ./$(TARGET)"
+# ── Default target ────────────────────────────────────────────────
+.PHONY: all debug test clean
 
-# ── explicit platform targets ──────────────────────────────────────
-arm64:
-	$(CC) $(CFLAGS) -O3 -march=armv8.2-a+fp16 $(SRCS) -o $(TARGET) $(LDFLAGS)
+all: $(SIMD_OBJ) $(GGUF_OBJ)
+	@echo "[niyah] Built for $(INFO)"
 
-x86:
-	$(CC) $(CFLAGS) -O3 -march=x86-64-v3 -mavx2 -mfma $(SRCS) -o $(TARGET) $(LDFLAGS)
+$(SIMD_OBJ): $(SIMD_SRC)
+	$(CC) $(CFLAGS) $(OPT) -I$(INC_DIR) -c $< -o $@
 
-# Windows ARM64 (MSVC cl.exe)
-win:
-	cl /nologo /O2 /arch:ARM64 /std:c17 \
-	   /D_CRT_SECURE_NO_WARNINGS \
-	   $(SRCS) /Fe:$(TARGET).exe
+$(GGUF_OBJ): $(GGUF_SRC)
+	$(CC) $(CFLAGS) $(OPT) -I$(INC_DIR) -c $< -o $@
 
-# Debug + sanitizers
+# ── Debug build ───────────────────────────────────────────────────
 debug:
-	$(CC) $(CFLAGS) -g -O1 -fsanitize=address,undefined \
-	    $(SRCS) -o $(TARGET)_dbg $(LDFLAGS)
+	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined \
+	    -I$(INC_DIR) -c $(SIMD_SRC) -o niyah_simd_dbg.o $(LDFLAGS)
+	@echo "[niyah] Debug build complete"
 
-# ── convenience run targets ────────────────────────────────────────
-demo: all
-	./$(TARGET) --mode demo --size tiny
+# ── Unit tests ────────────────────────────────────────────────────
+test: $(TEST_BIN)
+	./$(TEST_BIN)
 
-bench: all
-	./$(TARGET) --mode bench --size tiny --steps 200
+$(TEST_BIN): $(TEST_SRC) $(SIMD_OBJ)
+	$(CC) $(CFLAGS) $(OPT) -I$(INC_DIR) $^ -o $@ $(LDFLAGS)
 
-save: all
-	./$(TARGET) --mode save --model tiny_test.niyah --size tiny
-	@echo "Saved: tiny_test.niyah"
-
-run: all
-	./$(TARGET) --mode run --model tiny_test.niyah \
-	            --prompt "NIYAH" --tokens 100 --temp 0.8
-
+# ── Clean ─────────────────────────────────────────────────────────
 clean:
-	rm -f $(TARGET) $(TARGET)_dbg $(TARGET).exe *.niyah *.o
-
-# ── size report ────────────────────────────────────────────────────
-size: all
-	@wc -l $(SRCS) niyah_core.h
-	@size $(TARGET)
-
-.PHONY: all arm64 x86 win debug demo bench save run clean size
+	rm -f $(SIMD_OBJ) $(GGUF_OBJ) niyah_simd_dbg.o $(TEST_BIN)

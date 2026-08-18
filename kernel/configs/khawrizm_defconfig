@@ -17,7 +17,7 @@ CONFIG_MACH_BCM2837=y
 CONFIG_ARCH_VIRT=y
 
 # ── Core kernel ──────────────────────────────────────────────────────
-CONFIG_LOCALVERSION="-khawrizm"
+CONFIG_LOCALVERSION="-niyah"
 CONFIG_KERNEL_LZ4=y
 CONFIG_HZ_250=y
 CONFIG_PREEMPT=y
