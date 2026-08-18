@@ -1,0 +1,33 @@
+# ── Build artefacts ──────────────────────────────────────────────────
+*.o
+*.a
+*.so
+*.dylib
+*.obj
+*.exe
+*.bin
+*.tmp
+*.bak
+*.log
+
+# ── CMake build directories ──────────────────────────────────────────
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+InstallFiles.cmake
+cmake_install.cmake
+
+# ── Test binaries ────────────────────────────────────────────────────
+niyah_test_simd
+niyah_test_gguf
+
+# ── Model files ──────────────────────────────────────────────────────
+*.gguf
+*.niyah
+*.safetensors
+
+# ── Secrets ──────────────────────────────────────────────────────────
+.env
+*.key
+*.pem

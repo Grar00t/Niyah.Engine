@@ -1,0 +1,43 @@
+# NIYAH Kernel — GitLab CI
+# Builds and tests SIMD primitives on every push.
+
+default:
+  image: gcc:13
+
+stages:
+  - build
+  - test
+
+variables:
+  CC: gcc
+  CFLAGS: "-std=c11 -Wall -Wextra -Wcast-align -Wstrict-prototypes -O2"
+
+build:x86_64:
+  stage: build
+  script:
+    - make CFLAGS="$CFLAGS -mavx2 -mfma"
+  artifacts:
+    paths:
+      - niyah_simd.o
+      - niyah_gguf.o
+    expire_in: 1 hour
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+build:scalar:
+  stage: build
+  script:
+    - make CFLAGS="$CFLAGS"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+test:simd:
+  stage: test
+  needs: [build:x86_64]
+  script:
+    - make test CFLAGS="$CFLAGS -mavx2 -mfma"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
