@@ -2,13 +2,27 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODEL="${MODEL:-legacy-model/legacy-model-2.5-7B-Instruct}"
+MODEL="${MODEL:-openai/gpt-oss-20b}"
 MANIFEST_FILE="${MANIFEST_FILE:-${ROOT_DIR}/corpus/manifest.jsonl}"
-OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/legacy-model_neutral}"
+OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/gpt_oss_20b_adapter}"
 
 usage() {
     printf 'usage: %s validate | train | infer <prompt>\n' "$0" >&2
     exit 2
+}
+
+infer_model() {
+    if [[ -n "${INFER_MODEL:-}" ]]; then
+        printf '%s\n' "$INFER_MODEL"
+        return
+    fi
+
+    if [[ -f "${OUTPUT_DIR}/adapter_config.json" ]]; then
+        printf '%s\n' "$OUTPUT_DIR"
+        return
+    fi
+
+    printf '%s\n' "$MODEL"
 }
 
 case "${1:-}" in
@@ -21,15 +35,21 @@ case "${1:-}" in
             --data "${MANIFEST_FILE}" \
             --output "${OUTPUT_DIR}" \
             --epochs "${EPOCHS:-1.0}" \
-            --max-seq-length "${MAX_SEQ_LENGTH:-2048}"
+            --max-seq-length "${MAX_SEQ_LENGTH:-2048}" \
+            --learning-rate "${LEARNING_RATE:-2e-4}" \
+            --lora-r "${LORA_R:-8}" \
+            --lora-alpha "${LORA_ALPHA:-16}"
         ;;
     infer)
         shift
-        [ "$#" -gt 0 ] || usage
+        [[ "$#" -gt 0 ]] || usage
         python3 "${ROOT_DIR}/neutral/inference.py" \
-            --model "${OUTPUT_DIR}" \
+            --model "$(infer_model)" \
             --prompt "$*" \
-            --max-new-tokens "${MAX_NEW_TOKENS:-256}"
+            --max-new-tokens "${MAX_NEW_TOKENS:-256}" \
+            --temperature "${TEMPERATURE:-0.0}" \
+            --top-p "${TOP_P:-0.95}" \
+            ${AUDIT_LOG:+--audit-log "$AUDIT_LOG"}
         ;;
     *)
         usage
