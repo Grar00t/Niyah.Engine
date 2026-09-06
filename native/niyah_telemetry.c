@@ -1,3 +1,7 @@
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "niyah.h"
 
 #include <string.h>
@@ -7,9 +11,6 @@
 #else
 #  include <time.h>
 #endif
-
-/* Was a stub. Monotonic nanosecond clock; wall-clock time would let NTP
- * adjustments produce negative durations. */
 
 int64_t niyah_telemetry_now_ns(void)
 {

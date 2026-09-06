@@ -1,77 +1,88 @@
-# Niyah.Neutral (inside Niyah.Engine)
+# neutral/
 
-**Neutral, sovereign LLM pipeline** — fine-tuned on verified scientific/technical/medical/production-code data only.
+Optional Hugging Face training and inference utilities. This directory is separate from the native C11 runtime in `native/`.
 
-## Features
+## What is implemented
 
-- **TruthRL reward**: Penalizes hallucinations, rewards honest abstention (UNKNOWN)
-- **LVU consistency**: Measures agreement across 5 samples to detect overconfidence
-- **Peer prediction**: Verifies consistency across 3 paraphrased prompts
-- **MMR audit log**: Append-only cryptographic audit of every inference
-- **Production code training**: Full repositories (Linux, PostgreSQL, Nginx) with tests + docs
+- `clean_corpus.py` converts approved local files into JSONL records and hashes the original file bytes with SHA-256.
+- `validate_manifest.py` validates corpus records before training.
+- `model_profiles.py` selects model-specific runtime/training behavior. `gpt-oss` uses its native MXFP4 checkpoint path and attention-only LoRA targets (`q_proj`, `k_proj`, `v_proj`, `o_proj`). Other causal LMs use the existing bitsandbytes NF4 path.
+- `train.py` performs LoRA causal-language-model domain adaptation on the corpus. It does not implement reinforcement learning, truth scoring, LVU, peer prediction, or factuality guarantees.
+- `inference.py` runs generation from a base model or a saved local PEFT adapter and can append input/output hashes to a plain JSONL audit file. For `gpt-oss`, it requires the tokenizer chat template rather than inventing a prompt format.
+- `run.sh` is a dispatcher for validate, train, and infer. Its default base model is `openai/gpt-oss-20b`; if a saved adapter exists in `OUTPUT_DIR`, inference uses it automatically.
 
-## Quick Start
+The model process is a text generator. This directory does not grant it filesystem, process, or network authority. A model output is not an authorization decision.
+
+## Corpus preparation
+
+Source metadata is supplied explicitly by the operator; the repository does not download or certify datasets for you.
 
 ```bash
-# 1. Install dependencies
-pip install -r neutral/requirements.txt
-
-# 2. Run complete pipeline (download → train → infer)
-bash neutral/run.sh all
-
-# Or run step-by-step:
-bash neutral/run.sh download    # Download PubMed, RFCs, etc.
-bash neutral/run.sh clean       # Clean corpus with provenance
-bash neutral/run.sh validate    # Validate manifest
-bash neutral/run.sh train       # QLoRA fine-tuning
-bash neutral/run.sh infer       # Inference (placeholder)
+python3 neutral/clean_corpus.py \
+  --input ./raw/rfc \
+  --output ./corpus/rfc.jsonl \
+  --source-name IETF \
+  --source-url-prefix https://www.rfc-editor.org/rfc \
+  --domain networking \
+  --language en \
+  --license 'operator-verified-license'
 ```
 
-## Files
+Merge approved JSONL files into the manifest you intend to train on, then validate it:
 
-| File | Purpose |
-|---|---|
-| `requirements.txt` | Python dependencies (torch, transformers, peft, trl, bitsandbytes) |
-| `data_sources.md` | Data source policy + admitted registries (including production code) |
-| `clean_corpus.py` | Build provenance-preserving JSONL corpus |
-| `validate_manifest.py` | Validate JSONL manifest (required fields, license, checksum) |
-| `train.py` | QLoRA fine-tuning with TruthRL reward, LVU, peer prediction |
-| `epistemic_schema.md` | FACT/INFERENCE/UNKNOWN/CONFLICTED output schema with LVU fields |
-| `inference_contract.md` | Inference contract (provenance, validation, audit, evaluation) |
-| `run.sh` | Complete pipeline script (download → clean → validate → train → infer) |
+```bash
+python3 neutral/validate_manifest.py ./corpus/manifest.jsonl
+```
 
-## Data Sources
+## Install
 
-| Domain | Source | License |
-|---|---|---|
-| Medicine | PubMed Central Open Access Subset | CC-BY |
-| Public health | WHO publications | CC-BY |
-| Drug labels | DailyMed | Public Domain |
-| Networking | IETF RFCs | Public Domain |
-| Computing | POSIX / Open Group | Proprietary (free access) |
-| Research | arXiv (peer-reviewed only) | Various (CC-BY, arXiv license) |
-| **Production code** | Linux kernel, PostgreSQL, Nginx, SQLite | GPL, BSD, MIT |
+```bash
+python3 -m pip install -r neutral/requirements.txt
+```
 
-## Cost: ~$4050 (GPU rental + storage)
+The GPT-OSS path depends on current Transformers MXFP4 support (`transformers`, `kernels`, and Triton). If MXFP4 cannot be used by the installed CUDA stack, Transformers may require substantially more memory for a higher-precision fallback.
 
-- GPU: 1x A100 40GB for 2 months (~$4000)
-- Storage: 1TB S3 (~$50)
-- Total: ~$4050
+## Weights-first inference
 
-## License: Apache 2.0 (same as Qwen base)
+```bash
+./neutral/run.sh infer 'Explain the indexed material.'
+```
 
-## Known Biases (Inherited from Qwen2.5-7B base)
+Equivalent direct invocation:
 
-- Training corpus: Internet data (includes social media, marketing, Western-centric sources)
-- Language bias: Stronger in English than Arabic
-- Cultural bias: Reflects Qwen team's alignment choices (Chinese + Western)
-- Safety filters: May over-refuse on sensitive topics (health, legal)
+```bash
+python3 neutral/inference.py \
+  --model openai/gpt-oss-20b \
+  --prompt 'Explain the indexed material.'
+```
 
-**This fine-tuning improves epistemic honesty (FACT/INFERENCE/UNKNOWN) and reduces repetition, but does NOT eliminate base model biases.**
+A Hugging Face model id may cause network access and cache files. Set `MODEL` or `INFER_MODEL` to a local model path when offline execution is required.
 
-## Acknowledgments
+## LoRA domain adaptation
 
-- Qwen Team (base model)
-- PubMed Central, WHO, FDA, IETF, POSIX, arXiv (data sources)
-- Linux kernel, PostgreSQL, Nginx, SQLite, Kubernetes, Rust stdlib, Go stdlib (production code)
-- Sulaiman Alshammari (philosophy + MMR audit design)
+```bash
+MODEL=openai/gpt-oss-20b \
+MANIFEST_FILE=./corpus/manifest.jsonl \
+OUTPUT_DIR=./gpt_oss_20b_adapter \
+./neutral/run.sh train
+```
+
+This is domain adaptation over source text. It is not training a foundation model from scratch, and it is not a claim that the adapter fixes instruction/data conflation inside the transformer.
+
+## Inference with a saved adapter
+
+`run.sh infer` automatically selects `OUTPUT_DIR` when `adapter_config.json` exists. To force a specific base or adapter path:
+
+```bash
+INFER_MODEL=./gpt_oss_20b_adapter \
+./neutral/run.sh infer 'Explain the indexed material.'
+```
+
+Optional plain JSONL audit:
+
+```bash
+AUDIT_LOG=./inference_audit.jsonl \
+./neutral/run.sh infer 'Explain the indexed material.'
+```
+
+The audit records hashes and timestamps only. It is not a Merkle tree, does not prove correctness, does not establish provenance of generated claims, and does not make the log immutable.

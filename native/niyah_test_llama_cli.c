@@ -24,12 +24,12 @@ int main(int argc, char** argv)
         else if (strcmp(argv[i], "--single-turn") == 0) single_turn = 1;
     }
 
-    if (!readable(model) || !readable(adapter) || !prompt || !tokens || !single_turn) return 90;
+    if (!readable(model) || (adapter && !readable(adapter)) || !prompt || !tokens || !single_turn) return 90;
 
-    const char* output = getenv("NIYAH_FAKE_OUTPUT");
+    const char* output = getenv("NIYAH_TEST_OUTPUT");
     if (output && fwrite(output, 1u, strlen(output), stdout) != strlen(output)) return 91;
     if (fflush(stdout) != 0) return 91;
 
-    const char* rc = getenv("NIYAH_FAKE_EXIT");
+    const char* rc = getenv("NIYAH_TEST_EXIT");
     return rc && rc[0] ? atoi(rc) : 0;
 }

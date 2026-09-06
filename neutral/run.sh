@@ -1,185 +1,66 @@
 #!/usr/bin/env bash
-# Niyah.Neutral: Complete pipeline from data to inference
-# Usage: ./neutral/run.sh [download|clean|validate|train|infer]
-
 set -euo pipefail
 
-# Configuration
-MODEL="Qwen/Qwen2.5-7B-Instruct"
-DATA_DIR="./raw_data"
-CORPUS_DIR="./corpus"
-OUTPUT_DIR="./qwen_neutral"
-MANIFEST_FILE="${CORPUS_DIR}/manifest.jsonl"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MODEL="${MODEL:-openai/gpt-oss-20b}"
+MANIFEST_FILE="${MANIFEST_FILE:-${ROOT_DIR}/corpus/manifest.jsonl}"
+OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/gpt_oss_20b_adapter}"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-log() {
-    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
+usage() {
+    printf 'usage: %s validate | train | infer <prompt>\n' "$0" >&2
+    exit 2
 }
 
-warn() {
-    echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] WARNING:${NC} $1"
-}
-
-error() {
-    echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
-    exit 1
-}
-
-# Check Python version
-check_python() {
-    log "Checking Python version..."
-    PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
-    REQUIRED_VERSION="3.10"
-    
-    if [[ $(python3 -c "import sys; print(sys.version_info >= (3, 10))") != "True" ]]; then
-        error "Python 3.10+ required (found: ${PYTHON_VERSION}). Please upgrade."
+infer_model() {
+    if [[ -n "${INFER_MODEL:-}" ]]; then
+        printf '%s\n' "$INFER_MODEL"
+        return
     fi
-    log "Python version OK: ${PYTHON_VERSION}"
-}
 
-# Install dependencies
-install_deps() {
-    log "Installing Python dependencies..."
-    pip3 install -r neutral/requirements.txt || error "Failed to install dependencies"
-    log "Dependencies installed."
-}
-
-# Step 1: Download sample data (PubMed, RFC, etc.)
-download_data() {
-    log "Downloading sample data..."
-    
-    mkdir -p "${DATA_DIR}/pubmed"
-    mkdir -p "${DATA_DIR}/rfc"
-    mkdir -p "${DATA_DIR}/production_code"
-    
-    # Example: Download 10 PubMed articles (replace with actual download logic)
-    # For now, create placeholder files
-    for i in {1..10}; do
-        echo "Sample PubMed article ${i} - This is placeholder content." > "${DATA_DIR}/pubmed/article_${i}.txt"
-    done
-    
-    # Example: Download 5 RFCs (replace with actual download from ietf.org)
-    for i in 791 821 2119 2324 8174; do
-        curl -s "https://www.rfc-editor.org/rfc/rfc${i}.txt" -o "${DATA_DIR}/rfc/rfc${i}.txt" || warn "Failed to download RFC${i}"
-    done
-    
-    # Example: Download Linux kernel README (production code sample)
-    curl -s "https://raw.githubusercontent.com/torvalds/linux/master/README" -o "${DATA_DIR}/production_code/linux_readme.txt" || warn "Failed to download Linux README"
-    
-    log "Data downloaded to ${DATA_DIR}"
-}
-
-# Step 2: Clean corpus (provenance-preserving)
-clean_corpus() {
-    log "Cleaning corpus..."
-    
-    mkdir -p "${CORPUS_DIR}"
-    
-    # Clean PubMed articles
-    python3 neutral/clean_corpus.py \
-        --input "${DATA_DIR}/pubmed" \
-        --output "${CORPUS_DIR}/pubmed.jsonl" \
-        --source-name "PubMedCentral" \
-        --source-url-prefix "https://www.ncbi.nlm.nih.gov/pmc" \
-        --domain "medicine" \
-        --language "en" \
-        --license "CC-BY" || error "Failed to clean PubMed corpus"
-    
-    # Clean RFCs
-    python3 neutral/clean_corpus.py \
-        --input "${DATA_DIR}/rfc" \
-        --output "${CORPUS_DIR}/rfc.jsonl" \
-        --source-name "IETF" \
-        --source-url-prefix "https://www.rfc-editor.org/rfc" \
-        --domain "networking" \
-        --language "en" \
-        --license "Public Domain" || error "Failed to clean RFC corpus"
-    
-    # Clean production code
-    python3 neutral/clean_corpus.py \
-        --input "${DATA_DIR}/production_code" \
-        --output "${CORPUS_DIR}/production_code.jsonl" \
-        --source-name "LinuxKernel" \
-        --source-url-prefix "https://github.com/torvalds/linux" \
-        --domain "software" \
-        --language "en" \
-        --license "GPL-2.0" || error "Failed to clean production code corpus"
-    
-    # Merge all JSONL files
-    cat "${CORPUS_DIR}"/*.jsonl > "${MANIFEST_FILE}"
-    
-    log "Corpus cleaned: ${MANIFEST_FILE}"
-}
-
-# Step 3: Validate manifest
-validate_manifest() {
-    log "Validating manifest..."
-    
-    python3 neutral/validate_manifest.py "${MANIFEST_FILE}"
-    
-    if [ $? -eq 0 ]; then
-        log "Manifest validation passed."
-    else
-        error "Manifest validation failed. Check rejected.jsonl for details."
+    if [[ -f "${OUTPUT_DIR}/adapter_config.json" ]]; then
+        printf '%s\n' "$OUTPUT_DIR"
+        return
     fi
+
+    printf '%s\n' "$MODEL"
 }
 
-# Step 4: Train (QLoRA fine-tuning)
-train() {
-    log "Training QLoRA adapter..."
-    
-    python3 neutral/train.py \
-        --model "${MODEL}" \
-        --data "${MANIFEST_FILE}" \
-        --output "${OUTPUT_DIR}" \
-        --epochs 1.0 \
-        --max-seq-length 2048 \
-        --truthrl-coeff 0.1 || error "Training failed"
-    
-    log "Training complete: ${OUTPUT_DIR}"
-}
-
-# Step 5: Inference (placeholder - not yet implemented)
-infer() {
-    log "Inference not yet implemented."
-    warn "This is a placeholder. Implement inference.py with LVU + Peer Prediction + MMR audit."
-}
-
-# Main
-case "${1:-all}" in
-    download)
-        check_python
-        install_deps
-        download_data
-        ;;
-    clean)
-        clean_corpus
-        ;;
+case "${1:-}" in
     validate)
-        validate_manifest
+        python3 "${ROOT_DIR}/neutral/validate_manifest.py" "${MANIFEST_FILE}"
         ;;
     train)
-        train
+        python3 "${ROOT_DIR}/neutral/train.py" \
+            --model "${MODEL}" \
+            --data "${MANIFEST_FILE}" \
+            --output "${OUTPUT_DIR}" \
+            --epochs "${EPOCHS:-1.0}" \
+            --max-seq-length "${MAX_SEQ_LENGTH:-2048}" \
+            --learning-rate "${LEARNING_RATE:-2e-4}" \
+            --lora-r "${LORA_R:-8}" \
+            --lora-alpha "${LORA_ALPHA:-16}"
         ;;
     infer)
-        infer
-        ;;
-    all)
-        check_python
-        install_deps
-        download_data
-        clean_corpus
-        validate_manifest
-        train
-        infer
+        shift
+        [[ "$#" -gt 0 ]] || usage
+        if [[ -n "${AUDIT_LOG:-}" ]]; then
+            python3 "${ROOT_DIR}/neutral/inference.py" \
+                --model "$(infer_model)" \
+                --prompt "$*" \
+                --max-new-tokens "${MAX_NEW_TOKENS:-256}" \
+                --temperature "${TEMPERATURE:-0.0}" \
+                --top-p "${TOP_P:-0.95}" \
+                --audit-log "$AUDIT_LOG"
+        else
+            python3 "${ROOT_DIR}/neutral/inference.py" \
+                --model "$(infer_model)" \
+                --prompt "$*" \
+                --max-new-tokens "${MAX_NEW_TOKENS:-256}" \
+                --temperature "${TEMPERATURE:-0.0}" \
+                --top-p "${TOP_P:-0.95}"
+        fi
         ;;
     *)
-        echo "Usage: $0 [download|clean|validate|train|infer|all]"
-        exit 1
+        usage
         ;;
 esac

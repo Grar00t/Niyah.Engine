@@ -469,7 +469,11 @@ static int build_execution_contract(char* out,
     char base_hash[NIYAH_SHA256_HEX_BYTES];
     char adapter_hash[NIYAH_SHA256_HEX_BYTES];
     lowercase_hash(base->sha256, base_hash);
-    lowercase_hash(adapter->sha256, adapter_hash);
+    if (adapter) {
+        lowercase_hash(adapter->sha256, adapter_hash);
+    } else {
+        memcpy(adapter_hash, "none", 5u);
+    }
 
     const int n = snprintf(
         out,
@@ -481,8 +485,10 @@ static int build_execution_contract(char* out,
         "base_sha256=%s\n"
         "adapter_sha256=%s\n"
         "max_tokens=%lu\n"
-        "runtime=llama.cpp\n"
-        "local_only=true\n"
+        "runtime=llama.cpp-compatible-cli\n"
+        "network_isolation=not_enforced\n"
+        "model_output_trust=untrusted\n"
+        "privileged_actions=disabled\n"
         "single_turn=true\n",
         NIYAH_RUN_PROOF_CONTRACT_V1,
         NIYAH_PROOF_V1_HEADER,
@@ -650,20 +656,22 @@ static int run_package(int argc, char** argv)
 
     const PackageArtifact* base = find_role(&manifest, "base");
     const PackageArtifact* adapter = find_role(&manifest, "adapter");
-    if (!base || !adapter) {
-        fprintf(stderr, "niyah: package must contain base and adapter artifacts\n");
+    if (!base) {
+        fprintf(stderr, "niyah: package must contain a base artifact\n");
         return 4;
     }
 
     char base_path[NIYAH_PATH_MAX];
     char adapter_path[NIYAH_PATH_MAX];
+    adapter_path[0] = '\0';
     if (path_join(base_path, sizeof(base_path), blobs_dir, base->sha256) != 0 ||
-        path_join(adapter_path, sizeof(adapter_path), blobs_dir, adapter->sha256) != 0) {
+        (adapter && path_join(adapter_path, sizeof(adapter_path), blobs_dir, adapter->sha256) != 0)) {
         fprintf(stderr, "niyah: artifact path too long\n");
         return 2;
     }
 
-    if (verify_file(base_path, base->sha256) != 1 || verify_file(adapter_path, adapter->sha256) != 1) {
+    if (verify_file(base_path, base->sha256) != 1 ||
+        (adapter && verify_file(adapter_path, adapter->sha256) != 1)) {
         fprintf(stderr, "niyah: refusing to run: package artifact verification failed\n");
         return 5;
     }
@@ -675,15 +683,21 @@ static int run_package(int argc, char** argv)
 
     fprintf(stderr, "niyah: running verified package %s@%s\n", manifest.name, manifest.version);
 
-    char* child_argv[] = {
-        (char*)llama_cli,
-        (char*)"-m", base_path,
-        (char*)"--lora", adapter_path,
-        (char*)"-p", (char*)prompt,
-        (char*)"-n", (char*)max_tokens,
-        (char*)"--single-turn",
-        NULL
-    };
+    char* child_argv[12];
+    size_t child_argc = 0u;
+    child_argv[child_argc++] = (char*)llama_cli;
+    child_argv[child_argc++] = (char*)"-m";
+    child_argv[child_argc++] = base_path;
+    if (adapter) {
+        child_argv[child_argc++] = (char*)"--lora";
+        child_argv[child_argc++] = adapter_path;
+    }
+    child_argv[child_argc++] = (char*)"-p";
+    child_argv[child_argc++] = (char*)prompt;
+    child_argv[child_argc++] = (char*)"-n";
+    child_argv[child_argc++] = (char*)max_tokens;
+    child_argv[child_argc++] = (char*)"--single-turn";
+    child_argv[child_argc] = NULL;
 
     if (!proof_path) {
         const int rc = run_process(child_argv);
