@@ -1,14 +1,4 @@
-# CI for the native C tree.
-#
-# Before this file the repository had no GitHub Actions workflow. The only
-# pipeline definition was .gitlab-ci.yml, which GitHub does not execute and
-# which pointed at scripts that do not exist in this repository. Nothing has
-# ever gated main.
-#
-# This workflow is deliberately plain: configure, build, run ctest. No
-# continue-on-error, no soft failures. A red run is information.
-
-name: native
+name: checks
 
 on:
   push:
@@ -17,35 +7,49 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-test:
-    name: cmake + ctest (ubuntu)
+  native:
+    name: native cmake + ctest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Configure
-        run: cmake -S native -B build -DCMAKE_BUILD_TYPE=Release
-
+        run: cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
       - name: Build
-        run: cmake --build build --parallel
-
+        run: cmake --build build/native --parallel
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build/native --output-on-failure
 
-  sanitize:
-    name: cmake + ctest (asan/ubsan)
+  native-sanitize:
+    name: native asan + ubsan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Configure
-        run: cmake -S native -B build-asan -DNIYAH_SANITIZE=ON
-
+        run: cmake -S native -B build/native-sanitize -DNIYAH_SANITIZE=ON
       - name: Build
-        run: cmake --build build-asan --parallel
-
+        run: cmake --build build/native-sanitize --parallel
       - name: Test
-        run: ctest --test-dir build-asan --output-on-failure
+        run: ctest --test-dir build/native-sanitize --output-on-failure
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+  search:
+    name: search cmake + ctest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Configure
+        run: cmake -S search -B build/search -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/search --parallel
+      - name: Test
+        run: ctest --test-dir build/search --output-on-failure
+
+  python:
+    name: python tooling + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Test
+        run: sh tools/ci.sh python
