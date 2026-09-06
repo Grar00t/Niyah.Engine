@@ -1,7 +1,9 @@
-torch>=2.3
-transformers>=4.45
-datasets>=2.20
+torch>=2.8
+transformers>=4.55.1
+kernels
+triton>=3.4
 accelerate>=0.33
+datasets>=2.20
 peft>=0.12
 bitsandbytes>=0.43
 sentencepiece>=0.2
