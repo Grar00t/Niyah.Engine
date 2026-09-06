@@ -1,12 +1,11 @@
 #!/bin/sh
-# Local check runner. Replaces the removed GitHub Actions workflow: same
-# steps, executed on the developer machine.
+# Local check runner.
 #
 #   sh tools/ci.sh            all stages
 #   sh tools/ci.sh native     one stage: native | make | search | python
 #
 # Requires: cmake >= 3.20, ctest, a C11/C++17 toolchain, libcurl (search),
-# python3 (tooling).
+# python3 (tooling and standard-library tests).
 
 set -eu
 
@@ -16,7 +15,6 @@ BUILD_TYPE="${BUILD_TYPE:-Release}"
 run_native() {
     cmake -S native -B build/native -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
     cmake --build build/native --config "$BUILD_TYPE"
-    # The suites #undef NDEBUG, so assertions run in Release too.
     ctest --test-dir build/native -C "$BUILD_TYPE" --output-on-failure
 }
 
@@ -32,13 +30,8 @@ run_search() {
 }
 
 run_python() {
-    python3 -m compileall -q tools neutral
-    # Both harnesses write real GGUF fixtures and convert them. See the
-    # module docstrings for what each does and does not cover.
-    #
-    # test_convert_gguf.py goes first: it covers container parsing, output
-    # layout and config emission, which the K-quant harness takes for
-    # granted. When both break together its failure is the useful one.
+    python3 -m compileall -q tools neutral scripts src tests
+    python3 -m unittest discover -s tests -p 'test_*.py'
     python3 tools/tests/test_convert_gguf.py
     python3 tools/tests/test_kquants.py
 }
