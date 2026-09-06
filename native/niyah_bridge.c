@@ -5,24 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/*
- * REMOVED FAKE CODE
- * -----------------
- * The previous implementation of this file was:
- *
- *     static const char* dummy[] = {"doc1", "doc2", "doc3"};
- *     static float scores[] = {0.95f, 0.87f, 0.76f};
- *     *count = 3;
- *     *results = (void*)dummy;
- *
- * `scores` was assigned but never returned, `niyah_bridge_add_document`
- * discarded its input and always replied "doc_new", and nothing was stored
- * anywhere. The UI was displaying fabricated relevance numbers.
- *
- * Below is a real store: documents are copied and owned, ids are generated and
- * unique, and scores come from actual term frequency over actual text.
- */
-
 typedef struct {
     char*  id;
     char*  content;
@@ -42,8 +24,6 @@ struct NiyahBridgeContext {
     NiyahLLM*   llm;
     NiyahGraph* graph;
 };
-
-/* -------------------------------------------------------------------------- */
 
 static char* dup_string(const char* s, size_t len)
 {
@@ -66,7 +46,6 @@ static void lowercase_into(char* dst, const char* src, size_t len)
     dst[len] = '\0';
 }
 
-/* Case-insensitive occurrence count of `needle` in `haystack`. */
 static int32_t count_occurrences(const char* haystack, const char* needle)
 {
     const size_t nlen = strlen(needle);
@@ -83,7 +62,19 @@ static int32_t count_occurrences(const char* haystack, const char* needle)
     return hits;
 }
 
-/* -------------------------------------------------------------------------- */
+static int32_t find_document_index(const char* doc_id)
+{
+    if (!doc_id || !doc_id[0]) {
+        return -1;
+    }
+
+    for (int32_t i = 0; i < g_store.count; ++i) {
+        if (strcmp(g_store.docs[i].id, doc_id) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
 
 const char* niyah_bridge_version(void)
 {
@@ -123,7 +114,6 @@ int32_t niyah_bridge_add_document(const char* content, const char** doc_id)
     }
 
     const size_t len = strlen(content);
-
     char id_buf[32];
     snprintf(id_buf, sizeof(id_buf), "doc_%d", g_store.next_id);
 
@@ -144,10 +134,46 @@ int32_t niyah_bridge_add_document(const char* content, const char** doc_id)
 
     ++g_store.count;
     ++g_store.next_id;
-
-    /* Hand back an independent copy so the caller's lifetime is its own. */
     *doc_id = caller_id_copy;
+    return NIYAH_OK;
+}
 
+char* niyah_bridge_get_document(const char* doc_id)
+{
+    const int32_t index = find_document_index(doc_id);
+    if (index < 0) {
+        return NULL;
+    }
+
+    const BridgeDoc* doc = &g_store.docs[index];
+    return dup_string(doc->content, doc->length);
+}
+
+int32_t niyah_bridge_delete_document(const char* doc_id)
+{
+    if (!doc_id || !doc_id[0]) {
+        return NIYAH_ERR_INVALID_ARG;
+    }
+
+    const int32_t index = find_document_index(doc_id);
+    if (index < 0) {
+        return NIYAH_ERR_NOT_FOUND;
+    }
+
+    free(g_store.docs[index].id);
+    free(g_store.docs[index].content);
+
+    const int32_t trailing = g_store.count - index - 1;
+    if (trailing > 0) {
+        memmove(&g_store.docs[index],
+                &g_store.docs[index + 1],
+                (size_t)trailing * sizeof(BridgeDoc));
+    }
+
+    --g_store.count;
+    if (g_store.count >= 0) {
+        memset(&g_store.docs[g_store.count], 0, sizeof(BridgeDoc));
+    }
     return NIYAH_OK;
 }
 
@@ -174,7 +200,6 @@ int32_t niyah_bridge_search(const char* query, void** results, int* count)
     *count = 0;
 
     if (g_store.count == 0) {
-        /* Genuinely empty: report zero hits instead of inventing three. */
         return NIYAH_OK;
     }
 
@@ -216,10 +241,8 @@ int32_t niyah_bridge_search(const char* query, void** results, int* count)
             continue;
         }
 
-        /* Length-normalised term frequency: a real, explainable score. */
         const float score =
             (float)tf / (1.0f + (float)doc->length / 1000.0f);
-
         const size_t snippet_len = doc->length < 160u ? doc->length : 160u;
 
         NiyahBridgeHit* hit = &out->hits[out->count];
@@ -238,7 +261,6 @@ int32_t niyah_bridge_search(const char* query, void** results, int* count)
 
     free(q_lower);
 
-    /* Insertion sort by descending score; hit counts here are small. */
     for (int32_t i = 1; i < out->count; ++i) {
         const NiyahBridgeHit key = out->hits[i];
         int32_t j = i - 1;
@@ -301,7 +323,6 @@ char* niyah_bridge_search_json(const char* query, int32_t max_hits)
                                  "{\"id\":\"%s\",\"score\":%.6f,\"snippet\":\"",
                                  res->hits[i].doc_id, res->hits[i].score);
 
-        /* Escape the snippet so the UI never receives malformed JSON. */
         const char* s = res->hits[i].snippet;
         for (; *s && used + 8u < capacity; ++s) {
             switch (*s) {
@@ -347,8 +368,6 @@ void niyah_bridge_free_string(char* text)
 {
     free(text);
 }
-
-/* -------------------------------------------------------------------------- */
 
 NiyahBridgeContext* niyah_bridge_create(NiyahLLM* llm)
 {
