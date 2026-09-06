@@ -24,7 +24,7 @@ int main(int argc, char** argv)
         else if (strcmp(argv[i], "--single-turn") == 0) single_turn = 1;
     }
 
-    if (!readable(model) || !readable(adapter) || !prompt || !tokens || !single_turn) return 90;
+    if (!readable(model) || (adapter && !readable(adapter)) || !prompt || !tokens || !single_turn) return 90;
 
     const char* output = getenv("NIYAH_FAKE_OUTPUT");
     if (output && fwrite(output, 1u, strlen(output), stdout) != strlen(output)) return 91;
