@@ -22,6 +22,7 @@ SRCS = \
 	niyah_core.c \
 	niyah_sha256.c \
 	niyah_identity.c \
+	niyah_control.c \
 	niyah_matmul.c \
 	niyah_softmax.c \
 	niyah_rmsnorm.c \
@@ -54,6 +55,7 @@ LIB  = libniyah.a
 TEST_SRCS = \
 	test_niyah_core.c \
 	test_niyah_document.c \
+	niyah_control_test.c \
 	niyah_matmul_test.c \
 	niyah_softmax_test.c \
 	niyah_rmsnorm_test.c \
