@@ -12,24 +12,29 @@ hash_file() { sha256sum "$1" | awk '{print $1}'; }
 field() { awk -v key="$2" '$1 == key { print $2 }' "$1"; }
 
 install_package() {
-    local name=$1 version=$2 base=$3 adapter=$4
-    local base_tmp="$HOME_DIR/base.tmp" adapter_tmp="$HOME_DIR/adapter.tmp"
+    local name=$1 version=$2 base=$3 adapter=${4:-}
+    local base_tmp="$HOME_DIR/base.tmp"
     printf '%s' "$base" > "$base_tmp"
-    printf '%s' "$adapter" > "$adapter_tmp"
-    local base_hash adapter_hash
+    local base_hash
     base_hash=$(hash_file "$base_tmp")
-    adapter_hash=$(hash_file "$adapter_tmp")
     mkdir -p "$HOME_DIR/blobs" "$HOME_DIR/packages/$name/$version"
     cp "$base_tmp" "$HOME_DIR/blobs/$base_hash"
-    cp "$adapter_tmp" "$HOME_DIR/blobs/$adapter_hash"
     printf '%s\n' "$version" > "$HOME_DIR/packages/$name/current"
     cat > "$HOME_DIR/packages/$name/$version/manifest.niyah" <<MANIFEST
 NIYAH-PACKAGE 1
 name $name
 version $version
 artifact base $base_hash https://example.invalid/base
-artifact adapter $adapter_hash https://example.invalid/adapter
 MANIFEST
+
+    if [[ -n "$adapter" ]]; then
+        local adapter_tmp="$HOME_DIR/adapter.tmp"
+        printf '%s' "$adapter" > "$adapter_tmp"
+        local adapter_hash
+        adapter_hash=$(hash_file "$adapter_tmp")
+        cp "$adapter_tmp" "$HOME_DIR/blobs/$adapter_hash"
+        printf 'artifact adapter %s https://example.invalid/adapter\n' "$adapter_hash" >> "$HOME_DIR/packages/$name/$version/manifest.niyah"
+    fi
 }
 
 run_capture() {
@@ -94,6 +99,12 @@ run_capture "$OUTPUT_A" '' "$CAPTURE" run "$PACKAGE" --prompt "$PROMPT" --max-to
 assert_rc 0
 RULES_ADAPTER=$(field "$PROOF_ADAPTER" 'rules_hash:')
 [[ "$RULES_ADAPTER" != "$RULES_BASE" ]]
+
+install_package base-only-engine 1.0.0 base-only
+PROOF_BASE_ONLY="$HOME_DIR/run proof base-only.proof"
+run_capture "$OUTPUT_A" '' "$CAPTURE" run base-only-engine --prompt "$PROMPT" --max-tokens 80 --proof "$PROOF_BASE_ONLY"
+assert_rc 0
+[[ $(field "$PROOF_BASE_ONLY" 'rules_hash:') != "$RULES_ADAPTER" ]]
 
 install_package oracle-engine-alt 1.0.0 base-b adapter-b
 PROOF_PACKAGE="$HOME_DIR/run proof package.proof"
