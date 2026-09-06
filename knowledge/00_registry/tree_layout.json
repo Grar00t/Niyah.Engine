@@ -1,15 +1,15 @@
 {
   "directories": {
-    "00_registry": "taxonomy and naming policy",
-    "10_domains": "domain curriculum and leaf knowledge",
-    "20_canonical": "verified canonical exports",
-    "30_staging": "candidate material",
-    "40_aliases": "alias and rename maps",
-    "50_rejected": "rejected material",
-    "60_reserved": "future placeholders",
-    "90_legacy": "legacy material"
+    "00_registry": "registries and tree-layout metadata",
+    "10_taxonomy": "taxonomy and curriculum seeds; not verified lessons",
+    "20_lessons": "source-backed verified atomic lessons"
   },
-  "name": "khz_knowledge_tree_layout",
+  "root_files": {
+    "canonical_knowledge_v2.json": "canonical knowledge graph",
+    "domains.json": "domain metadata",
+    "README.md": "knowledge layout and verification rule"
+  },
+  "name": "niyah_knowledge_tree_layout",
   "root": "knowledge",
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
