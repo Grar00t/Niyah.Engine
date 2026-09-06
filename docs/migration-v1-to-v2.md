@@ -2,18 +2,17 @@
 
 ## Canonical authority
 
-`schema/sovereign_knowledge_graph_v2.0.0.json` is the canonical interchange contract.
-PostgreSQL is the indexed, constrained projection of that JSON source of truth.
+`schema/canonical_knowledge_graph_v2.1.0.json` is the current portable schema contract.
+`knowledge/canonical_knowledge_v2.json` is the committed canonical graph used by the graph utilities.
+PostgreSQL is an indexed projection; derived indexes and embeddings are not evidence.
 
-## 1. Preserve v1
+## 1. Preserve source material
 
-Do not delete legacy chunks. Keep the original files and hashes as historical source material.
+Keep original source records and hashes when migrating. Do not promote prompt, configuration, or generated text to asserted facts solely because it exists in a repository.
 
-Legacy claims including `Sovereign Logic Engine v5`, `RING-0`, `zero-telemetry`, `air-gapped`, and `confidence: 1.0` are not promoted to asserted facts solely because they occur in configuration/prompt material.
+## 2. Reclassify claims
 
-## 2. Reclassify legacy claims
-
-Classify prompt/config claims as candidate or inferred until implementation evidence exists. Keep the original claim text in evidence metadata with source class `local_repository` or `user_assertion` as appropriate.
+Treat unsupported claims as candidate or inferred until implementation evidence exists. Preserve source identity and content hashes in provenance records.
 
 ## 3. Generate canonical IDs
 
@@ -25,19 +24,19 @@ Edge ID:
 
 `e_` + SHA-256(`source` + `|` + `edge_type` + `|` + `target`)
 
-Normalization is versioned and must be identical during ingestion and re-ingestion.
+Normalization must be stable across ingestion and re-ingestion.
 
 ## 4. Import evidence first
 
-Insert evidence rows first, then nodes, then edges. Bind node/edge provenance to existing evidence records. Reject asserted nodes whose provenance cannot be resolved.
+Insert evidence before nodes and edges. Bind asserted claims to existing evidence records and reject unresolved provenance.
 
 ## 5. Node import
 
-Import `id`, `type`, `label`, `status`, `scope`, description and canonical properties. Map predictable scope fields to relational `domain` where available. Keep variable payloads in JSONB.
+Import `id`, `type`, `label`, `status`, `scope`, description, and canonical properties. Keep variable payloads in JSON/JSONB rather than inventing relational columns for every source field.
 
 ## 6. Edge import
 
-All newly created edges start as `candidate`. A candidate can be promoted only after endpoint integrity, allowed edge type, type compatibility, cycle/mutual-exclusion checks and evidence requirements pass.
+Newly inferred edges start as `candidate`. Promotion requires valid endpoints, an allowed relation type, required evidence, and relation-specific validation.
 
 Evidence is mandatory for:
 
@@ -49,26 +48,33 @@ Evidence is mandatory for:
 
 ## 7. Retrieval projection
 
-Embeddings, FTS vectors, and indexes are derived PostgreSQL runtime state. They are never evidence and never create semantic truth by themselves.
+Embeddings, full-text vectors, and indexes are derived runtime state. One embedding model/dimension pair is allowed per embedding space. Changing either requires a separate space or complete reindexing.
 
-One embedding model/dimension pair is allowed per embedding space. A model or dimension change creates a new embedding space or requires complete reindexing.
+Configure that binding with:
+
+```bash
+python scripts/configure_embedding_space.py \
+  --model-name <model-name-or-local-path> \
+  --dimensions <model-dimension>
+```
+
+This command records the embedding-space contract; it does not train an embedding model.
 
 ## 8. PostgreSQL deployment
-
-Run:
 
 ```bash
 docker compose up -d
 ```
 
-The local PostgreSQL network is configured with no external network attachment. Apply migrations from `/sql` in lexical order.
+Apply the repository SQL migrations in their documented order for the selected storage path.
 
 ## 9. Verification
 
 ```bash
-python scripts/audit_graph.py --graph data/canonical_graph_v2.json
-python scripts/train_embeddings.py --model-name <local-model> --dimensions <model-dimension>
-pytest -q tests/test_validation.py
+python scripts/validate_graph.py
+python scripts/audit_graph.py
+python -m unittest discover -s tests -p 'test_*.py'
+sh tools/ci.sh python
 ```
 
-A corpus is `PASSED` only when duplicate IDs, dangling edges, unsupported asserted nodes, unknown types, missing required evidence and schema failures are all absent.
+`validate_graph.py` and `audit_graph.py` default to `knowledge/canonical_knowledge_v2.json`; pass `--graph` explicitly to audit another graph.
