@@ -92,7 +92,10 @@ add_library(niyah STATIC ${NIYAH_SOURCES} ${NIYAH_HEADERS})
 niyah_configure_target(niyah)
 
 add_library(niyah_shared SHARED ${NIYAH_SOURCES} ${NIYAH_HEADERS})
-set_target_properties(niyah_shared PROPERTIES OUTPUT_NAME niyah C_VISIBILITY_PRESET hidden)
+set_target_properties(niyah_shared PROPERTIES
+    OUTPUT_NAME niyah
+    ARCHIVE_OUTPUT_NAME niyah_shared_import
+    C_VISIBILITY_PRESET hidden)
 target_compile_definitions(niyah_shared PRIVATE NIYAH_BUILD_SHARED)
 niyah_configure_target(niyah_shared)
 
