@@ -4,7 +4,6 @@
 #include "html_extract.hpp"
 #include "niyah_crawler.h"
 #include "niyah_index.h"
-#include "../native/niyah_telemetry.h"
 
 #include <cstdint>
 #include <string>
@@ -17,8 +16,6 @@ struct SearchConfig {
     std::uint32_t max_depth = 2;
     std::size_t max_documents = 256;
     FetchLimits fetch_limits{};
-    bool telemetry_enabled = false;
-    std::string telemetry_path;
 };
 
 struct SearchResult {
@@ -40,17 +37,20 @@ public:
     std::size_t crawl_once();
     std::vector<SearchResult> search(const std::string& query, std::size_t limit = 10) const;
     std::size_t document_count() const noexcept;
-    const NiyahTelemetryStats *telemetry_stats() const noexcept;
 
 private:
+    struct DocumentMetadata {
+        std::string url;
+        std::string title;
+    };
+
     SearchConfig config_;
     std::vector<NiyahCrawlItem> frontier_storage_;
     NiyahCrawlFrontier frontier_{};
     NiyahInvertedIndex index_{};
+    std::vector<DocumentMetadata> metadata_;
     std::uint64_t next_document_id_ = 1;
     std::size_t fetched_documents_ = 0;
-    mutable NiyahTelemetry telemetry_{};
-    bool telemetry_ready_ = false;
 };
 
 }  // namespace niyah::search

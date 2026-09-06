@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from graph_io import DEFAULT_GRAPH, load_graph
 
 ALLOWED_NODE_TYPES = {
     "domain", "topic", "concept", "practice", "technology", "language",
@@ -23,17 +21,23 @@ ALLOWED_EDGE_TYPES = {
 
 
 def validate_graph(graph: dict) -> tuple[bool, list[str]]:
-    """Validate graph structure and return (is_valid, errors)."""
-    errors = []
+    errors: list[str] = []
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
-    
+
+    if not isinstance(nodes, list):
+        return False, ["nodes must be an array"]
+    if not isinstance(edges, list):
+        return False, ["edges must be an array"]
     if not nodes:
         errors.append("Graph has no nodes")
-    
-    node_ids = {n.get("id") for n in nodes}
-    
+
+    node_ids = {n.get("id") for n in nodes if isinstance(n, dict)}
+
     for i, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            errors.append(f"Node {i} is not an object")
+            continue
         if not node.get("id"):
             errors.append(f"Node {i} missing id")
         if not node.get("type"):
@@ -42,8 +46,11 @@ def validate_graph(graph: dict) -> tuple[bool, list[str]]:
             errors.append(f"Node {node.get('id')} has unknown type: {node['type']}")
         if not node.get("label"):
             errors.append(f"Node {node.get('id', i)} missing label")
-    
+
     for i, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            errors.append(f"Edge {i} is not an object")
+            continue
         if not edge.get("id"):
             errors.append(f"Edge {i} missing id")
         if not edge.get("source"):
@@ -58,31 +65,30 @@ def validate_graph(graph: dict) -> tuple[bool, list[str]]:
             errors.append(f"Edge {edge.get('id', i)} missing type")
         elif edge["type"] not in ALLOWED_EDGE_TYPES:
             errors.append(f"Edge {edge.get('id')} has unknown type: {edge['type']}")
-    
-    return len(errors) == 0, errors
+
+    return not errors, errors
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate graph structure")
-    parser.add_argument("--graph", default=str(ROOT / "data" / "canonical_graph_v2.json"))
+    parser.add_argument("--graph", default=str(DEFAULT_GRAPH))
     args = parser.parse_args()
-    
+
     try:
-        graph = json.loads(Path(args.graph).read_text(encoding="utf-8"))
+        graph = load_graph(args.graph)
         is_valid, errors = validate_graph(graph)
-        
         if is_valid:
-            print("✓ Graph is valid")
+            print("Graph is valid")
             return 0
-        else:
-            print(f"✗ Graph has {len(errors)} errors:", file=sys.stderr)
-            for error in errors[:20]:
-                print(f"  - {error}", file=sys.stderr)
-            if len(errors) > 20:
-                print(f"  ... and {len(errors) - 20} more", file=sys.stderr)
-            return 1
-    except Exception as e:
-        print(f"FATAL: {e}", file=sys.stderr)
+
+        print(f"Graph has {len(errors)} errors:", file=sys.stderr)
+        for error in errors[:20]:
+            print(f"  - {error}", file=sys.stderr)
+        if len(errors) > 20:
+            print(f"  ... and {len(errors) - 20} more", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"FATAL: {exc}", file=sys.stderr)
         return 1
 
 
