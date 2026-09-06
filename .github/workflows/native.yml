@@ -55,3 +55,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Test
         run: sh tools/ci.sh python
+
+  windows-ui:
+    name: windows native + WPF UI
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Configure native
+        run: cmake -S native -B build/native-windows -A x64
+      - name: Build native
+        run: cmake --build build/native-windows --config Release --parallel
+      - name: Test native
+        run: ctest --test-dir build/native-windows -C Release --output-on-failure
+      - name: Build WPF UI
+        run: dotnet build ui/Niyah.App/Niyah.App.csproj --configuration Release --nologo
