@@ -42,6 +42,7 @@ set(NIYAH_SOURCES
     niyah_sha256.c
     niyah_proof.c
     niyah_identity.c
+    niyah_control.c
     niyah_matmul.c
     niyah_softmax.c
     niyah_rmsnorm.c
@@ -74,6 +75,7 @@ set(NIYAH_HEADERS
     niyah_sha256.h
     niyah_proof.h
     niyah_identity.h
+    niyah_control.h
     niyah_attention.h
     niyah_bridge.h
     niyah_document.h
@@ -237,6 +239,7 @@ enable_testing()
 set(NIYAH_TESTS
     test_niyah_core.c
     test_niyah_document.c
+    niyah_control_test.c
     niyah_matmul_test.c
     niyah_softmax_test.c
     niyah_rmsnorm_test.c
