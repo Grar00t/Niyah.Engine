@@ -1,28 +1,27 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
-using System.Collections.ObjectModel;
 
 namespace Niyah.App;
 
 public partial class MainWindow : Window
 {
     private readonly ObservableCollection<SearchResult> _searchResults = new();
-    private readonly ObservableCollection<string>       _docIds        = new();
+    private readonly ObservableCollection<string> _docIds = new();
 
     public MainWindow()
     {
         InitializeComponent();
-
-        // Wire observable collections
         ResultsListBox.ItemsSource = _searchResults;
-        DocListBox.ItemsSource     = _docIds;
+        DocListBox.ItemsSource = _docIds;
 
         try
         {
-            VersionLabel.Text   = $"v{NiyahBridge.Version}";
-            DocCountLabel.Text  = $"{NiyahBridge.DocumentCount} documents";
-            StatusLabel.Text    = "Ready.";
+            VersionLabel.Text = $"v{NiyahBridge.Version}";
+            RefreshDocumentCount();
+            StatusLabel.Text = "Ready.";
         }
         catch (Exception ex)
         {
@@ -30,29 +29,36 @@ public partial class MainWindow : Window
         }
     }
 
-    // ── Search ────────────────────────────────────────────────────────────
-
     private void SearchTextBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter) RunSearch();
+        if (e.Key == Key.Enter)
+        {
+            RunSearch();
+        }
     }
 
     private void SearchButton_Click(object sender, RoutedEventArgs e) => RunSearch();
 
     private void RunSearch()
     {
-        var query = SearchTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(query)) return;
+        string query = SearchTextBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return;
+        }
 
         try
         {
-            var results = NiyahBridge.Search(query);
+            List<SearchResult> results = NiyahBridge.Search(query);
             _searchResults.Clear();
-            foreach (var r in results) _searchResults.Add(r);
+            foreach (SearchResult result in results)
+            {
+                _searchResults.Add(result);
+            }
 
             StatusLabel.Text = results.Count > 0
-                ? $"Found {results.Count} result(s) for "{query}""
-                : $"No results for "{query}"";
+                ? $"Found {results.Count} result(s) for '{query}'"
+                : $"No results for '{query}'";
         }
         catch (Exception ex)
         {
@@ -60,99 +66,103 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ResultsListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    private void ResultsListBox_SelectionChanged(
+        object sender,
+        System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (ResultsListBox.SelectedItem is SearchResult sr)
+        if (ResultsListBox.SelectedItem is not SearchResult result)
         {
-            SelectedDocLabel.Text = $"Document: {sr.DocId}";
-            var content = NiyahBridge.GetDocument(sr.DocId);
-            DocPreviewBox.Text = content ?? "(content unavailable)";
+            return;
+        }
+
+        try
+        {
+            SelectedDocLabel.Text = $"Document: {result.DocId}";
+            DocPreviewBox.Text = NiyahBridge.GetDocument(result.DocId)
+                ?? "(content unavailable)";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Preview error: {ex.Message}";
         }
     }
 
-    // ── Documents ─────────────────────────────────────────────────────────
-
     private void AddDocumentButton_Click(object sender, RoutedEventArgs e)
     {
-        var content = DocumentTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(content)) return;
+        string content = DocumentTextBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return;
+        }
 
         try
         {
             string id = NiyahBridge.AddDocument(content);
-            if (!string.IsNullOrEmpty(id))
-            {
-                _docIds.Add(id);
-                DocumentTextBox.Clear();
-                AddStatusLabel.Text    = $"Added: {id}";
-                DocCountLabel.Text     = $"{NiyahBridge.DocumentCount} documents";
-                StatusLabel.Text       = $"Document {id} added successfully.";
-            }
-            else
-            {
-                AddStatusLabel.Text = "Add failed (store full or error).";
-            }
+            _docIds.Add(id);
+            DocumentTextBox.Clear();
+            AddStatusLabel.Text = $"Added: {id}";
+            RefreshDocumentCount();
+            StatusLabel.Text = $"Document {id} added.";
         }
         catch (Exception ex)
         {
+            AddStatusLabel.Text = "Add failed.";
             StatusLabel.Text = $"Add error: {ex.Message}";
         }
     }
 
-    private void DocListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    private void DocListBox_SelectionChanged(
+        object sender,
+        System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (DocListBox.SelectedItem is string docId)
+        if (DocListBox.SelectedItem is not string docId)
         {
-            var content = NiyahBridge.GetDocument(docId);
-            StatusLabel.Text = content != null
-                ? $"Document {docId} — {content.Length} chars"
-                : $"Document {docId} not found.";
+            return;
+        }
+
+        try
+        {
+            string? content = NiyahBridge.GetDocument(docId);
+            StatusLabel.Text = content is null
+                ? $"Document {docId} not found."
+                : $"Document {docId} — {content.Length} chars";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Document read error: {ex.Message}";
         }
     }
 
     private void DeleteDocButton_Click(object sender, RoutedEventArgs e)
     {
-        if (DocListBox.SelectedItem is not string docId) return;
-
-        if (NiyahBridge.DeleteDocument(docId))
+        if (DocListBox.SelectedItem is not string docId)
         {
-            _docIds.Remove(docId);
-            DocCountLabel.Text = $"{NiyahBridge.DocumentCount} documents";
-            StatusLabel.Text   = $"Deleted {docId}.";
+            return;
         }
-        else
-        {
-            StatusLabel.Text = $"Could not delete {docId}.";
-        }
-    }
-
-    // ── LLM Generation ────────────────────────────────────────────────────
-
-    private void GenerateButton_Click(object sender, RoutedEventArgs e)
-    {
-        var prompt = PromptTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(prompt)) return;
-
-        if (!int.TryParse(MaxTokensBox.Text, out int maxTokens) || maxTokens <= 0)
-            maxTokens = 128;
 
         try
         {
-            GenerateStatus.Text  = "Generating…";
-            GenerateOutputBox.Clear();
+            if (!NiyahBridge.DeleteDocument(docId))
+            {
+                StatusLabel.Text = $"Could not delete {docId}.";
+                return;
+            }
 
-            string? modelPath = string.IsNullOrWhiteSpace(ModelPathBox.Text)
-                                ? null : ModelPathBox.Text.Trim();
-
-            string output = NiyahBridge.Generate(prompt, modelPath, maxTokens);
-            GenerateOutputBox.Text = output;
-            GenerateStatus.Text    = $"Done — {output.Length} chars";
-            StatusLabel.Text       = "Generation complete.";
+            _docIds.Remove(docId);
+            _searchResults.Clear();
+            SelectedDocLabel.Text = "Select a result to preview content";
+            DocPreviewBox.Clear();
+            RefreshDocumentCount();
+            StatusLabel.Text = $"Deleted {docId}.";
         }
         catch (Exception ex)
         {
-            GenerateStatus.Text = $"Error: {ex.Message}";
-            StatusLabel.Text    = $"Generation error: {ex.Message}";
+            StatusLabel.Text = $"Delete error: {ex.Message}";
         }
+    }
+
+    private void RefreshDocumentCount()
+    {
+        DocCountLabel.Text = $"{NiyahBridge.DocumentCount} documents";
     }
 }
