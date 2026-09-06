@@ -24,13 +24,11 @@ add_library(niyah_search STATIC
     niyah_crawler.c
     niyah_index.c
     niyah_url.c
-    ../native/niyah_telemetry.c
 )
 
 target_include_directories(niyah_search
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../native
 )
 
 target_link_libraries(niyah_search PUBLIC CURL::libcurl)
