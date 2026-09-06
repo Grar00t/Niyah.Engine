@@ -2,11 +2,11 @@
 set -euo pipefail
 
 NIYAH=$1
-FAKE=$2
+FIXTURE=$2
 HOME_DIR=$(mktemp -d '/tmp/niyah run proof.XXXXXX')
 trap 'rm -rf "$HOME_DIR"' EXIT
 export NIYAH_HOME="$HOME_DIR"
-export NIYAH_LLAMA_CLI="$FAKE"
+export NIYAH_LLAMA_CLI="$FIXTURE"
 
 hash_file() { sha256sum "$1" | awk '{print $1}'; }
 field() { awk -v key="$2" '$1 == key { print $2 }' "$1"; }
@@ -35,8 +35,8 @@ MANIFEST
 run_capture() {
     local output=$1 rc=$2 capture=$3
     shift 3
-    export NIYAH_FAKE_OUTPUT="$output"
-    if [[ -n "$rc" ]]; then export NIYAH_FAKE_EXIT="$rc"; else unset NIYAH_FAKE_EXIT || true; fi
+    export NIYAH_TEST_OUTPUT="$output"
+    if [[ -n "$rc" ]]; then export NIYAH_TEST_EXIT="$rc"; else unset NIYAH_TEST_EXIT || true; fi
     set +e
     "$NIYAH" "$@" > "$capture"
     RUN_RC=$?
