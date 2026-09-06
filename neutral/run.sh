@@ -43,13 +43,22 @@ case "${1:-}" in
     infer)
         shift
         [[ "$#" -gt 0 ]] || usage
-        python3 "${ROOT_DIR}/neutral/inference.py" \
-            --model "$(infer_model)" \
-            --prompt "$*" \
-            --max-new-tokens "${MAX_NEW_TOKENS:-256}" \
-            --temperature "${TEMPERATURE:-0.0}" \
-            --top-p "${TOP_P:-0.95}" \
-            ${AUDIT_LOG:+--audit-log "$AUDIT_LOG"}
+        if [[ -n "${AUDIT_LOG:-}" ]]; then
+            python3 "${ROOT_DIR}/neutral/inference.py" \
+                --model "$(infer_model)" \
+                --prompt "$*" \
+                --max-new-tokens "${MAX_NEW_TOKENS:-256}" \
+                --temperature "${TEMPERATURE:-0.0}" \
+                --top-p "${TOP_P:-0.95}" \
+                --audit-log "$AUDIT_LOG"
+        else
+            python3 "${ROOT_DIR}/neutral/inference.py" \
+                --model "$(infer_model)" \
+                --prompt "$*" \
+                --max-new-tokens "${MAX_NEW_TOKENS:-256}" \
+                --temperature "${TEMPERATURE:-0.0}" \
+                --top-p "${TOP_P:-0.95}"
+        fi
         ;;
     *)
         usage
