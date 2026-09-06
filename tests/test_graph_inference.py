@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unittest
 
 from src.inference.infer import infer_edges, stable_edge_id
@@ -70,6 +71,27 @@ class GraphInferenceTests(unittest.TestCase):
             ],
         }
         self.assertEqual(infer_edges(graph, 0.7), [])
+
+    def test_non_finite_edge_confidence_is_not_promoted(self) -> None:
+        for confidence in (math.nan, math.inf, -math.inf):
+            graph = {
+                "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+                "edges": [
+                    {
+                        "source": "a",
+                        "target": "b",
+                        "type": "part_of",
+                        "confidence": confidence,
+                    },
+                    {
+                        "source": "b",
+                        "target": "c",
+                        "type": "part_of",
+                        "confidence": 0.9,
+                    },
+                ],
+            }
+            self.assertEqual(infer_edges(graph, 0.7), [])
 
     def test_cycles_do_not_infer_self_edges(self) -> None:
         graph = {
