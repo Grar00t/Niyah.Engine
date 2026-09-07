@@ -24,7 +24,7 @@
   "payload_kind": "taxonomy_reference_not_lesson",
   "provider_or_subject": "Amazon VPC",
   "schema": {
-    "name": "khz_verified_atomic_lesson",
+    "name": "khz_taxonomy_reference",
     "version": "0.1.0"
   },
   "sources": [
