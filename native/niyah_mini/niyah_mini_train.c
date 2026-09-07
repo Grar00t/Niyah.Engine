@@ -12,7 +12,10 @@
 static void rmsnorm_fwd(const float* x,const float* w,int32_t n,float eps,float* out,float* r_out){
     double ss=0; for(int32_t i=0;i<n;i++) ss+=(double)x[i]*(double)x[i];
     float r=(float)(1.0/sqrt(ss/(double)n+(double)eps));
-    for(int32_t i=0;i<n;i++) out[i]=x[i]*r*(w?w[i]:1.0f); if(r_out)*r_out=r;
+    for(int32_t i=0;i<n;i++) {
+        out[i]=x[i]*r*(w?w[i]:1.0f);
+    }
+    if(r_out) *r_out=r;
 }
 static void rmsnorm_bwd(const float* dox,const float* x,const float* w,int32_t n,float r,float* dx_out,float* dw_out){
     double S=0; for(int32_t i=0;i<n;i++) S+=(double)dox[i]*(double)x[i]*(double)w[i];
@@ -54,7 +57,8 @@ static size_t weights_n_floats(const NiyahMiniConfig* cfg){
     return vocab*dim+L*per+dim;
 }
 NiyahStatus niyah_mini_optim_init(NiyahMiniOptimizerState* opt,const NiyahMiniConfig* cfg){
-    if(!opt||!cfg) return NIYAH_ERR_INVALID_ARG; size_t n=weights_n_floats(cfg);
+    if(!opt||!cfg) return NIYAH_ERR_INVALID_ARG;
+    size_t n=weights_n_floats(cfg);
     opt->m=(float*)calloc(n,sizeof(float)); opt->v=(float*)calloc(n,sizeof(float));
     if(!opt->m||!opt->v){free(opt->m);free(opt->v);opt->m=opt->v=NULL;return NIYAH_ERR_OUT_OF_MEMORY;}
     opt->t=0; opt->n=n; return NIYAH_OK;
@@ -139,7 +143,7 @@ NiyahStatus niyah_mini_train_forward(NiyahMiniModel* model,NiyahMiniTrainCache* 
             free(cv); free(sv);
         }
         float* probs=cache->probs[l]; float* ain=cache->attn_in[l];
-        for(int32_t h=0;h<H;h++){int32_t kvh=h%KV;
+        for(int32_t h=0;h<H;h++){int32_t kvh=h/(H/KV);
             for(int32_t t=0;t<T;t++){
                 const float* qt=qL+(size_t)t*D+h*hd; float* pr=probs+((size_t)h*T+t)*T; float mx=-1e30f;
                 for(int32_t s=0;s<=t;s++){float dot=0;const float* ks=kL+(size_t)s*kvd+kvh*hd; for(int32_t d=0;d<hd;d++) dot+=qt[d]*ks[d]; float sc=dot*scale; pr[s]=sc; if(sc>mx)mx=sc;}
@@ -238,7 +242,7 @@ NiyahStatus niyah_mini_train_backward(NiyahMiniModel* model,NiyahMiniGrads* grad
                 dh2t[k]=s;}
         }
         for(int32_t d=0;d<D;d++) gl->ffn_norm[d]=0;
-        for(int32_t t=0;t<T;t++){ rmsnorm_bwd(d_h2+(size_t)t*D,res+(size_t)t*D,lw->ffn_norm,D,cache->r2[t],d_res2+(size_t)t*D,dwr); for(int32_t d=0;d<D;d++) gl->ffn_norm[d]+=dwr[d]; for(int32_t d=0;d<D;d++) d_res[(size_t)t*D+d]+=d_res2[(size_t)t*D+d]; }
+        for(int32_t t=0;t<T;t++){ rmsnorm_bwd(d_h2+(size_t)t*D,res+(size_t)t*D,lw->ffn_norm,D,cache->r2[l][t],d_res2+(size_t)t*D,dwr); for(int32_t d=0;d<D;d++) gl->ffn_norm[d]+=dwr[d]; for(int32_t d=0;d<D;d++) d_res[(size_t)t*D+d]+=d_res2[(size_t)t*D+d]; }
         for(int32_t t=0;t<T;t++) for(int32_t d=0;d<D;d++) d_ao[(size_t)t*D+d]=d_res[(size_t)t*D+d];
         for(int32_t t=0;t<T;t++){
             const float* dao=d_ao+(size_t)t*D; const float* aint=ain+(size_t)t*D; float* daint=d_ain+(size_t)t*D;
@@ -246,7 +250,7 @@ NiyahStatus niyah_mini_train_backward(NiyahMiniModel* model,NiyahMiniGrads* grad
             for(int32_t k=0;k<D;k++){float s=0; for(int32_t j=0;j<D;j++) s+=dao[j]*lw->wo[(size_t)j*D+k]; daint[k]=s;}
         }
         memset(d_q,0,(size_t)T*D*sizeof(float)); memset(d_k,0,(size_t)T*kvd*sizeof(float)); memset(d_v,0,(size_t)T*kvd*sizeof(float));
-        for(int32_t h=0;h<H;h++){int32_t kvh=h%KV;
+        for(int32_t h=0;h<H;h++){int32_t kvh=h/(H/KV);
             for(int32_t t=0;t<T;t++){
                 const float* dout=d_ain+(size_t)t*D+h*hd; const float* pr=probs+((size_t)h*T+t)*T; float sum_pg=0;
                 for(int32_t s=0;s<=t;s++){float dot=0; const float* vs=vL+(size_t)s*kvd+kvh*hd; for(int32_t d=0;d<hd;d++) dot+=dout[d]*vs[d]; gprobs[s]=dot; sum_pg+=pr[s]*dot;}
@@ -266,7 +270,7 @@ NiyahStatus niyah_mini_train_backward(NiyahMiniModel* model,NiyahMiniGrads* grad
             for(int32_t k=0;k<D;k++){float s=0; for(int32_t j=0;j<D;j++) s+=dqt[j]*lw->wq[(size_t)j*D+k]; for(int32_t j=0;j<kvd;j++) s+=dkt[j]*lw->wk[(size_t)j*D+k]+dvt[j]*lw->wv[(size_t)j*D+k]; dh1t[k]=s;}
         }
         for(int32_t d=0;d<D;d++) gl->attn_norm[d]=0;
-        for(int32_t t=0;t<T;t++){ rmsnorm_bwd(d_h1+(size_t)t*D,xL+(size_t)t*D,lw->attn_norm,D,cache->r1[t],d_xa+(size_t)t*D,dwr); for(int32_t d=0;d<D;d++) gl->attn_norm[d]+=dwr[d]; for(int32_t d=0;d<D;d++) dx[(size_t)t*D+d]=d_res[(size_t)t*D+d]+d_xa[(size_t)t*D+d]; }
+        for(int32_t t=0;t<T;t++){ rmsnorm_bwd(d_h1+(size_t)t*D,xL+(size_t)t*D,lw->attn_norm,D,cache->r1[l][t],d_xa+(size_t)t*D,dwr); for(int32_t d=0;d<D;d++) gl->attn_norm[d]+=dwr[d]; for(int32_t d=0;d<D;d++) dx[(size_t)t*D+d]=d_res[(size_t)t*D+d]+d_xa[(size_t)t*D+d]; }
     }
     for(int32_t t=0;t<T;t++){int32_t id=input_ids[t]; float* ge=grads->embedding+(size_t)id*D; for(int32_t d=0;d<D;d++) ge[d]+=dx[(size_t)t*D+d];}
     free(dx);free(dpre);free(dwr);free(d_res);free(d_res2);free(d_ao);free(d_ain);free(d_q);free(d_k);free(d_v);
@@ -364,11 +368,13 @@ NiyahStatus niyah_mini_grad_check(NiyahMiniModel* model,const NiyahMiniConfig* c
                 wptr[idx]=orig;
                 float num=(lp-lm)/(2.0f*epsfd), ana=gptr[idx];
                 float rel=fabsf(num-ana)/(fabsf(num)+fabsf(ana)+1e-12f);
-                if(rel>max_rel) max_rel=rel; checked++;
+                if(rel>max_rel) max_rel=rel;
+                checked++;
             }
         }
         free(wp);free(gp);free(sz);
-        if(max_rel_out)*max_rel_out=max_rel; if(n_checked_out)*n_checked_out=checked;
+        if(max_rel_out) *max_rel_out=max_rel;
+        if(n_checked_out) *n_checked_out=checked;
     }
 done:
     free(logits);free(dlog);free(targets);

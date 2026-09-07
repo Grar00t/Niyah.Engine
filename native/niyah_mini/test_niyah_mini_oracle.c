@@ -17,7 +17,6 @@
  * WHAT THIS FILE DOES NOT TEST
  *   - Whether the model produces meaningful text. It cannot; there are no
  *     trained weights here. This validates arithmetic, nothing more.
- *   - The GQA query-head to kv-head mapping. See the note at the bottom.
  *   - Multi-layer interaction: n_layers is 1 throughout, so that a failure
  *     names a stage rather than a depth.
  * ========================================================================== */
@@ -374,22 +373,386 @@ static void test_rope_relative(void)
 }
 
 /* ---------------------------------------------------------------------------
- * NOT YET HERE: gqa_mapping
+ * rope_split_half_layout
  *
- * forward_one selects the kv head for query head h with
+ * This tests the actual coordinate pairing, not merely RoPE's relative-
+ * position property.
  *
- *     int32_t kvh = h % kv_heads;
+ * For head_dim = 4, split-half RoPE pairs:
  *
- * which interleaves: h=0 -> kv0, h=1 -> kv1, h=2 -> kv0. Grouped-Query
- * Attention groups contiguously, and that is what GGUF checkpoints are
- * written for:
+ *     (0, 2)
+ *     (1, 3)
  *
- *     kvh = h / (heads / kv_heads);          h=0,1 -> kv0;  h=2,3 -> kv1
+ * NOT:
  *
- * config_validate already guarantees heads % kv_heads == 0, so the division
- * is safe. A test for this fails against the current code, so it lands in
- * the same commit as the fix rather than ahead of it.
+ *     (0, 1)
+ *     (2, 3)
+ *
+ * Wq is identity and token 0 embeds as [1,2,3,4], so state.q after
+ * forward_token exposes the rotated vector directly.
  * --------------------------------------------------------------------------- */
+static void test_rope_split_half_layout(void)
+{
+    NiyahMiniConfig cfg;
+    NiyahMiniModel model;
+    NiyahMiniForwardState state;
+    NiyahMiniLayerWeights *w;
+
+    float warmup_logits[4];
+    float logits[4];
+
+    double x[4] = {
+        1.0,
+        2.0,
+        3.0,
+        4.0
+    };
+
+    double expected[4];
+    double inv;
+    double angle0;
+    double angle1;
+    double c0;
+    double s0;
+    double c1;
+    double s1;
+
+    int j;
+
+    printf("  rope_split_half_layout\n");
+
+    oracle_config(
+        &cfg,
+        4,  /* dim */
+        1,  /* heads */
+        1,  /* kv heads */
+        4,  /* ff */
+        4   /* vocab */
+    );
+
+    check(
+        niyah_mini_model_init(
+            &model,
+            &cfg
+        ) == NIYAH_OK,
+        "rope layout model init"
+    );
+
+    check(
+        niyah_mini_forward_state_init(
+            &state,
+            &cfg,
+            cfg.n_ctx
+        ) == NIYAH_OK,
+        "rope layout state init"
+    );
+
+    w = &model.weights.layers[0];
+
+    memset(
+        model.weights.memory_block,
+        0,
+        model.weights.memory_size
+    );
+
+    /*
+     * token 0 = [1,2,3,4]
+     * token 1 remains zero and is used only to populate position 0.
+     */
+    model.weights.embedding[0] = 1.0f;
+    model.weights.embedding[1] = 2.0f;
+    model.weights.embedding[2] = 3.0f;
+    model.weights.embedding[3] = 4.0f;
+
+    fill(
+        w->attn_norm,
+        4,
+        1.0f
+    );
+
+    identity(
+        w->wq,
+        4,
+        4
+    );
+
+    fill(
+        w->ffn_norm,
+        4,
+        1.0f
+    );
+
+    fill(
+        model.weights.final_norm,
+        4,
+        1.0f
+    );
+
+    niyah_mini_reset_kv_cache(&model);
+
+    /*
+     * Populate position 0 first so the target is a normal sequential
+     * position-1 forward pass.
+     */
+    check(
+        niyah_mini_forward_token(
+            &model,
+            &state,
+            1,
+            0,
+            warmup_logits
+        ) == NIYAH_OK,
+        "rope layout warmup"
+    );
+
+    check(
+        niyah_mini_forward_token(
+            &model,
+            &state,
+            0,
+            1,
+            logits
+        ) == NIYAH_OK,
+        "rope layout target"
+    );
+
+    inv = rms_inv(
+        x,
+        4,
+        (double)cfg.norm_eps
+    );
+
+    /*
+     * split-half:
+     *
+     * j=0 pairs coordinates 0 and 2
+     * j=1 pairs coordinates 1 and 3
+     */
+    angle0 =
+        1.0 /
+        pow(
+            (double)cfg.rope_theta,
+            0.0 / 4.0
+        );
+
+    angle1 =
+        1.0 /
+        pow(
+            (double)cfg.rope_theta,
+            2.0 / 4.0
+        );
+
+    c0 = cos(angle0);
+    s0 = sin(angle0);
+
+    c1 = cos(angle1);
+    s1 = sin(angle1);
+
+    expected[0] =
+        inv * (x[0] * c0 - x[2] * s0);
+
+    expected[2] =
+        inv * (x[2] * c0 + x[0] * s0);
+
+    expected[1] =
+        inv * (x[1] * c1 - x[3] * s1);
+
+    expected[3] =
+        inv * (x[3] * c1 + x[1] * s1);
+
+    for (j = 0; j < 4; ++j) {
+        char label[80];
+
+        snprintf(
+            label,
+            sizeof(label),
+            "split-half RoPE q[%d]",
+            j
+        );
+
+        check_close(
+            (double)state.q[j],
+            expected[j],
+            label
+        );
+    }
+
+    niyah_mini_forward_state_free(&state);
+    niyah_mini_model_free(&model);
+}
+
+
+/* ---------------------------------------------------------------------------
+ * gqa_contiguous_mapping
+ *
+ * Configuration:
+ *
+ *     4 query heads
+ *     2 KV heads
+ *     head_dim = 2
+ *
+ * Correct contiguous GQA mapping:
+ *
+ *     Q0 Q1 -> KV0
+ *     Q2 Q3 -> KV1
+ *
+ * At position 0 the attention probability is exactly 1, so each query
+ * head's attention output must be exactly the selected V head.
+ *
+ * V head 0 = inv * [1,2]
+ * V head 1 = inv * [3,4]
+ *
+ * Therefore:
+ *
+ *     attn_out =
+ *       [1,2, 1,2, 3,4, 3,4] * inv
+ *
+ * The old modulo mapping would instead produce:
+ *
+ *       [1,2, 3,4, 1,2, 3,4] * inv
+ *
+ * so this oracle distinguishes the two exactly.
+ * --------------------------------------------------------------------------- */
+static void test_gqa_contiguous_mapping(void)
+{
+    NiyahMiniConfig cfg;
+    NiyahMiniModel model;
+    NiyahMiniForwardState state;
+    NiyahMiniLayerWeights *w;
+
+    float logits[8];
+
+    double basis[8] = {
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+    };
+
+    double expected[8];
+    double inv;
+
+    int j;
+
+    printf("  gqa_contiguous_mapping\n");
+
+    oracle_config(
+        &cfg,
+        8,  /* dim */
+        4,  /* query heads */
+        2,  /* KV heads */
+        8,  /* ff */
+        8   /* vocab */
+    );
+
+    check(
+        niyah_mini_model_init(
+            &model,
+            &cfg
+        ) == NIYAH_OK,
+        "GQA model init"
+    );
+
+    check(
+        niyah_mini_forward_state_init(
+            &state,
+            &cfg,
+            cfg.n_ctx
+        ) == NIYAH_OK,
+        "GQA state init"
+    );
+
+    w = &model.weights.layers[0];
+
+    memset(
+        model.weights.memory_block,
+        0,
+        model.weights.memory_size
+    );
+
+    /*
+     * token 0 is e0.
+     * After RMSNorm its first coordinate is inv.
+     */
+    model.weights.embedding[0] = 1.0f;
+
+    fill(
+        w->attn_norm,
+        8,
+        1.0f
+    );
+
+    /*
+     * Wq and Wk remain zero.
+     *
+     * Wv has 4 output rows:
+     *   rows 0,1 = KV head 0
+     *   rows 2,3 = KV head 1
+     *
+     * Only input column 0 is non-zero.
+     */
+    w->wv[0 * 8 + 0] = 1.0f;
+    w->wv[1 * 8 + 0] = 2.0f;
+
+    w->wv[2 * 8 + 0] = 3.0f;
+    w->wv[3 * 8 + 0] = 4.0f;
+
+    niyah_mini_reset_kv_cache(&model);
+
+    check(
+        niyah_mini_forward_token(
+            &model,
+            &state,
+            0,
+            0,
+            logits
+        ) == NIYAH_OK,
+        "GQA forward_token"
+    );
+
+    inv = rms_inv(
+        basis,
+        8,
+        (double)cfg.norm_eps
+    );
+
+    expected[0] = 1.0 * inv;
+    expected[1] = 2.0 * inv;
+
+    expected[2] = 1.0 * inv;
+    expected[3] = 2.0 * inv;
+
+    expected[4] = 3.0 * inv;
+    expected[5] = 4.0 * inv;
+
+    expected[6] = 3.0 * inv;
+    expected[7] = 4.0 * inv;
+
+    for (j = 0; j < 8; ++j) {
+        char label[80];
+
+        snprintf(
+            label,
+            sizeof(label),
+            "contiguous GQA attn_out[%d]",
+            j
+        );
+
+        check_close(
+            (double)state.attn_out[j],
+            expected[j],
+            label
+        );
+    }
+
+    niyah_mini_forward_state_free(&state);
+    niyah_mini_model_free(&model);
+}
+
 
 int main(void)
 {
@@ -398,6 +761,8 @@ int main(void)
     test_cache_reset();
     test_swiglu_exact();
     test_rope_relative();
+    test_rope_split_half_layout();
+    test_gqa_contiguous_mapping();
 
     if (g_failures != 0) {
         printf("\nFAILED %d of %d checks\n", g_failures, g_checks);

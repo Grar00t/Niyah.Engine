@@ -84,9 +84,19 @@ int main(void) {
         int32_t tokens[256];
         const char* text = "hello world";
         int32_t count = niyah_mini_bpe_tokenize(&bpe, text, tokens, 256);
-        /* Should find "hello" and "world" tokens */
-        if (count != 2) {
-            fprintf(stderr, "ERROR: Expected 2 tokens for 'hello world', got %d\n", count);
+        /* Vocabulary contains an explicit space token:
+         * "hello world" -> "hello", " ", "world". */
+        if (count != 3) {
+            fprintf(stderr, "ERROR: Expected 3 tokens for 'hello world', got %d\n", count);
+            niyah_mini_bpe_free(&bpe);
+            niyah_mini_vocab_free(&vocab);
+            return 1;
+        }
+
+        if (tokens[0] != 1 || tokens[1] != 3 || tokens[2] != 2) {
+            fprintf(stderr,
+                    "ERROR: Unexpected token IDs for 'hello world': %d %d %d\n",
+                    tokens[0], tokens[1], tokens[2]);
             niyah_mini_bpe_free(&bpe);
             niyah_mini_vocab_free(&vocab);
             return 1;

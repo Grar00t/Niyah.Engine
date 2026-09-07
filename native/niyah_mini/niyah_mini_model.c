@@ -451,17 +451,40 @@ static void matvec(float *out, const float *w, const float *x, int rows, int col
 
 static void rope_apply_vector(float *x, int32_t dim, int32_t n_heads, int32_t position, float theta)
 {
-    int32_t head_dim, h, i;
-    if (!x || dim <= 0 || n_heads <= 0 || dim % n_heads != 0 || theta <= 0.0f) return;
+    int32_t head_dim, half, h, i;
+
+    if (!x || dim <= 0 || n_heads <= 0 ||
+        dim % n_heads != 0 || theta <= 0.0f) {
+        return;
+    }
+
     head_dim = dim / n_heads;
+
+    if ((head_dim % 2) != 0) {
+        return;
+    }
+
+    half = head_dim / 2;
+
     for (h = 0; h < n_heads; ++h) {
         float *p = x + h * head_dim;
-        for (i = 0; i + 1 < head_dim; i += 2) {
-            float angle = (float)position / powf(theta, (float)i / (float)head_dim);
-            float c = cosf(angle), s = sinf(angle);
-            float a = p[i], b = p[i + 1];
+
+        for (i = 0; i < half; ++i) {
+            const float angle =
+                (float)position /
+                powf(
+                    theta,
+                    (float)(2 * i) / (float)head_dim
+                );
+
+            const float c = cosf(angle);
+            const float s = sinf(angle);
+
+            const float a = p[i];
+            const float b = p[i + half];
+
             p[i] = a * c - b * s;
-            p[i + 1] = a * s + b * c;
+            p[i + half] = b * c + a * s;
         }
     }
 }
@@ -505,7 +528,7 @@ static NiyahStatus forward_one(NiyahMiniModel *model, NiyahMiniForwardState *sta
             memcpy(cache_v, v, (size_t)kv_dim * sizeof(float));
             memset(state->attn_out, 0, (size_t)dim * sizeof(float));
             for (h = 0; h < heads; ++h) {
-                int32_t kvh = h % kv_heads;
+                int32_t kvh = h / (heads / kv_heads);
                 double max_score = -HUGE_VAL, sum = 0.0;
                 for (t = 0; t <= position; ++t) {
                     const float *kh = model->kv_cache_k + (size_t)layer * layer_stride + (size_t)t * (size_t)kv_dim + (size_t)kvh * (size_t)head_dim;
