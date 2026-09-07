@@ -20,6 +20,13 @@ static NiyahStoreStatus map_sqlite(int rc)
     return NIYAH_STORE_IO;
 }
 
+static int bind_text_or_null(sqlite3_stmt *stmt, int index, const char *value)
+{
+    return value
+        ? sqlite3_bind_text(stmt, index, value, -1, SQLITE_TRANSIENT)
+        : sqlite3_bind_null(stmt, index);
+}
+
 NiyahStoreStatus niyah_store_open(const char *path, NiyahStore **out_store)
 {
     if (!path || path[0] == '\0' || !out_store) return NIYAH_STORE_INVALID;
@@ -77,7 +84,6 @@ NiyahStoreStatus niyah_store_init_schema(NiyahStore *store)
 
     static const char sql[] =
         "BEGIN IMMEDIATE;"
-        "PRAGMA foreign_keys=ON;"
         "CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"
         "CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, created_at TEXT NOT NULL, language TEXT NOT NULL, title TEXT);"
         "CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','assistant','system')), content TEXT NOT NULL, created_at TEXT NOT NULL);"
@@ -98,9 +104,16 @@ NiyahStoreStatus niyah_store_init_schema(NiyahStore *store)
         "CREATE INDEX IF NOT EXISTS idx_chunks_document_ordinal ON document_chunks(document_id, ordinal);"
         "CREATE INDEX IF NOT EXISTS idx_chunks_hash ON document_chunks(text_sha256);"
         "CREATE VIRTUAL TABLE IF NOT EXISTS document_fts USING fts5(chunk_id UNINDEXED, title, heading, text, keywords, tokenize='unicode61 remove_diacritics 1');"
+        "CREATE TABLE IF NOT EXISTS chunk_keywords(chunk_id TEXT NOT NULL REFERENCES document_chunks(id) ON DELETE CASCADE, keyword TEXT NOT NULL, weight REAL NOT NULL DEFAULT 1.0 CHECK(weight >= 0.0), PRIMARY KEY(chunk_id, keyword));"
+        "CREATE INDEX IF NOT EXISTS idx_chunk_keywords_keyword ON chunk_keywords(keyword);"
+        "CREATE TABLE IF NOT EXISTS source_fetches(id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE, requested_uri TEXT NOT NULL, effective_uri TEXT, http_status INTEGER, content_type TEXT, content_length INTEGER, fetched_at TEXT NOT NULL, duration_ms INTEGER, error_code TEXT, robots_result TEXT CHECK(robots_result IN ('allow','deny','unavailable','unknown')));"
+        "CREATE INDEX IF NOT EXISTS idx_source_fetches_source_time ON source_fetches(source_id, fetched_at DESC);"
         "CREATE TABLE IF NOT EXISTS claims(id TEXT PRIMARY KEY, chunk_id TEXT NOT NULL REFERENCES document_chunks(id) ON DELETE CASCADE, claim_text TEXT NOT NULL, claim_sha256 TEXT NOT NULL UNIQUE, classification TEXT NOT NULL CHECK(classification IN ('FACT','INFERENCE','UNCERTAIN','UNKNOWN','CONFLICTED')), extractor_version TEXT NOT NULL, created_at TEXT NOT NULL);"
         "CREATE INDEX IF NOT EXISTS idx_claims_chunk ON claims(chunk_id);"
         "CREATE INDEX IF NOT EXISTS idx_claims_classification ON claims(classification);"
+        "CREATE TABLE IF NOT EXISTS claim_keywords(claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE, keyword TEXT NOT NULL, weight REAL NOT NULL DEFAULT 1.0 CHECK(weight >= 0.0), PRIMARY KEY(claim_id, keyword));"
+        "CREATE INDEX IF NOT EXISTS idx_claim_keywords_keyword ON claim_keywords(keyword);"
+        "INSERT OR IGNORE INTO schema_version(version) VALUES(1);"
         "INSERT OR IGNORE INTO schema_version(version) VALUES(2);"
         "COMMIT;";
 
@@ -125,9 +138,7 @@ static NiyahStoreStatus prepare_and_bind_text(
     if (rc != SQLITE_OK) return map_sqlite(rc);
 
     for (size_t i = 0u; i < count; ++i) {
-        rc = values[i]
-            ? sqlite3_bind_text(stmt, (int)(i + 1u), values[i], -1, SQLITE_TRANSIENT)
-            : sqlite3_bind_null(stmt, (int)(i + 1u));
+        rc = bind_text_or_null(stmt, (int)(i + 1u), values[i]);
         if (rc != SQLITE_OK) {
             sqlite3_finalize(stmt);
             return map_sqlite(rc);
@@ -182,17 +193,24 @@ NiyahStoreStatus niyah_store_insert_document(
 
     static const char sql[] =
         "INSERT INTO documents(id,source_id,canonical_uri,title,media_type,language,content_sha256,content_bytes,retrieved_at,parser_version,status) VALUES(?,?,?,?,?,?,?,?,?,?,?);";
-    const char *values[] = {
-        id, source_id, canonical_uri, title, media_type, language,
-        content_sha256, retrieved_at, parser_version, status_value
-    };
 
     sqlite3_stmt *stmt = NULL;
-    NiyahStoreStatus status = prepare_and_bind_text(store->db, sql, values, 10u, &stmt);
-    if (status != NIYAH_STORE_OK) return status;
+    int rc = sqlite3_prepare_v2(store->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) return map_sqlite(rc);
 
-    int rc = sqlite3_bind_int64(stmt, 8, content_bytes);
+    rc = bind_text_or_null(stmt, 1, id);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 2, source_id);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 3, canonical_uri);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 4, title);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 5, media_type);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 6, language);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 7, content_sha256);
+    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 8, content_bytes);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 9, retrieved_at);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 10, parser_version);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 11, status_value);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
+
     sqlite3_finalize(stmt);
     return map_sqlite(rc);
 }
@@ -215,16 +233,22 @@ NiyahStoreStatus niyah_store_insert_chunk(
 
     static const char sql[] =
         "INSERT INTO document_chunks(id,document_id,ordinal,start_offset,end_offset,heading,text,text_sha256,token_count) VALUES(?,?,?,?,?,?,?,?,?);";
-    const char *values[] = {id, document_id, heading, text, text_sha256};
-    sqlite3_stmt *stmt = NULL;
-    NiyahStoreStatus status = prepare_and_bind_text(store->db, sql, values, 5u, &stmt);
-    if (status != NIYAH_STORE_OK) return status;
 
-    int rc = sqlite3_bind_int64(stmt, 3, ordinal);
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(store->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) return map_sqlite(rc);
+
+    rc = bind_text_or_null(stmt, 1, id);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 2, document_id);
+    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 3, ordinal);
     if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 4, start_offset);
     if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 5, end_offset);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 6, heading);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 7, text);
+    if (rc == SQLITE_OK) rc = bind_text_or_null(stmt, 8, text_sha256);
     if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 9, token_count);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
+
     sqlite3_finalize(stmt);
     return map_sqlite(rc);
 }
