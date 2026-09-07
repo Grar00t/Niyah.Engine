@@ -79,7 +79,6 @@ void niyah_mini_config_init(NiyahMiniConfig* config, int32_t variant)
     } else {
         /* Default to BASE */
         *config = PRESETS[NIYAH_MINI_BASE];
-        config->variant = variant;
     }
 }
 
@@ -122,6 +121,10 @@ NiyahStatus niyah_mini_config_validate(const NiyahMiniConfig* config)
     }
 
     if (config->n_heads % config->n_kv_heads != 0) {
+        return NIYAH_ERR_SHAPE;
+    }
+
+    if ((config->n_dim / config->n_heads) % 2 != 0) {
         return NIYAH_ERR_SHAPE;
     }
 

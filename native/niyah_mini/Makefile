@@ -12,6 +12,7 @@ SRCS = \
 	niyah_mini_config.c \
 	niyah_mini_vocab.c \
 	niyah_mini_model.c \
+	niyah_mini_train.c \
 	niyah_mini_bridge.c
 
 # Headers
@@ -19,6 +20,7 @@ HDRS = \
 	niyah_mini_config.h \
 	niyah_mini_vocab.h \
 	niyah_mini_model.h \
+	niyah_mini_train.h \
 	niyah_mini_bridge.h
 
 # Object files

@@ -80,6 +80,35 @@ int main(void) {
         }
     }
 
+    /* Split-half RoPE requires an even head dimension. */
+    {
+        NiyahMiniConfig config;
+
+        niyah_mini_config_init(
+            &config,
+            NIYAH_MINI_TINY
+        );
+
+        /*
+         * dim % heads == 0 and heads % kv_heads == 0,
+         * but head_dim = 6 / 2 = 3 is odd.
+         */
+        config.n_dim = 6;
+        config.n_heads = 2;
+        config.n_kv_heads = 1;
+
+        NiyahStatus status =
+            niyah_mini_config_validate(&config);
+
+        if (status != NIYAH_ERR_SHAPE) {
+            fprintf(
+                stderr,
+                "ERROR: Should reject odd RoPE head dimension\n"
+            );
+            return 1;
+        }
+    }
+
     fprintf(stderr, "\nAll configuration tests passed!\n");
     return 0;
 }

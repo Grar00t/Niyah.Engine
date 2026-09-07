@@ -13,7 +13,7 @@ STAGE="${1:-all}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 
 run_native() {
-    cmake -S native -B build/native -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+    cmake -S native -B build/native -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DBUILD_TESTING=ON
     cmake --build build/native --config "$BUILD_TYPE"
     ctest --test-dir build/native -C "$BUILD_TYPE" --output-on-failure
 }
