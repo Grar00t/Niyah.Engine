@@ -49,18 +49,47 @@ jobs:
         run: ctest --test-dir build/search --output-on-failure
 
   storage:
-    name: SQLite storage cmake + ctest
+    name: PostgreSQL storage cmake + ctest
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg18-bookworm
+        env:
+          POSTGRES_DB: niyah_ci
+          POSTGRES_USER: niyah_ci
+          POSTGRES_PASSWORD: niyah_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U niyah_ci -d niyah_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Install SQLite development headers
-        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - name: Install PostgreSQL development tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev postgresql-client
+
+      - name: Apply canonical migrations
+        run: |
+          python3 tools/apply_postgres_migrations.py \
+            --dbname "host=127.0.0.1 port=5432 dbname=niyah_ci user=niyah_ci password=niyah_ci"
+
       - name: Configure
         run: cmake -S storage -B build/storage -DCMAKE_BUILD_TYPE=Release
+
       - name: Build
         run: cmake --build build/storage --parallel
+
       - name: Test
         run: ctest --test-dir build/storage --output-on-failure
+        env:
+          NIYAH_TEST_PG_CONNINFO: host=127.0.0.1 port=5432 dbname=niyah_ci user=niyah_ci password=niyah_ci
 
   python:
     name: python tooling + tests
