@@ -101,6 +101,23 @@ niyah_configure_target(niyah_shared)
 
 add_subdirectory(niyah_mini)
 
+# Developer-only online trainer.
+#
+# The current trainer uses POSIX filesystem APIs. Keep it out of the
+# normal engine build while preserving an explicit reproducible target.
+if(UNIX)
+    add_executable(niyah_online_train EXCLUDE_FROM_ALL
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/niyah_online_train.c
+    )
+    target_link_libraries(niyah_online_train PRIVATE niyah_mini)
+    target_compile_options(niyah_online_train PRIVATE -Wall -Wextra)
+    set_target_properties(niyah_online_train PROPERTIES
+        OUTPUT_NAME "niyah-online-train"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+endif()
+
+
 add_executable(niyah_token_tax niyah_token_tax.c)
 target_link_libraries(niyah_token_tax PRIVATE niyah)
 target_compile_definitions(niyah_token_tax PRIVATE NIYAH_BRIDGE_EXPORTS)
