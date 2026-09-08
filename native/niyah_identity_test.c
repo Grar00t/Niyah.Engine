@@ -95,7 +95,7 @@ static void test_empty_identity(void)
     /* With nothing loaded, nothing about the model is knowable. */
     assert(id.provenance_known == NIYAH_UNKNOWN);
     assert(niyah_identity_is(&id, "llama") == NIYAH_UNKNOWN);
-    assert(niyah_identity_is(&id, "gpt-4") == NIYAH_UNKNOWN);
+    assert(niyah_identity_is(&id, "foreign-model") == NIYAH_UNKNOWN);
 
     /* The engine name is a compile-time fact and needs no manifest. */
     assert(niyah_identity_is(&id, "Niyah") == NIYAH_TRUE);
@@ -143,7 +143,7 @@ static void test_manifest_and_tamper(void)
     assert(niyah_identity_is(&id, "legacy-model") == NIYAH_TRUE);
     assert(niyah_identity_is(&id, "legacy-model-2.5") == NIYAH_TRUE);
     assert(niyah_identity_is(&id, "llama") == NIYAH_FALSE);
-    assert(niyah_identity_is(&id, "gpt-4") == NIYAH_FALSE);
+    assert(niyah_identity_is(&id, "foreign-model") == NIYAH_FALSE);
 
     /* --- tampered: manifest kept, weights swapped --------------------- */
     niyah_identity_init(&id);
@@ -182,7 +182,7 @@ static void test_self_query_detection(void)
     assert(niyah_identity_is_self_query("who are you?"));
     assert(niyah_identity_is_self_query("WHO ARE YOU"));
     assert(niyah_identity_is_self_query("So, what model are you exactly?"));
-    assert(niyah_identity_is_self_query("are you gpt-4 under the hood"));
+    assert(niyah_identity_is_self_query("which model are you under the hood"));
     assert(niyah_identity_is_self_query("Introduce yourself"));
 
     /* Arabic, MSA and dialect. */

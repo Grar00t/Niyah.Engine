@@ -1,6 +1,6 @@
 # Niyah.Engine
 
-Local C11 model runtime, retrieval layer, evidence/reasoning utilities, graph tooling, and an optional model-hub training path.
+Local C11 model runtime, retrieval layer, evidence/reasoning utilities, graph tooling, and deterministic native execution components.
 
 The native runtime fails explicitly when model weights are unavailable: `niyah_llm_generate` returns `NIYAH_ERR_NO_WEIGHTS` with no generated text. That behavior is covered by native tests.
 
@@ -17,11 +17,10 @@ Model output is treated as untrusted data. The repository does not claim that pr
 | `tools/` | GGUF converter, build/check scripts, converter fixtures/tests |
 | `scripts/` | Canonical graph audit, validation, chunk/rebuild, export, and embedding-space configuration |
 | `src/inference/` | Deterministic `part_of` transitive inference over a graph |
-| `tests/` | Python standard-library regression tests for graph tooling, inference, and model profiles |
+| `tests/` | Python standard-library regression tests for graph tooling and inference |
 | `knowledge/` | Canonical knowledge data and taxonomy |
 | `normalized/` | Normalized graph exports |
 | `rag/` | Retrieval source policy data |
-| `neutral/` | Optional model-hub corpus, LoRA domain adaptation, and direct inference utilities; defaults to a GPT-OSS 20B weights-first path |
 | `ui/Niyah.App/` | C# desktop front end using the native shared library through P/Invoke |
 
 ## Build and test
@@ -52,7 +51,7 @@ Individual stages are `native`, `make`, `search`, and `python`.
 
 Hosted checks are defined in `.github/workflows/native.yml` and run on pushes to `main`, pull requests, and manual dispatch. The workflow covers native CMake/ctest, ASan+UBSan native tests, search CMake/ctest, and Python tooling/tests.
 
-The Python stage compiles `tools/`, `neutral/`, `scripts/`, `src/`, and `tests/`; runs `unittest` graph/model-profile tests; then runs the GGUF converter and K-quant fixtures.
+The Python stage compiles `tools/`, `scripts/`, `src/`, and `tests/`; runs the Python regression tests; then runs the GGUF converter and K-quant fixtures.
 
 ## Verified implementation areas
 
@@ -87,23 +86,7 @@ This is a software boundary, not a claim of hardware memory separation. Filesyst
 - Native generation is exercised at batch size 1; batched inference is not established by the current tests.
 - `search/niyah_index.c` still uses linear term and document lookup. This is a performance limitation, not a correctness claim.
 - `search/niyah_index.h` and `native/niyah_document.h` define different structures named `NiyahDocument`; the headers deliberately reject inclusion together in one translation unit.
-- The optional `neutral/` path is not part of the C11 runtime and does not implement factuality scoring, reinforcement learning, LVU, peer prediction, or a Merkle audit log.
 - `niyah run` does not currently enforce a network namespace, filesystem sandbox, seccomp profile, or equivalent OS-level confinement. The execution proof says so instead of claiming `local_only=true`.
-
-## GPT-OSS 20B path
-
-The optional `neutral/` runner defaults to `openai/gpt-oss-20b` for weights-first inference:
-
-```sh
-python3 -m pip install -r neutral/requirements.txt
-./neutral/run.sh infer 'Explain BM25 briefly.'
-```
-
-`neutral/model_profiles.py` requires the model's chat template for GPT-OSS rather than synthesizing a replacement format. The GPT-OSS training profile keeps the checkpoint's native MXFP4 path and limits LoRA targets to the attention projections (`q_proj`, `k_proj`, `v_proj`, `o_proj`).
-
-If `OUTPUT_DIR/adapter_config.json` exists, `neutral/run.sh infer` uses that adapter automatically; otherwise it uses the base weights. See `neutral/README.md` for exact commands and limitations.
-
-Training here means LoRA domain adaptation. It does not train a foundation model from scratch and does not claim to remove instruction/data conflation inside the transformer.
 
 ## GGUF conversion
 

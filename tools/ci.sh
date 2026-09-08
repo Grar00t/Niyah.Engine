@@ -28,7 +28,7 @@ run_storage() {
 }
 
 run_python() {
-    python3 -m compileall -q tools neutral scripts src tests
+    python3 -m compileall -q tools scripts src tests
     python3 -m unittest discover -s tests -p 'test_*.py'
     python3 tools/tests/test_convert_gguf.py
     python3 tools/tests/test_kquants.py
