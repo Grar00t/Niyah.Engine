@@ -36,3 +36,23 @@ build-*/
 
 *.bak
 native/build_linux/
+
+# Python local state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# In-source native test binaries
+/native/*_test
+/native/test_niyah_*
+
+# Local model/checkpoint artifacts - never commit by accident
+models/
+weights/
+*.gguf
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx

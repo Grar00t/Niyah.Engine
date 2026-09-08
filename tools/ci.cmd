@@ -30,7 +30,10 @@ ctest --test-dir build\search -C %BUILD_TYPE% --output-on-failure || exit /b 1
 if /i not "%STAGE%"=="all" goto done
 
 :python
-python -m compileall -q tools neutral || exit /b 1
+python -m compileall -q tools scripts src tests || exit /b 1
+python -m unittest discover -s tests -p "test_*.py" || exit /b 1
+python tools\tests\test_convert_gguf.py || exit /b 1
+python tools\tests\test_kquants.py || exit /b 1
 
 :done
 echo ok: %STAGE%

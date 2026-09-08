@@ -108,8 +108,6 @@ The converter currently decodes:
 
 Q2_K, Q3_K, Q5_K, Q8_K, Q5_0, Q5_1, Q8_0, and Q8_1 are not decoded by the current converter. Requantise unsupported input before conversion.
 
-`tools/download_and_convert.sh` uses legacy-model-2.5-0.5B-Instruct as a conversion example and defaults to a Q4_K_M checkpoint.
-
 The emitted weight order is:
 
 1. token embedding
@@ -145,10 +143,6 @@ python scripts/configure_embedding_space.py \
   --dimensions <dimensions>
 ```
 
-## Optional model-hub path
-
-`neutral/` is an independent optional path for preparing a local corpus, model inference, and LoRA domain adaptation. See `neutral/README.md` for its exact scope and dependencies.
-
 ## License
 
-See repository metadata.
+No LICENSE file is currently committed.
