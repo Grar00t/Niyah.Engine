@@ -2,17 +2,16 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
 
-printf '%s\n' '[1/3] native tests'
-make -C "$ROOT/native" clean test
+printf '%s\n' '[1/2] regular repository checks'
+sh tools/ci.sh all
 
-printf '%s\n' '[2/3] native sanitizers'
-make -C "$ROOT/native" asan
+printf '%s\n' '[2/2] native ASan + UBSan'
+cmake     -S native     -B build/native-sanitize     -DNIYAH_SANITIZE=ON     -DBUILD_TESTING=ON     -DCMAKE_BUILD_TYPE=Debug
 
-printf '%s\n' '[3/3] search CMake tests'
-BUILD_DIR="$ROOT/build/search"
-cmake -S "$ROOT/search" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
-cmake --build "$BUILD_DIR" --parallel
-ctest --test-dir "$BUILD_DIR" --output-on-failure
+cmake --build build/native-sanitize --parallel
 
-printf '%s\n' 'local build: PASS'
+ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 ctest     --test-dir build/native-sanitize     --output-on-failure
+
+printf '%s\n' 'BUILD=PASS'

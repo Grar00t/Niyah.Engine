@@ -10,11 +10,6 @@ run_native() {
     ctest --test-dir build/native -C "$BUILD_TYPE" --output-on-failure
 }
 
-run_make() {
-    make -C native lib
-    make -C native test
-}
-
 run_search() {
     cmake -S search -B build/search -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
     cmake --build build/search --config "$BUILD_TYPE"
@@ -36,19 +31,17 @@ run_python() {
 
 case "$STAGE" in
     native)  run_native ;;
-    make)    run_make ;;
     search)  run_search ;;
     storage) run_storage ;;
     python)  run_python ;;
     all)
         run_native
-        run_make
         run_search
         run_storage
         run_python
         ;;
     *)
-        echo "unknown stage: $STAGE (native|make|search|storage|python|all)" >&2
+        echo "unknown stage: $STAGE (native|search|storage|python|all)" >&2
         exit 2
         ;;
 esac

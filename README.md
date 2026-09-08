@@ -47,7 +47,7 @@ Full local checks:
 sh tools/ci.sh
 ```
 
-Individual stages are `native`, `make`, `search`, and `python`.
+Individual stages are `native`, `search`, `storage`, and `python`.
 
 Hosted checks are defined in `.github/workflows/native.yml` and run on pushes to `main`, pull requests, and manual dispatch. The workflow covers native CMake/ctest, ASan+UBSan native tests, search CMake/ctest, and Python tooling/tests.
 

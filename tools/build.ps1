@@ -74,7 +74,7 @@ Invoke-Tool 'ctest' @('--test-dir', $NativeBuild, '--build-config', 'Debug', '--
 
 Write-Host '[2/3] native sanitizers'
 $SanBuild = Join-Path $BuildRoot 'native-asan'
-Invoke-Tool 'cmake' (@('-S', $NativeDir, '-B', $SanBuild, '-DNIYAH_ENABLE_ASAN=ON') + $ToolchainArgs)
+Invoke-Tool 'cmake' (@('-S', $NativeDir, '-B', $SanBuild, '-DNIYAH_SANITIZE=ON') + $ToolchainArgs)
 Invoke-Tool 'cmake' @('--build', $SanBuild, '--config', 'Debug', '--parallel')
 Invoke-Tool 'ctest' @('--test-dir', $SanBuild, '--build-config', 'Debug', '--output-on-failure')
 
