@@ -89,15 +89,61 @@ static int32_t sampler_pool_required(const NiyahSamplerConfig* config,
     return n_vocab;
 }
 
-static int candidate_compare(const void* a, const void* b)
+static bool candidate_is_worse(const NiyahSamplerCandidate* a,
+                               const NiyahSamplerCandidate* b)
 {
-    const NiyahSamplerCandidate* ca = (const NiyahSamplerCandidate*)a;
-    const NiyahSamplerCandidate* cb = (const NiyahSamplerCandidate*)b;
-    if (ca->prob < cb->prob) return 1;
-    if (ca->prob > cb->prob) return -1;
-    if (ca->index < cb->index) return -1;
-    if (ca->index > cb->index) return 1;
-    return 0;
+    if (a->prob < b->prob) return true;
+    if (a->prob > b->prob) return false;
+    return a->index > b->index;
+}
+
+static void candidate_swap(NiyahSamplerCandidate* a,
+                           NiyahSamplerCandidate* b)
+{
+    const NiyahSamplerCandidate tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
+
+static void candidate_sift_down(NiyahSamplerCandidate* pool,
+                                int32_t root,
+                                int32_t count)
+{
+    for (;;) {
+        const int32_t child = root * 2 + 1;
+        if (child >= count) {
+            return;
+        }
+
+        int32_t worst = child;
+        if (child + 1 < count &&
+            candidate_is_worse(&pool[child + 1], &pool[child])) {
+            worst = child + 1;
+        }
+
+        if (!candidate_is_worse(&pool[worst], &pool[root])) {
+            return;
+        }
+
+        candidate_swap(&pool[root], &pool[worst]);
+        root = worst;
+    }
+}
+
+static void candidate_sort_desc(NiyahSamplerCandidate* pool, int32_t count)
+{
+    if (!pool || count <= 1) {
+        return;
+    }
+
+    for (int32_t start = count / 2; start > 0; --start) {
+        candidate_sift_down(pool, start - 1, count);
+    }
+
+    for (int32_t end = count - 1; end > 0; --end) {
+        candidate_swap(&pool[0], &pool[end]);
+        candidate_sift_down(pool, 0, end);
+    }
 }
 
 static int32_t sample_from(const NiyahSamplerCandidate* pool,
@@ -219,7 +265,7 @@ int32_t niyah_sample_with_scratch(const float* logits,
         pool[i].prob = probs[i];
         pool[i].index = i;
     }
-    qsort(pool, (size_t)n_vocab, sizeof(NiyahSamplerCandidate), candidate_compare);
+    candidate_sort_desc(pool, n_vocab);
 
     float cumulative = 0.0f;
     int32_t cutoff = 0;
