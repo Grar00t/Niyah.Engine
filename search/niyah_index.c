@@ -26,6 +26,22 @@ static bool token_byte(unsigned char c) {
     return isalnum(c) != 0 || c >= 0x80u || c == '_' || c == '-';
 }
 
+/* Count true token count without storing, used for BM25 length normalisation
+ * so that documents longer than NIYAH_DOCUMENT_TOKEN_LIMIT are penalised
+ * correctly even when term indexing is truncated at the limit. */
+static size_t count_tokens(const char *text) {
+    if (!text) return 0;
+    size_t count = 0;
+    const unsigned char *cursor = (const unsigned char *)text;
+    while (*cursor) {
+        while (*cursor && !token_byte(*cursor)) ++cursor;
+        if (!*cursor) break;
+        while (*cursor && token_byte(*cursor)) ++cursor;
+        ++count;
+    }
+    return count;
+}
+
 static size_t tokenize(const char *text,
                        char tokens[][NIYAH_TERM_MAX],
                        size_t max_tokens) {
@@ -290,7 +306,7 @@ bool niyah_index_add_document(NiyahInvertedIndex *index,
     NiyahDocument *destination = &index->documents[index->document_count];
     destination->document_id = document->document_id;
     destination->text = text_copy;
-    destination->term_count = (uint32_t)token_count;
+    destination->term_count = (uint32_t)count_tokens(text_copy);
 
     for (size_t i = 0; i < token_count; ++i) {
         if (token_seen_before(tokens, i, tokens[i])) continue;
