@@ -106,6 +106,89 @@ int main(void) {
         niyah_mini_vocab_free(&vocab);
     }
 
+    /* A vocabulary file defines the id space: line N must load as id N,
+     * because those ids index embedding and LM-head rows. A skipped blank
+     * line or a silently dropped repeat shifts every later id. */
+    {
+        const char *ok_path = "niyah_mini_vocab_test_ok.txt";
+        const char *blank_path = "niyah_mini_vocab_test_blank.txt";
+        const char *dup_path = "niyah_mini_vocab_test_dup.txt";
+        NiyahMiniVocab loaded;
+        FILE *f;
+
+        f = fopen(ok_path, "wb");
+        if (!f) {
+            fprintf(stderr, "ERROR: Cannot create %s\n", ok_path);
+            return 1;
+        }
+        fprintf(f, "<pad>\nhello\nworld\n");
+        fclose(f);
+
+        f = fopen(blank_path, "wb");
+        if (!f) {
+            fprintf(stderr, "ERROR: Cannot create %s\n", blank_path);
+            remove(ok_path);
+            return 1;
+        }
+        fprintf(f, "<pad>\n\nworld\n");
+        fclose(f);
+
+        f = fopen(dup_path, "wb");
+        if (!f) {
+            fprintf(stderr, "ERROR: Cannot create %s\n", dup_path);
+            remove(ok_path);
+            remove(blank_path);
+            return 1;
+        }
+        fprintf(f, "<pad>\nhello\nhello\n");
+        fclose(f);
+
+        memset(&loaded, 0, sizeof(loaded));
+        status = niyah_mini_vocab_load(&loaded, ok_path, NULL);
+        if (status != NIYAH_OK ||
+            loaded.n_vocab != 3 ||
+            niyah_mini_vocab_lookup(&loaded, "<pad>") != 0 ||
+            niyah_mini_vocab_lookup(&loaded, "hello") != 1 ||
+            niyah_mini_vocab_lookup(&loaded, "world") != 2) {
+            fprintf(stderr,
+                    "ERROR: Well-formed vocabulary did not load line N as id N\n");
+            niyah_mini_vocab_free(&loaded);
+            remove(ok_path);
+            remove(blank_path);
+            remove(dup_path);
+            return 1;
+        }
+        niyah_mini_vocab_free(&loaded);
+
+        memset(&loaded, 0, sizeof(loaded));
+        status = niyah_mini_vocab_load(&loaded, blank_path, NULL);
+        if (status == NIYAH_OK || loaded.n_vocab != 0) {
+            fprintf(stderr,
+                    "ERROR: A blank vocabulary line must be refused, not skipped\n");
+            niyah_mini_vocab_free(&loaded);
+            remove(ok_path);
+            remove(blank_path);
+            remove(dup_path);
+            return 1;
+        }
+
+        memset(&loaded, 0, sizeof(loaded));
+        status = niyah_mini_vocab_load(&loaded, dup_path, NULL);
+        if (status == NIYAH_OK || loaded.n_vocab != 0) {
+            fprintf(stderr,
+                    "ERROR: A repeated vocabulary line must be refused, not dropped\n");
+            niyah_mini_vocab_free(&loaded);
+            remove(ok_path);
+            remove(blank_path);
+            remove(dup_path);
+            return 1;
+        }
+
+        remove(ok_path);
+        remove(blank_path);
+        remove(dup_path);
+    }
+
     fprintf(stderr, "\nAll vocabulary tests passed!\n");
     return 0;
 }
