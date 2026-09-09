@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "niyah.h"
+#include "niyah_runtime.h"
 
 int main(void)
 {
