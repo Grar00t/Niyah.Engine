@@ -183,8 +183,10 @@ void niyah_mini_model_free(NiyahMiniModel *model)
 {
     if (!model) return;
     niyah_mini_weights_free(&model->weights);
-    free(model->kv_cache_k);
-    free(model->kv_cache_v);
+    if (model->owns_kv_cache) {
+        free(model->kv_cache_k);
+        free(model->kv_cache_v);
+    }
     free(model->scratch);
     memset(model, 0, sizeof(*model));
 }
@@ -375,56 +377,189 @@ NiyahStatus niyah_mini_model_save(const NiyahMiniModel *model, const char *confi
     return niyah_mini_model_save_weights(model, weights_path);
 }
 
-size_t niyah_mini_forward_state_memory_size(const NiyahMiniConfig *config, int32_t max_seq_len)
+size_t niyah_mini_forward_state_memory_size(
+    const NiyahMiniConfig *config,
+    int32_t max_seq_len)
 {
-    size_t seq, dim, ff, total = 0U, a;
-    if (!config || max_seq_len <= 0 || max_seq_len > NIYAH_MAX_SEQ_LEN || model_config_ok(config) != NIYAH_OK) return 0U;
-    seq = (size_t)max_seq_len; dim = (size_t)config->n_dim; ff = (size_t)config->n_ff;
-#define ADD_PRODUCT(x,y) do { if (!size_mul_ok((x),(y),&a) || !size_add_ok(total,a,&total)) return 0U; } while (0)
-    ADD_PRODUCT(seq, dim); ADD_PRODUCT(seq, dim); ADD_PRODUCT(seq, dim); ADD_PRODUCT(seq, dim); ADD_PRODUCT(seq, dim);
-    ADD_PRODUCT(seq, dim); ADD_PRODUCT(seq, dim); ADD_PRODUCT(seq, dim); ADD_PRODUCT(seq, seq); ADD_PRODUCT(seq, seq);
-    ADD_PRODUCT(seq, ff); ADD_PRODUCT(seq, ff); ADD_PRODUCT(seq, dim);
-#undef ADD_PRODUCT
-    if (!size_mul_ok(total, sizeof(float), &a)) return 0U;
-    return a;
+    size_t dim, ff, heads, kv_heads, head_dim, kv_dim, seq;
+    size_t floats = 0U, bytes;
+
+    if (!config || max_seq_len <= 0 || max_seq_len > NIYAH_MAX_SEQ_LEN ||
+        model_config_ok(config) != NIYAH_OK) {
+        return 0U;
+    }
+
+    dim = (size_t)config->n_dim;
+    ff = (size_t)config->n_ff;
+    heads = (size_t)config->n_heads;
+    kv_heads = (size_t)config->n_kv_heads;
+    seq = (size_t)max_seq_len;
+    head_dim = dim / heads;
+
+    if (!size_mul_ok(kv_heads, head_dim, &kv_dim))
+        return 0U;
+
+#define ADD_FLOATS(n) do { \
+    if (!size_add_ok(floats, (size_t)(n), &floats)) return 0U; \
+} while (0)
+    ADD_FLOATS(dim);      /* hidden */
+    ADD_FLOATS(dim);      /* norm1 */
+    ADD_FLOATS(dim);      /* attn_out */
+    ADD_FLOATS(dim);      /* norm2 */
+    ADD_FLOATS(dim);      /* q */
+    ADD_FLOATS(kv_dim);   /* k */
+    ADD_FLOATS(kv_dim);   /* v */
+    ADD_FLOATS(seq);      /* attn_scores */
+    ADD_FLOATS(seq);      /* attn_probs */
+    ADD_FLOATS(ff);       /* ffn_gate_out */
+    ADD_FLOATS(ff);       /* ffn_up_out */
+    ADD_FLOATS(ff);       /* ffn_out */
+    ADD_FLOATS(dim);      /* layer_out */
+#undef ADD_FLOATS
+
+    if (!size_mul_ok(floats, sizeof(float), &bytes))
+        return 0U;
+
+    return bytes;
 }
 
-NiyahStatus niyah_mini_forward_state_init(NiyahMiniForwardState *state, const NiyahMiniConfig *config, int32_t max_seq_len)
+NiyahStatus niyah_mini_arena_init(
+    NiyahMiniArena *arena,
+    void *memory,
+    size_t memory_size)
 {
-    void *block;
-    float *ptr;
-    size_t total;
-    size_t seq, dim, ff;
-    if (!state || !config || max_seq_len <= 0 || max_seq_len > NIYAH_MAX_SEQ_LEN) return NIYAH_ERR_INVALID_ARG;
-    if (model_config_ok(config) != NIYAH_OK) return model_config_ok(config);
+    if (!arena || !memory || memory_size == 0U)
+        return NIYAH_ERR_INVALID_ARG;
+
+    arena->base = (unsigned char *)memory;
+    arena->capacity = memory_size;
+    arena->offset = 0U;
+    return NIYAH_OK;
+}
+
+void *niyah_mini_arena_alloc(
+    NiyahMiniArena *arena,
+    size_t bytes,
+    size_t alignment)
+{
+    size_t mask, aligned;
+
+    if (!arena || !arena->base || bytes == 0U || alignment == 0U ||
+        (alignment & (alignment - 1U)) != 0U) {
+        return NULL;
+    }
+
+    mask = alignment - 1U;
+    if (arena->offset > SIZE_MAX - mask)
+        return NULL;
+
+    aligned = (arena->offset + mask) & ~mask;
+    if (aligned > arena->capacity || bytes > arena->capacity - aligned)
+        return NULL;
+
+    arena->offset = aligned + bytes;
+    return arena->base + aligned;
+}
+
+NiyahStatus niyah_mini_forward_state_bind(
+    NiyahMiniForwardState *state,
+    const NiyahMiniConfig *config,
+    int32_t max_seq_len,
+    void *memory,
+    size_t memory_size)
+{
+    NiyahMiniArena arena;
+    size_t required, dim, ff, head_dim, kv_dim, seq;
+
+    if (!state || !config || !memory || max_seq_len <= 0 ||
+        ((uintptr_t)memory % _Alignof(float)) != 0U) {
+        return NIYAH_ERR_INVALID_ARG;
+    }
+
+    if (model_config_ok(config) != NIYAH_OK)
+        return model_config_ok(config);
+
+    required = niyah_mini_forward_state_memory_size(config, max_seq_len);
+    if (required == 0U)
+        return NIYAH_ERR_OVERFLOW;
+    if (memory_size < required)
+        return NIYAH_ERR_OUT_OF_MEMORY;
+
     memset(state, 0, sizeof(*state));
-    total = niyah_mini_forward_state_memory_size(config, max_seq_len);
-    if (total == 0U) return NIYAH_ERR_OVERFLOW;
-    block = calloc(1U, total);
-    if (!block) return NIYAH_ERR_OUT_OF_MEMORY;
-    seq = (size_t)max_seq_len; dim = (size_t)config->n_dim; ff = (size_t)config->n_ff; ptr = (float *)block;
-    state->hidden = ptr; ptr += seq * dim;
-    state->norm1 = ptr; ptr += seq * dim;
-    state->attn_out = ptr; ptr += seq * dim;
-    state->norm2 = ptr; ptr += seq * dim;
-    state->ffn_out = ptr; ptr += seq * dim;
-    state->q = ptr; ptr += seq * dim;
-    state->k = ptr; ptr += seq * dim;
-    state->v = ptr; ptr += seq * dim;
-    state->attn_scores = ptr; ptr += seq * seq;
-    state->attn_probs = ptr; ptr += seq * seq;
-    state->ffn_gate_out = ptr; ptr += seq * ff;
-    state->ffn_up_out = ptr; ptr += seq * ff;
-    state->layer_out = ptr;
-    state->memory_block = block;
-    state->memory_size = total;
+    memset(memory, 0, required);
+
+    if (niyah_mini_arena_init(&arena, memory, memory_size) != NIYAH_OK)
+        return NIYAH_ERR_INVALID_ARG;
+
+    dim = (size_t)config->n_dim;
+    ff = (size_t)config->n_ff;
+    seq = (size_t)max_seq_len;
+    head_dim = dim / (size_t)config->n_heads;
+    kv_dim = (size_t)config->n_kv_heads * head_dim;
+
+#define TAKE(field, count) do { \
+    state->field = (float *)niyah_mini_arena_alloc( \
+        &arena, (size_t)(count) * sizeof(float), _Alignof(float)); \
+    if (!state->field) return NIYAH_ERR_OUT_OF_MEMORY; \
+} while (0)
+    TAKE(hidden, dim);
+    TAKE(norm1, dim);
+    TAKE(attn_out, dim);
+    TAKE(norm2, dim);
+    TAKE(q, dim);
+    TAKE(k, kv_dim);
+    TAKE(v, kv_dim);
+    TAKE(attn_scores, seq);
+    TAKE(attn_probs, seq);
+    TAKE(ffn_gate_out, ff);
+    TAKE(ffn_up_out, ff);
+    TAKE(ffn_out, ff);
+    TAKE(layer_out, dim);
+#undef TAKE
+
+    state->memory_block = memory;
+    state->memory_size = required;
+    state->max_seq_len = max_seq_len;
+    state->owns_memory = false;
+    return NIYAH_OK;
+}
+
+NiyahStatus niyah_mini_forward_state_init(
+    NiyahMiniForwardState *state,
+    const NiyahMiniConfig *config,
+    int32_t max_seq_len)
+{
+    size_t required;
+    void *memory;
+    NiyahStatus status;
+
+    if (!state || !config || max_seq_len <= 0)
+        return NIYAH_ERR_INVALID_ARG;
+
+    required = niyah_mini_forward_state_memory_size(config, max_seq_len);
+    if (required == 0U)
+        return NIYAH_ERR_OVERFLOW;
+
+    memory = calloc(1U, required);
+    if (!memory)
+        return NIYAH_ERR_OUT_OF_MEMORY;
+
+    status = niyah_mini_forward_state_bind(
+        state, config, max_seq_len, memory, required);
+    if (status != NIYAH_OK) {
+        free(memory);
+        return status;
+    }
+
+    state->owns_memory = true;
     return NIYAH_OK;
 }
 
 void niyah_mini_forward_state_free(NiyahMiniForwardState *state)
 {
     if (!state) return;
-    free(state->memory_block);
+    if (state->owns_memory)
+        free(state->memory_block);
     memset(state, 0, sizeof(*state));
 }
 
@@ -571,18 +706,87 @@ static NiyahStatus forward_one(NiyahMiniModel *model, NiyahMiniForwardState *sta
     return NIYAH_OK;
 }
 
+size_t niyah_mini_runtime_memory_size(const NiyahMiniConfig *config)
+{
+    size_t head_dim, kv_dim, values, bytes;
+
+    if (!config || model_config_ok(config) != NIYAH_OK)
+        return 0U;
+
+    head_dim = (size_t)config->n_dim / (size_t)config->n_heads;
+    if (!size_mul_ok((size_t)config->n_kv_heads, head_dim, &kv_dim) ||
+        !size_mul_ok((size_t)config->n_layers, (size_t)config->n_ctx, &values) ||
+        !size_mul_ok(values, kv_dim, &values) ||
+        !size_mul_ok(values, 2U, &values) ||
+        !size_mul_ok(values, sizeof(float), &bytes)) {
+        return 0U;
+    }
+
+    return bytes;
+}
+
+NiyahStatus niyah_mini_model_bind_runtime(
+    NiyahMiniModel *model,
+    void *memory,
+    size_t memory_size)
+{
+    size_t required, half;
+
+    if (!model || !memory || ((uintptr_t)memory % _Alignof(float)) != 0U)
+        return NIYAH_ERR_INVALID_ARG;
+
+    required = niyah_mini_runtime_memory_size(&model->config);
+    if (required == 0U)
+        return NIYAH_ERR_OVERFLOW;
+    if (memory_size < required)
+        return NIYAH_ERR_OUT_OF_MEMORY;
+
+    if (model->owns_kv_cache) {
+        free(model->kv_cache_k);
+        free(model->kv_cache_v);
+    }
+
+    memset(memory, 0, required);
+    half = required / 2U;
+    model->kv_cache_k = (float *)memory;
+    model->kv_cache_v = (float *)((unsigned char *)memory + half);
+    model->kv_cache_seq_len = 0;
+    model->owns_kv_cache = false;
+    return NIYAH_OK;
+}
+
 static NiyahStatus ensure_runtime(NiyahMiniModel *model, const NiyahMiniConfig *config)
 {
     size_t count, bytes;
-    if (!model || !config) return NIYAH_ERR_INVALID_ARG;
-    if (model->kv_cache_k && model->kv_cache_v) return NIYAH_OK;
-    if (!size_mul_ok((size_t)config->n_layers, (size_t)config->n_ctx, &count) || !size_mul_ok(count, (size_t)config->n_kv_heads * ((size_t)config->n_dim / (size_t)config->n_heads), &count) || !size_mul_ok(count, sizeof(float), &bytes)) return NIYAH_ERR_OVERFLOW;
+
+    if (!model || !config)
+        return NIYAH_ERR_INVALID_ARG;
+    if (model->kv_cache_k && model->kv_cache_v)
+        return NIYAH_OK;
+    if (model->kv_cache_k || model->kv_cache_v)
+        return NIYAH_ERR_SHAPE;
+
+    if (!size_mul_ok((size_t)config->n_layers, (size_t)config->n_ctx, &count) ||
+        !size_mul_ok(count,
+                     (size_t)config->n_kv_heads *
+                     ((size_t)config->n_dim / (size_t)config->n_heads),
+                     &count) ||
+        !size_mul_ok(count, sizeof(float), &bytes)) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
     model->kv_cache_k = (float *)calloc(1U, bytes);
     model->kv_cache_v = (float *)calloc(1U, bytes);
     if (!model->kv_cache_k || !model->kv_cache_v) {
-        free(model->kv_cache_k); free(model->kv_cache_v); model->kv_cache_k = NULL; model->kv_cache_v = NULL;
+        free(model->kv_cache_k);
+        free(model->kv_cache_v);
+        model->kv_cache_k = NULL;
+        model->kv_cache_v = NULL;
+        model->owns_kv_cache = false;
         return NIYAH_ERR_OUT_OF_MEMORY;
     }
+
+    model->owns_kv_cache = true;
     model->kv_cache_seq_len = 0;
     return NIYAH_OK;
 }

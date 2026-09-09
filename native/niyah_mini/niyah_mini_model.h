@@ -32,12 +32,19 @@ typedef struct {
 } NiyahMiniWeights;
 
 typedef struct {
+    unsigned char *base;
+    size_t capacity;
+    size_t offset;
+} NiyahMiniArena;
+
+typedef struct {
     NiyahMiniConfig config;
     NiyahMiniWeights weights;
     void *runtime;
     float *kv_cache_k;
     float *kv_cache_v;
     int32_t kv_cache_seq_len;
+    bool owns_kv_cache;
     float *scratch;
     size_t scratch_size;
 } NiyahMiniModel;
@@ -58,6 +65,8 @@ typedef struct {
     float *layer_out;
     void *memory_block;
     size_t memory_size;
+    int32_t max_seq_len;
+    bool owns_memory;
 } NiyahMiniForwardState;
 
 NIYAH_API NiyahStatus niyah_mini_model_init(NiyahMiniModel *model, const NiyahMiniConfig *config);
@@ -85,6 +94,27 @@ NIYAH_API NiyahStatus niyah_mini_weights_allocate(NiyahMiniWeights *weights, con
 NIYAH_API void niyah_mini_weights_free(NiyahMiniWeights *weights);
 NIYAH_API size_t niyah_mini_weights_memory_size(const NiyahMiniConfig *config);
 NIYAH_API size_t niyah_mini_forward_state_memory_size(const NiyahMiniConfig *config, int32_t max_seq_len);
+
+NIYAH_API NiyahStatus niyah_mini_arena_init(
+    NiyahMiniArena *arena,
+    void *memory,
+    size_t memory_size);
+NIYAH_API void *niyah_mini_arena_alloc(
+    NiyahMiniArena *arena,
+    size_t bytes,
+    size_t alignment);
+NIYAH_API NiyahStatus niyah_mini_forward_state_bind(
+    NiyahMiniForwardState *state,
+    const NiyahMiniConfig *config,
+    int32_t max_seq_len,
+    void *memory,
+    size_t memory_size);
+NIYAH_API size_t niyah_mini_runtime_memory_size(
+    const NiyahMiniConfig *config);
+NIYAH_API NiyahStatus niyah_mini_model_bind_runtime(
+    NiyahMiniModel *model,
+    void *memory,
+    size_t memory_size);
 
 #ifdef __cplusplus
 }
