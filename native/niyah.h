@@ -645,11 +645,6 @@ NIYAH_API void niyah_llm_output_free(NiyahLLMOutput* output);
  * Bridge (stable C ABI for the C# UI in ui/Niyah.App)
  * ========================================================================== */
 
-typedef struct NiyahBridgeContext NiyahBridgeContext;
-
-NIYAH_API NiyahBridgeContext* niyah_bridge_create(NiyahLLM* llm);
-NIYAH_API void                niyah_bridge_destroy(NiyahBridgeContext* ctx);
-NIYAH_API NiyahGraph*         niyah_bridge_graph(NiyahBridgeContext* ctx);
 
 #ifdef __cplusplus
 } /* extern "C" */

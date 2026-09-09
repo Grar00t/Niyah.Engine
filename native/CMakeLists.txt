@@ -88,10 +88,18 @@ function(niyah_configure_target target)
     endif()
 endfunction()
 
+add_subdirectory(
+    "${CMAKE_CURRENT_SOURCE_DIR}/../storage"
+    "${CMAKE_BINARY_DIR}/niyah-storage"
+)
+
 add_library(niyah STATIC ${NIYAH_SOURCES} ${NIYAH_HEADERS})
 niyah_configure_target(niyah)
 
 add_library(niyah_shared SHARED ${NIYAH_SOURCES} ${NIYAH_HEADERS})
+target_link_libraries(niyah PRIVATE niyah_store)
+target_link_libraries(niyah_shared PRIVATE niyah_store)
+
 set_target_properties(niyah_shared PROPERTIES
     OUTPUT_NAME niyah
     ARCHIVE_OUTPUT_NAME niyah_shared_import
@@ -113,6 +121,21 @@ if(UNIX)
     target_compile_options(niyah_online_train PRIVATE -Wall -Wextra)
     set_target_properties(niyah_online_train PROPERTIES
         OUTPUT_NAME "niyah-online-train"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+endif()
+
+if(UNIX)
+    add_executable(niyah_online_train_v2 EXCLUDE_FROM_ALL
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/niyah_online_train_v2.c
+    )
+    target_include_directories(niyah_online_train_v2 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tools
+    )
+    target_link_libraries(niyah_online_train_v2 PRIVATE niyah_mini)
+    target_compile_options(niyah_online_train_v2 PRIVATE -Wall -Wextra -Wpedantic)
+    set_target_properties(niyah_online_train_v2 PROPERTIES
+        OUTPUT_NAME "niyah-online-train-v2"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     )
 endif()
@@ -193,6 +216,12 @@ foreach(test_source ${NIYAH_TESTS})
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+set_tests_properties(
+    niyah_bridge_test
+    PROPERTIES
+        SKIP_RETURN_CODE 77
+)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_program(NIYAH_BASH_EXECUTABLE bash)

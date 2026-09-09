@@ -1,400 +1,241 @@
 #include "niyah_bridge.h"
+#include "store.h"
 
-#include <ctype.h>
+#include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct {
-    char*  id;
-    char*  content;
-    size_t length;
-} BridgeDoc;
-
-typedef struct {
-    BridgeDoc* docs;
-    int32_t    count;
-    int32_t    capacity;
-    int32_t    next_id;
-} BridgeStore;
-
-static BridgeStore g_store = {NULL, 0, 0, 1};
-
 struct NiyahBridgeContext {
-    NiyahLLM*   llm;
-    NiyahGraph* graph;
+    NiyahStore *store;
 };
 
-static char* dup_string(const char* s, size_t len)
-{
-    char* out = (char*)malloc(len + 1u);
-    if (!out) {
-        return NULL;
-    }
-    if (len) {
-        memcpy(out, s, len);
-    }
-    out[len] = '\0';
-    return out;
-}
+typedef struct {
+    char *data;
+    size_t length;
+    size_t capacity;
+    size_t row_count;
+    int failed;
+} JsonBuffer;
 
-static void lowercase_into(char* dst, const char* src, size_t len)
+static int json_reserve(JsonBuffer *b, size_t extra)
 {
-    for (size_t i = 0; i < len; ++i) {
-        dst[i] = (char)tolower((unsigned char)src[i]);
-    }
-    dst[len] = '\0';
-}
+    size_t required, next;
+    char *grown;
 
-static int32_t count_occurrences(const char* haystack, const char* needle)
-{
-    const size_t nlen = strlen(needle);
-    if (nlen == 0) {
+    if (!b || b->failed) return 0;
+    if (extra > SIZE_MAX - b->length - 1U) {
+        b->failed = 1;
         return 0;
     }
 
-    int32_t hits = 0;
-    const char* p = haystack;
-    while ((p = strstr(p, needle)) != NULL) {
-        ++hits;
-        p += nlen;
+    required = b->length + extra + 1U;
+    if (required <= b->capacity) return 1;
+
+    next = b->capacity ? b->capacity : 256U;
+    while (next < required) {
+        if (next > SIZE_MAX / 2U) {
+            next = required;
+            break;
+        }
+        next *= 2U;
     }
-    return hits;
+
+    grown = (char *)realloc(b->data, next);
+    if (!grown) {
+        b->failed = 1;
+        return 0;
+    }
+    b->data = grown;
+    b->capacity = next;
+    return 1;
 }
 
-static int32_t find_document_index(const char* doc_id)
+static int json_bytes(JsonBuffer *b, const char *s, size_t n)
 {
-    if (!doc_id || !doc_id[0]) {
-        return -1;
-    }
+    if (!b || (!s && n != 0U) || !json_reserve(b, n)) return 0;
+    if (n) memcpy(b->data + b->length, s, n);
+    b->length += n;
+    b->data[b->length] = '\0';
+    return 1;
+}
 
-    for (int32_t i = 0; i < g_store.count; ++i) {
-        if (strcmp(g_store.docs[i].id, doc_id) == 0) {
-            return i;
+static int json_literal(JsonBuffer *b, const char *s)
+{
+    return s ? json_bytes(b, s, strlen(s)) : 0;
+}
+
+static int json_char(JsonBuffer *b, char c)
+{
+    return json_bytes(b, &c, 1U);
+}
+
+static int json_string(JsonBuffer *b, const char *s)
+{
+    static const char hex[] = "0123456789abcdef";
+    const unsigned char *p;
+
+    if (!s) return json_literal(b, "null");
+    if (!json_char(b, '"')) return 0;
+
+    p = (const unsigned char *)s;
+    while (*p) {
+        const unsigned char c = *p++;
+        char escaped[6];
+
+        switch (c) {
+            case '"':  if (!json_literal(b, "\\\"")) return 0; break;
+            case '\\': if (!json_literal(b, "\\\\")) return 0; break;
+            case '\b': if (!json_literal(b, "\\b")) return 0; break;
+            case '\f': if (!json_literal(b, "\\f")) return 0; break;
+            case '\n': if (!json_literal(b, "\\n")) return 0; break;
+            case '\r': if (!json_literal(b, "\\r")) return 0; break;
+            case '\t': if (!json_literal(b, "\\t")) return 0; break;
+            default:
+                if (c < 0x20U) {
+                    escaped[0] = '\\'; escaped[1] = 'u';
+                    escaped[2] = '0'; escaped[3] = '0';
+                    escaped[4] = hex[c >> 4]; escaped[5] = hex[c & 0x0fU];
+                    if (!json_bytes(b, escaped, sizeof(escaped))) return 0;
+                } else {
+                    const char raw = (char)c;
+                    if (!json_bytes(b, &raw, 1U)) return 0;
+                }
+                break;
         }
     }
-    return -1;
+
+    return json_char(b, '"');
 }
 
-const char* niyah_bridge_version(void)
+static int json_float(JsonBuffer *b, float value)
+{
+    char tmp[64];
+    int n, i;
+
+    if (!isfinite(value)) return 0;
+    n = snprintf(tmp, sizeof(tmp), "%.9g", (double)value);
+    if (n <= 0 || (size_t)n >= sizeof(tmp)) return 0;
+
+    for (i = 0; i < n; ++i)
+        if (tmp[i] == ',') tmp[i] = '.';
+
+    return json_bytes(b, tmp, (size_t)n);
+}
+
+static int search_visitor(
+    void *context,
+    const char *chunk_id,
+    const char *document_id,
+    const char *heading,
+    const char *chunk_text,
+    float rank)
+{
+    JsonBuffer *b = (JsonBuffer *)context;
+
+    if (!b || !chunk_id || !document_id || !chunk_text || !isfinite(rank))
+        return 1;
+
+    if (b->row_count && !json_char(b, ',')) return 1;
+
+    if (!json_literal(b, "{\"chunk_id\":") ||
+        !json_string(b, chunk_id) ||
+        !json_literal(b, ",\"document_id\":") ||
+        !json_string(b, document_id) ||
+        !json_literal(b, ",\"heading\":") ||
+        !json_string(b, heading) ||
+        !json_literal(b, ",\"snippet\":") ||
+        !json_string(b, chunk_text) ||
+        !json_literal(b, ",\"score\":") ||
+        !json_float(b, rank) ||
+        !json_char(b, '}')) {
+        return 1;
+    }
+
+    ++b->row_count;
+    return 0;
+}
+
+const char *niyah_bridge_version(void)
 {
     return NIYAH_VERSION;
 }
 
-const char* niyah_get_version(void)
+int32_t niyah_bridge_open(const char *conninfo, NiyahBridgeContext **out_context)
 {
-    return niyah_version();
-}
+    NiyahBridgeContext *ctx;
+    NiyahStoreStatus status;
 
-const char* niyah_get_truth_string(NiyahTruth truth)
-{
-    return niyah_truth_to_string(truth);
-}
-
-int32_t niyah_bridge_document_count(void)
-{
-    return g_store.count;
-}
-
-int32_t niyah_bridge_add_document(const char* content, const char** doc_id)
-{
-    if (!content || !doc_id) {
+    if (!conninfo || conninfo[0] == '\0' || !out_context)
         return NIYAH_ERR_INVALID_ARG;
+
+    *out_context = NULL;
+    ctx = (NiyahBridgeContext *)calloc(1U, sizeof(*ctx));
+    if (!ctx) return NIYAH_ERR_OUT_OF_MEMORY;
+
+    status = niyah_store_open(conninfo, &ctx->store);
+    if (status != NIYAH_STORE_OK) {
+        free(ctx);
+        return status == NIYAH_STORE_INVALID ? NIYAH_ERR_INVALID_ARG : NIYAH_ERR_IO;
     }
 
-    if (g_store.count >= g_store.capacity) {
-        const int32_t next = g_store.capacity ? g_store.capacity * 2 : 16;
-        BridgeDoc* grown = (BridgeDoc*)realloc(
-            g_store.docs, (size_t)next * sizeof(BridgeDoc));
-        if (!grown) {
-            return NIYAH_ERR_OUT_OF_MEMORY;
-        }
-        g_store.docs = grown;
-        g_store.capacity = next;
+    status = niyah_store_init_schema(ctx->store);
+    if (status != NIYAH_STORE_OK) {
+        niyah_store_close(ctx->store);
+        free(ctx);
+        return NIYAH_ERR_IO;
     }
 
-    const size_t len = strlen(content);
-    char id_buf[32];
-    snprintf(id_buf, sizeof(id_buf), "doc_%d", g_store.next_id);
-
-    char* id_copy = dup_string(id_buf, strlen(id_buf));
-    char* content_copy = dup_string(content, len);
-    char* caller_id_copy = dup_string(id_buf, strlen(id_buf));
-    if (!id_copy || !content_copy || !caller_id_copy) {
-        free(id_copy);
-        free(content_copy);
-        free(caller_id_copy);
-        return NIYAH_ERR_OUT_OF_MEMORY;
-    }
-
-    BridgeDoc* slot = &g_store.docs[g_store.count];
-    slot->id = id_copy;
-    slot->content = content_copy;
-    slot->length = len;
-
-    ++g_store.count;
-    ++g_store.next_id;
-    *doc_id = caller_id_copy;
+    *out_context = ctx;
     return NIYAH_OK;
 }
 
-char* niyah_bridge_get_document(const char* doc_id)
+void niyah_bridge_close(NiyahBridgeContext *context)
 {
-    const int32_t index = find_document_index(doc_id);
-    if (index < 0) {
+    if (!context) return;
+    niyah_store_close(context->store);
+    context->store = NULL;
+    free(context);
+}
+
+char *niyah_bridge_search_json(
+    NiyahBridgeContext *context,
+    const char *query,
+    int32_t max_hits)
+{
+    JsonBuffer b;
+    NiyahStoreStatus status;
+    size_t rows = 0U;
+
+    if (!context || !context->store || !query ||
+        max_hits < 1 || max_hits > 200) {
         return NULL;
     }
 
-    const BridgeDoc* doc = &g_store.docs[index];
-    return dup_string(doc->content, doc->length);
-}
-
-int32_t niyah_bridge_delete_document(const char* doc_id)
-{
-    if (!doc_id || !doc_id[0]) {
-        return NIYAH_ERR_INVALID_ARG;
-    }
-
-    const int32_t index = find_document_index(doc_id);
-    if (index < 0) {
-        return NIYAH_ERR_NOT_FOUND;
-    }
-
-    free(g_store.docs[index].id);
-    free(g_store.docs[index].content);
-
-    const int32_t trailing = g_store.count - index - 1;
-    if (trailing > 0) {
-        memmove(&g_store.docs[index],
-                &g_store.docs[index + 1],
-                (size_t)trailing * sizeof(BridgeDoc));
-    }
-
-    --g_store.count;
-    if (g_store.count >= 0) {
-        memset(&g_store.docs[g_store.count], 0, sizeof(BridgeDoc));
-    }
-    return NIYAH_OK;
-}
-
-void niyah_bridge_clear(void)
-{
-    for (int32_t i = 0; i < g_store.count; ++i) {
-        free(g_store.docs[i].id);
-        free(g_store.docs[i].content);
-    }
-    free(g_store.docs);
-    g_store.docs = NULL;
-    g_store.count = 0;
-    g_store.capacity = 0;
-    g_store.next_id = 1;
-}
-
-int32_t niyah_bridge_search(const char* query, void** results, int* count)
-{
-    if (!query || !results || !count) {
-        return NIYAH_ERR_INVALID_ARG;
-    }
-
-    *results = NULL;
-    *count = 0;
-
-    if (g_store.count == 0) {
-        return NIYAH_OK;
-    }
-
-    const size_t qlen = strlen(query);
-    char* q_lower = (char*)malloc(qlen + 1u);
-    if (!q_lower) {
-        return NIYAH_ERR_OUT_OF_MEMORY;
-    }
-    lowercase_into(q_lower, query, qlen);
-
-    NiyahBridgeResults* out =
-        (NiyahBridgeResults*)calloc(1, sizeof(NiyahBridgeResults));
-    if (!out) {
-        free(q_lower);
-        return NIYAH_ERR_OUT_OF_MEMORY;
-    }
-
-    out->hits = (NiyahBridgeHit*)calloc((size_t)g_store.count,
-                                        sizeof(NiyahBridgeHit));
-    if (!out->hits) {
-        free(out);
-        free(q_lower);
-        return NIYAH_ERR_OUT_OF_MEMORY;
-    }
-
-    for (int32_t i = 0; i < g_store.count; ++i) {
-        const BridgeDoc* doc = &g_store.docs[i];
-
-        char* d_lower = (char*)malloc(doc->length + 1u);
-        if (!d_lower) {
-            continue;
-        }
-        lowercase_into(d_lower, doc->content, doc->length);
-
-        const int32_t tf = count_occurrences(d_lower, q_lower);
-        free(d_lower);
-
-        if (tf == 0) {
-            continue;
-        }
-
-        const float score =
-            (float)tf / (1.0f + (float)doc->length / 1000.0f);
-        const size_t snippet_len = doc->length < 160u ? doc->length : 160u;
-
-        NiyahBridgeHit* hit = &out->hits[out->count];
-        hit->doc_id = dup_string(doc->id, strlen(doc->id));
-        hit->snippet = dup_string(doc->content, snippet_len);
-        hit->score = score;
-
-        if (!hit->doc_id || !hit->snippet) {
-            free(hit->doc_id);
-            free(hit->snippet);
-            continue;
-        }
-
-        ++out->count;
-    }
-
-    free(q_lower);
-
-    for (int32_t i = 1; i < out->count; ++i) {
-        const NiyahBridgeHit key = out->hits[i];
-        int32_t j = i - 1;
-        while (j >= 0 && out->hits[j].score < key.score) {
-            out->hits[j + 1] = out->hits[j];
-            --j;
-        }
-        out->hits[j + 1] = key;
-    }
-
-    *results = out;
-    *count = (int)out->count;
-    return NIYAH_OK;
-}
-
-char* niyah_bridge_search_json(const char* query, int32_t max_hits)
-{
-    if (!query) {
+    memset(&b, 0, sizeof(b));
+    if (!json_char(&b, '[')) {
+        free(b.data);
         return NULL;
     }
 
-    void* raw = NULL;
-    int count = 0;
+    status = niyah_store_search_chunks(
+        context->store, query, max_hits, search_visitor, &b, &rows);
 
-    if (niyah_bridge_search(query, &raw, &count) != NIYAH_OK) {
-        return dup_string("[]", 2);
-    }
-
-    NiyahBridgeResults* res = (NiyahBridgeResults*)raw;
-    if (!res || count == 0) {
-        niyah_bridge_free_results(raw);
-        return dup_string("[]", 2);
-    }
-
-    if (max_hits > 0 && count > max_hits) {
-        count = max_hits;
-    }
-
-    size_t capacity = 256u;
-    for (int i = 0; i < count; ++i) {
-        capacity += strlen(res->hits[i].doc_id) * 2u
-                  + strlen(res->hits[i].snippet) * 2u + 64u;
-    }
-
-    char* json = (char*)malloc(capacity);
-    if (!json) {
-        niyah_bridge_free_results(raw);
+    if (status != NIYAH_STORE_OK || rows != b.row_count) {
+        free(b.data);
         return NULL;
     }
 
-    size_t used = 0;
-    json[used++] = '[';
-
-    for (int i = 0; i < count; ++i) {
-        if (i > 0) {
-            json[used++] = ',';
-        }
-
-        used += (size_t)snprintf(json + used, capacity - used,
-                                 "{\"id\":\"%s\",\"score\":%.6f,\"snippet\":\"",
-                                 res->hits[i].doc_id, res->hits[i].score);
-
-        const char* s = res->hits[i].snippet;
-        for (; *s && used + 8u < capacity; ++s) {
-            switch (*s) {
-                case '"':  json[used++] = '\\'; json[used++] = '"';  break;
-                case '\\': json[used++] = '\\'; json[used++] = '\\'; break;
-                case '\n': json[used++] = '\\'; json[used++] = 'n';  break;
-                case '\r': json[used++] = '\\'; json[used++] = 'r';  break;
-                case '\t': json[used++] = '\\'; json[used++] = 't';  break;
-                default:
-                    if ((unsigned char)*s >= 0x20u) {
-                        json[used++] = *s;
-                    }
-                    break;
-            }
-        }
-
-        json[used++] = '"';
-        json[used++] = '}';
+    if (!json_char(&b, ']')) {
+        free(b.data);
+        return NULL;
     }
 
-    json[used++] = ']';
-    json[used] = '\0';
-
-    niyah_bridge_free_results(raw);
-    return json;
+    return b.data;
 }
 
-void niyah_bridge_free_results(void* results)
-{
-    NiyahBridgeResults* res = (NiyahBridgeResults*)results;
-    if (!res) {
-        return;
-    }
-    for (int32_t i = 0; i < res->count; ++i) {
-        free(res->hits[i].doc_id);
-        free(res->hits[i].snippet);
-    }
-    free(res->hits);
-    free(res);
-}
-
-void niyah_bridge_free_string(char* text)
+void niyah_bridge_free_string(char *text)
 {
     free(text);
-}
-
-NiyahBridgeContext* niyah_bridge_create(NiyahLLM* llm)
-{
-    NiyahBridgeContext* ctx =
-        (NiyahBridgeContext*)calloc(1, sizeof(NiyahBridgeContext));
-    if (!ctx) {
-        return NULL;
-    }
-    ctx->llm = llm;
-    ctx->graph = niyah_graph_create();
-    if (!ctx->graph) {
-        free(ctx);
-        return NULL;
-    }
-    return ctx;
-}
-
-void niyah_bridge_destroy(NiyahBridgeContext* ctx)
-{
-    if (!ctx) {
-        return;
-    }
-    niyah_graph_destroy(ctx->graph);
-    free(ctx);
-}
-
-NiyahGraph* niyah_bridge_graph(NiyahBridgeContext* ctx)
-{
-    return ctx ? ctx->graph : NULL;
 }

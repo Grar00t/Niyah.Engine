@@ -3,132 +3,135 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Win32.SafeHandles;
 
 namespace Niyah.App;
 
-public static class NiyahBridge
+internal static class NiyahNative
 {
-    private const string DllName = "niyah";
+    internal const string DllName = "niyah";
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr niyah_bridge_version();
+    internal static extern IntPtr niyah_bridge_version();
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int niyah_bridge_add_document(
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string content,
-        out IntPtr docIdOut);
+    internal static extern int niyah_bridge_open(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string conninfo,
+        out IntPtr context);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr niyah_bridge_get_document(
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string docId);
+    internal static extern void niyah_bridge_close(IntPtr context);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int niyah_bridge_delete_document(
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string docId);
-
-    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr niyah_bridge_search_json(
+    internal static extern IntPtr niyah_bridge_search_json(
+        NiyahBridgeHandle context,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string query,
         int maxHits);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int niyah_bridge_document_count();
+    internal static extern void niyah_bridge_free_string(IntPtr text);
+}
 
-    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void niyah_bridge_free_string(IntPtr text);
-
-    public static string Version =>
-        Marshal.PtrToStringUTF8(niyah_bridge_version()) ?? "unknown";
-
-    public static int DocumentCount => niyah_bridge_document_count();
-
-    public static string AddDocument(string content)
+internal sealed class NiyahBridgeHandle : SafeHandleZeroOrMinusOneIsInvalid
+{
+    internal NiyahBridgeHandle(IntPtr handle) : base(ownsHandle: true)
     {
-        int status = niyah_bridge_add_document(content, out IntPtr idPointer);
-        try
-        {
-            if (status != 0 || idPointer == IntPtr.Zero)
-            {
-                throw new InvalidOperationException($"Native add-document failed with status {status}.");
-            }
-
-            return Marshal.PtrToStringUTF8(idPointer)
-                ?? throw new InvalidOperationException("Native add-document returned an invalid UTF-8 id.");
-        }
-        finally
-        {
-            if (idPointer != IntPtr.Zero)
-            {
-                niyah_bridge_free_string(idPointer);
-            }
-        }
+        SetHandle(handle);
     }
 
-    public static string? GetDocument(string docId)
+    protected override bool ReleaseHandle()
     {
-        IntPtr pointer = niyah_bridge_get_document(docId);
-        if (pointer == IntPtr.Zero)
-        {
-            return null;
-        }
-
-        try
-        {
-            return Marshal.PtrToStringUTF8(pointer);
-        }
-        finally
-        {
-            niyah_bridge_free_string(pointer);
-        }
-    }
-
-    public static bool DeleteDocument(string docId) =>
-        niyah_bridge_delete_document(docId) == 0;
-
-    public static List<SearchResult> Search(string query, int maxHits = 100)
-    {
-        if (maxHits <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maxHits));
-        }
-
-        IntPtr pointer = niyah_bridge_search_json(query, maxHits);
-        if (pointer == IntPtr.Zero)
-        {
-            throw new InvalidOperationException("Native search failed to return a result buffer.");
-        }
-
-        try
-        {
-            string json = Marshal.PtrToStringUTF8(pointer)
-                ?? throw new InvalidOperationException("Native search returned invalid UTF-8 JSON.");
-            var nativeResults = JsonSerializer.Deserialize<List<BridgeSearchResult>>(json)
-                ?? new List<BridgeSearchResult>();
-
-            var results = new List<SearchResult>(nativeResults.Count);
-            foreach (BridgeSearchResult item in nativeResults)
-            {
-                results.Add(new SearchResult(item.Id, item.Snippet, item.Score));
-            }
-            return results;
-        }
-        finally
-        {
-            niyah_bridge_free_string(pointer);
-        }
-    }
-
-    private sealed class BridgeSearchResult
-    {
-        [JsonPropertyName("id")]
-        public string Id { get; set; } = string.Empty;
-
-        [JsonPropertyName("snippet")]
-        public string Snippet { get; set; } = string.Empty;
-
-        [JsonPropertyName("score")]
-        public float Score { get; set; }
+        NiyahNative.niyah_bridge_close(handle);
+        return true;
     }
 }
 
-public sealed record SearchResult(string DocId, string Snippet, float Score);
+public sealed class NiyahBridge : IDisposable
+{
+    private readonly NiyahBridgeHandle _handle;
+    private bool _disposed;
+
+    public NiyahBridge(string connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new ArgumentException("PostgreSQL connection string is required.", nameof(connectionString));
+
+        int rc = NiyahNative.niyah_bridge_open(connectionString, out IntPtr raw);
+        if (rc != 0 || raw == IntPtr.Zero)
+            throw new InvalidOperationException($"niyah_bridge_open failed: {rc}");
+
+        _handle = new NiyahBridgeHandle(raw);
+    }
+
+    public static string Version =>
+        Marshal.PtrToStringUTF8(NiyahNative.niyah_bridge_version()) ?? "unknown";
+
+    public IReadOnlyList<SearchResult> Search(string query, int maxHits = 20)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (string.IsNullOrWhiteSpace(query))
+            return Array.Empty<SearchResult>();
+        if (maxHits is < 1 or > 200)
+            throw new ArgumentOutOfRangeException(nameof(maxHits));
+
+        IntPtr raw = NiyahNative.niyah_bridge_search_json(_handle, query, maxHits);
+        if (raw == IntPtr.Zero)
+            throw new InvalidOperationException("Native PostgreSQL search failed.");
+
+        try
+        {
+            string json = Marshal.PtrToStringUTF8(raw)
+                ?? throw new InvalidOperationException("Native bridge returned invalid UTF-8.");
+
+            List<NativeRow>? rows = JsonSerializer.Deserialize<List<NativeRow>>(json);
+            if (rows is null || rows.Count == 0)
+                return Array.Empty<SearchResult>();
+
+            var result = new List<SearchResult>(rows.Count);
+            foreach (NativeRow row in rows)
+            {
+                result.Add(new SearchResult(
+                    row.DocumentId, row.ChunkId, row.Heading, row.Snippet, row.Score));
+            }
+            return result;
+        }
+        finally
+        {
+            NiyahNative.niyah_bridge_free_string(raw);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _handle.Dispose();
+        _disposed = true;
+        GC.SuppressFinalize(this);
+    }
+
+    private sealed class NativeRow
+    {
+        [JsonPropertyName("chunk_id")]
+        public string ChunkId { get; init; } = string.Empty;
+
+        [JsonPropertyName("document_id")]
+        public string DocumentId { get; init; } = string.Empty;
+
+        [JsonPropertyName("heading")]
+        public string? Heading { get; init; }
+
+        [JsonPropertyName("snippet")]
+        public string Snippet { get; init; } = string.Empty;
+
+        [JsonPropertyName("score")]
+        public float Score { get; init; }
+    }
+}
+
+public sealed record SearchResult(
+    string DocId,
+    string ChunkId,
+    string? Heading,
+    string Snippet,
+    float Score);

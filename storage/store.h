@@ -14,21 +14,21 @@ typedef enum {
     NIYAH_STORE_INVALID = 1,
     NIYAH_STORE_IO = 2,
     NIYAH_STORE_SCHEMA = 3,
-    NIYAH_STORE_BUSY = 4
+    NIYAH_STORE_BUSY = 4,
+    NIYAH_STORE_ABORTED = 5
 } NiyahStoreStatus;
 
-/*
- * location is backend-specific:
- * - SQLite compatibility backend: filesystem path or :memory:
- * - PostgreSQL backend: libpq connection string/URI, for example dbname=niyah
- */
+/* Strings are libpq-owned and valid only for the callback duration. */
+typedef int (*NiyahStoreChunkVisitor)(
+    void *context,
+    const char *chunk_id,
+    const char *document_id,
+    const char *heading,
+    const char *chunk_text,
+    float rank);
+
 NiyahStoreStatus niyah_store_open(const char *location, NiyahStore **out_store);
 void niyah_store_close(NiyahStore *store);
-
-/*
- * Transitional compatibility name. Backends must not embed schema authority
- * here. PostgreSQL verifies that canonical db/migrations have been applied.
- */
 NiyahStoreStatus niyah_store_init_schema(NiyahStore *store);
 
 NiyahStoreStatus niyah_store_insert_source(
@@ -77,8 +77,15 @@ NiyahStoreStatus niyah_store_insert_claim(
     const char *extractor_version,
     const char *created_at);
 
+NiyahStoreStatus niyah_store_search_chunks(
+    NiyahStore *store,
+    const char *query,
+    int limit,
+    NiyahStoreChunkVisitor visitor,
+    void *visitor_context,
+    size_t *out_count);
+
 #ifdef __cplusplus
 }
 #endif
-
 #endif

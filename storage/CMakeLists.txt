@@ -13,6 +13,12 @@ add_library(
     store.h
 )
 
+set_target_properties(
+    niyah_store
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+)
+
 target_include_directories(
     niyah_store
     PUBLIC

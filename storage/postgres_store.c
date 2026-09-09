@@ -1,5 +1,8 @@
 #include "store.h"
 
+#include <ctype.h>
+#include <errno.h>
+#include <math.h>
 #include <libpq-fe.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -123,15 +126,16 @@ NiyahStoreStatus niyah_store_init_schema(NiyahStore *store)
 
     static const char sql[] =
         "SELECT "
-        "  EXISTS ("
-        "    SELECT 1 "
-        "    FROM public.niyah_schema_migrations "
-        "    WHERE version = '002_niyah_runtime'"
-        "  ) "
+        "  EXISTS (SELECT 1 FROM public.niyah_schema_migrations "
+        "          WHERE version = '001_skg_core') "
+        "  AND EXISTS (SELECT 1 FROM public.niyah_schema_migrations "
+        "              WHERE version = '002_niyah_runtime') "
+        "  AND EXISTS (SELECT 1 FROM public.niyah_schema_migrations "
+        "              WHERE version = '003_skg_updated_at') "
         "  AND to_regclass('niyah.sources') IS NOT NULL "
         "  AND to_regclass('niyah.documents') IS NOT NULL "
         "  AND to_regclass('niyah.document_chunks') IS NOT NULL "
-        "  AND to_regclass('niyah.claims') IS NOT NULL;";
+        "  AND to_regprocedure('niyah.search_chunks(text,integer)') IS NOT NULL;";
 
     PGresult *result = PQexec(store->db, sql);
     if (!result)
@@ -316,4 +320,109 @@ NiyahStoreStatus niyah_store_insert_claim(
     };
 
     return exec_params(store, sql, 7, values);
+}
+
+static int has_non_space(const char *text)
+{
+    const unsigned char *p;
+    if (!text) return 0;
+    p = (const unsigned char *)text;
+    while (*p) {
+        if (!isspace(*p)) return 1;
+        ++p;
+    }
+    return 0;
+}
+
+NiyahStoreStatus niyah_store_search_chunks(
+    NiyahStore *store,
+    const char *query,
+    int limit,
+    NiyahStoreChunkVisitor visitor,
+    void *visitor_context,
+    size_t *out_count)
+{
+    static const char sql[] =
+        "SELECT chunk_id, document_id, heading, chunk_text, rank "
+        "FROM niyah.search_chunks($1, $2::integer);";
+
+    char limit_text[16];
+    const char *values[2];
+    PGresult *result;
+    NiyahStoreStatus status;
+    size_t count = 0U;
+    int rows;
+    int row;
+
+    if (out_count) *out_count = 0U;
+
+    if (!store || !store->db || !query || !has_non_space(query) ||
+        limit < 1 || limit > 200 || !visitor) {
+        return NIYAH_STORE_INVALID;
+    }
+
+    if (snprintf(limit_text, sizeof(limit_text), "%d", limit) < 0)
+        return NIYAH_STORE_INVALID;
+
+    values[0] = query;
+    values[1] = limit_text;
+
+    result = PQexecParams(store->db, sql, 2, NULL, values, NULL, NULL, 0);
+    if (!result)
+        return NIYAH_STORE_IO;
+
+    status = map_pg_error(store->db, result);
+    if (status != NIYAH_STORE_OK) {
+        PQclear(result);
+        return status;
+    }
+
+    if (PQnfields(result) != 5) {
+        PQclear(result);
+        return NIYAH_STORE_SCHEMA;
+    }
+
+    rows = PQntuples(result);
+
+    for (row = 0; row < rows; ++row) {
+        const char *chunk_id;
+        const char *document_id;
+        const char *heading;
+        const char *chunk_text;
+        const char *rank_text;
+        char *rank_end = NULL;
+        float rank;
+
+        if (PQgetisnull(result, row, 0) ||
+            PQgetisnull(result, row, 1) ||
+            PQgetisnull(result, row, 3) ||
+            PQgetisnull(result, row, 4)) {
+            PQclear(result);
+            return NIYAH_STORE_SCHEMA;
+        }
+
+        chunk_id = PQgetvalue(result, row, 0);
+        document_id = PQgetvalue(result, row, 1);
+        heading = PQgetisnull(result, row, 2) ? NULL : PQgetvalue(result, row, 2);
+        chunk_text = PQgetvalue(result, row, 3);
+        rank_text = PQgetvalue(result, row, 4);
+
+        errno = 0;
+        rank = strtof(rank_text, &rank_end);
+        if (errno == ERANGE || rank_end == rank_text || !rank_end ||
+            *rank_end != '\0' || !isfinite(rank)) {
+            PQclear(result);
+            return NIYAH_STORE_SCHEMA;
+        }
+
+        if (visitor(visitor_context, chunk_id, document_id, heading, chunk_text, rank) != 0) {
+            PQclear(result);
+            return NIYAH_STORE_ABORTED;
+        }
+        ++count;
+    }
+
+    PQclear(result);
+    if (out_count) *out_count = count;
+    return NIYAH_STORE_OK;
 }
