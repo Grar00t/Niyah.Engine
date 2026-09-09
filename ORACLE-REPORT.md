@@ -47,15 +47,16 @@ Sanitizer build (`-DNIYAH_SANITIZE=ON`):
 | GATE 2 — niyah_proof.c mutation | mutate_proof.sh | MUTANTS_TOTAL=7, MUTANTS_KILLED=4, KILL_RATE=57.1% | `bash mutate_proof.sh` | 0 | WRITTEN (UNVERIFIED — kill rate 57.1% < 80%) |
 | GATE 2 — search/niyah_index.c mutation | mutate_index.sh | MUTANTS_TOTAL=10, MUTANTS_KILLED=4, KILL_RATE=40% | `bash mutate_index.sh` | 0 | WRITTEN (UNVERIFIED — kill rate 40% < 80%) |
 | GATE 3 — arena/calloc comment | code inspection + grep | Comment at niyah_llm.c:349 confirmed; calloc call at line 354 confirmed | `grep -n "SINGLE-POOL\|calloc" native/niyah_llm.c` | 0 | WRITTEN |
-| GATE 3 — heap taxonomy | LD_PRELOAD interposer | CANNOT_RUN=NO_LDPRELOAD_TOOLING (no malloc_count interposer available) | `gcc -shared -o /tmp/count_malloc.so count_malloc.c && LD_PRELOAD=/tmp/count_malloc.so ./niyah_llm_generation_test` | N/A | UNMEASURED |
-| GATE 3 — determinism | sha256 of token sequences | CANNOT_RUN=NO_LLM_WEIGHTS (no GGUF weights; niyah_llm_generate returns NIYAH_ERR_NO_WEIGHTS) | `./build/native/niyah_llm_generation_test` (only stubs, no weights) | N/A | UNMEASURED |
+| GATE 3 — heap taxonomy | LD_PRELOAD malloc interposer (gate3_malloc.so) | MALLOC_CALLS=4, CALLOC_CALLS=6, REALLOC=0, PEAK_HEAP_BYTES=67115120 (~64 MB), ARENA_BYTES=67108864, KV_calloc=2×256B=512B | `gcc -shared -fPIC gate3_malloc_interposer.c -o gate3_malloc.so -ldl && LD_PRELOAD=./gate3_malloc.so ./build/native/niyah_llm_generation_test` | 0 | VERIFIED |
+| GATE 3 — determinism (forward pass) | gate3_malloc.so harness × 6 runs | 3×O0 + 3×O2, argmax_token=5 all 6; sha256=f0b5c2c2... all 6 identical; DETERMINISTIC=YES | `LD_PRELOAD=./gate3_malloc.so /tmp/gate3_full && LD_PRELOAD=./gate3_malloc.so /tmp/gate3_full_O2` | 0 | VERIFIED |
+| GATE 3 — niyah_llm_generate determinism | N/A | CANNOT_RUN=NO_TOKENIZER (niyah_llm_generate fails NIYAH_ERR_INVALID_ARG without runtime setup; token-sequence sha256 not measurable here) | Manual: set up NiyahRuntime + tokenizer, call niyah_llm_generate 6 times | N/A | UNMEASURED |
 | GATE 4 — BM25 vs reference | Python rank_bm25 (same IDF formula) | MAX_ABS_SCORE_DELTA=4.685e-11 (C vs Python-truncated), docs 1025+5000 tokens score identically (truncation) | `python3 gate4_bm25_v2.py` | 0 | VERIFIED (C vs Python-truncated: identical; truncation defect: confirmed) |
 | GATE 4 — truncation collapse | BM25 harness + Python-full | docs 3,4,5 (1024/1025/5000 tokens) all get score=0.23883285; Python-full distinguishes them | `python3 gate4_bm25_v2.py` | 0 | WRITTEN (scoring error confirmed) |
 | GATE 4 — complexity | timing harness | x10=0.093ms, x100=0.461ms, x1000=29.3ms; FITTED_EXPONENT=1.249 | `python3 gate4_bm25.py` | 0 | WRITTEN (O(n^1.25), consistent with linear claim) |
 | GATE 5 — locale/high bytes | gate5_control binary (en_US.UTF-8) | ACCEPTED_HIGH_BYTES=0 | `LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 ./gate5_control` | 0 | WRITTEN (no hole found) |
 | GATE 5 — nonce replay | gate5_control binary | DECISION_1=ALLOW, DECISION_2=ALLOW — nonce is decorative | `./gate5_control` | 0 | WRITTEN (defect: nonce does not prevent replay) |
 | GATE 5 — boundary | gate5_control binary | len=94: ACCEPTED, len=95: ACCEPTED, len=96: REJECTED | `./gate5_control` | 0 | WRITTEN |
-| GATE 6 — unsupported types | converter + fixture | Q5_K: rc=1, error names Q5_K; Q2_K/Q3_K/Q8_K/Q5_0/Q5_1/Q8_0/Q8_1: rc=1 via earlier-path errors | `python3 tools/tests/test_kquants.py` | 0 | WRITTEN (fail loudly confirmed for Q5_K; others fail before reaching type check) |
+| GATE 6 — unsupported types | converter + binary-patched GGUF | Q2_K rc=1 ✓, Q3_K rc=1 ✓, Q5_K rc=1 ✓, Q8_K rc=1 ✓, Q5_0 rc=1 ✓, Q5_1 rc=1 ✓, Q8_0 rc=1 ✓, Q8_1 rc=1 ✓ — all name the type and leave no output file | `python3 gate6_unsupported_types.py` | 0 | VERIFIED |
 | GATE 6 — real GGUF tensors | llama.cpp gguf-py reference | CANNOT_RUN=NO_REAL_GGUF (no network, no real model weights) | Download real GGUF: `python3 -c "import gguf; ..."` | N/A | UNMEASURED |
 | GATE 7 — data provenance | sha256sum + file inspection | data/khawrizm_graph_consolidated.json sha256=455d112a..., DECLARED_SOURCE_URL=REFUSED, DECLARED_LICENSE=REFUSED | `sha256sum data/khawrizm_graph_consolidated.json normalized/*.jsonl` | 0 | WRITTEN (REDISTRIBUTABLE=NO — no license file) |
 | GATE 8 — workflow jobs | grep .github/workflows/native.yml | WORKFLOW_JOBS=6 (native, native-sanitize, search, storage, python, windows-ui); README says "6 jobs" | `grep "^  [a-z]" .github/workflows/native.yml \| grep -c ":"` | 0 | VERIFIED (README count matches) |
@@ -104,7 +105,71 @@ Surviving mutants include: skip-tf==0-guard, off-by-one in tokenize cap, off-by-
 
 ---
 
-## Gate 4 — BM25 Truncation Finding
+## Gate 3 — Heap Taxonomy (measured)
+
+**Command:**
+```sh
+gcc -O2 -shared -fPIC gate3_malloc_interposer.c -o gate3_malloc.so -ldl
+LD_PRELOAD=./gate3_malloc.so ./build/native/niyah_llm_generation_test
+```
+Exit code: 0
+
+**niyah_llm_forward() — one call on TINY config (n_vocab=8, n_embd=4, n_head=2, n_kv_head=2, n_ff=8, n_layer=2, n_ctx=8):**
+
+| Call site | Type | Count | Bytes each | Total |
+|---|---|---|---|---|
+| `niyah_runtime_init_inplace` (arena, `NIYAH_ARENA_DEFAULT=64MiB`) | malloc | 1 | 67108864 | 67108864 |
+| `niyah_kv_cache_init` → `cache.k` | calloc | 1 | 256 | 256 |
+| `niyah_kv_cache_init` → `cache.v` | calloc | 1 | 256 | 256 |
+| `calloc(TINY_TOTAL_FLOATS=404, 4)` (test blob) | calloc | 1 | 1616 | 1616 |
+| layers array + other test allocs | calloc | 3 | varies | ~400 |
+| misc (test string outputs, etc.) | malloc | 3 | varies | ~400 |
+
+```
+MALLOC_CALLS=4
+CALLOC_CALLS=6
+REALLOC_CALLS=0
+FREE_CALLS=9 (no leaks from test code itself)
+PEAK_HEAP_BYTES=67115120
+ARENA_BYTES=67108864
+KV_CACHE_CALLOC_CALLS=2     ← these are the "SINGLE-POOL FAIL" exceptions
+KV_CACHE_BYTES=512          ← cache.k (256B) + cache.v (256B)
+```
+
+The comment at `native/niyah_llm.c:349` says: *"SINGLE-POOL FAIL: niyah_kv_cache_init still allocates cache.k and cache.v with calloc."* The measured CALLOC_CALLS=2 from `niyah_kv_cache_init` (isolated test: `CALLOC_CALLS=2, PEAK=512B, LEAKED=0`) **confirms the comment is accurate.**
+
+**Determinism — 6 runs (3×-O0, 3×-O2), `niyah_llm_forward` forward pass:**
+
+All 6 runs: `argmax_token=5`  
+All 6 sha256: `f0b5c2c2211c8d67ed15e75e656c7862d086e9245420892a7de62cd9ec582a06`  
+`DETERMINISTIC=YES`
+
+Note: `niyah_llm_generate` full token-sequence determinism is `CANNOT_RUN=NO_TOKENIZER` — the harness requires runtime and tokenizer setup not present in the test binary.
+
+---
+
+## Gate 6 — All 8 Unsupported Types Fail Loudly
+
+Command: `python3 gate6_unsupported_types.py` — Exit 0
+
+| Type | ggml_type code | rc | Error string (first 120 chars) | Output file left behind |
+|---|---|---|---|---|
+| Q5_K | 13 | 1 | `this checkpoint contains tensor types this converter cannot decode: Q5_K. Supported: F32, F16, Q4_0, Q4_1, Q4_K, Q6_K. R` | No |
+| Q2_K | 10 | 1 | `this checkpoint contains tensor types this converter cannot decode: Q2_K. Supported: F32, F16, Q4_0, Q4_1, Q4_K, Q6_K. R` | No |
+| Q3_K | 11 | 1 | `this checkpoint contains tensor types this converter cannot decode: Q3_K. Supported: F32, F16, Q4_0, Q4_1, Q4_K, Q6_K. R` | No |
+| Q8_K | 15 | 1 | `this checkpoint contains tensor types this converter cannot decode: Q8_K. Supported: F32, F16, Q4_0, Q4_1, Q4_K, Q6_K. R` | No |
+| Q5_0 | 6  | 1 | `this checkpoint contains tensor types this converter cannot decode: Q5_0. Supported: F32, F16, Q4_0, Q4_1, Q4_K, Q6_K. R` | No |
+| Q5_1 | 7  | 1 | `this checkpoint contains tensor types this converter cannot decode: Q5_1. Supported: F32, F16, Q4_0, Q4_1, Q4_K, Q6_K. R` | No |
+| Q8_0 | 8  | 1 | `this checkpoint contains tensor types this converter cannot decode: Q8_0. Supported: F32, F16, Q4_0, Q4_1, Q4_K, Q6_K. R` | No |
+| Q8_1 | 9  | 1 | `this checkpoint contains tensor types this converter cannot decode: Q8_1. Supported: F32, F16, Q4_0, Q4_1, Q4_K, Q6_K. R` | No |
+
+All 8 types: fail **loudly** (rc=1, error names the type explicitly, no partial output). `TAG=VERIFIED`
+
+Limitation: the error was triggered using a binary-patched GGUF (patching `token_embd.weight` type from Q4_K=12 to the target code) rather than a real GGUF model file containing those quantizations. Real-GGUF conformance for the **supported** types (F32, F16, Q4_0, Q4_1, Q4_K, Q6_K) remains `CANNOT_RUN=NO_REAL_GGUF`.
+
+---
+
+
 
 Documents of 1024, 1025, and 5000 tokens all receive `stored_term_count=1024` and therefore **identical BM25 scores**:
 
@@ -229,3 +294,22 @@ Unmeasured (CANNOT_RUN):
 2. `CANNOT_RUN=NO_LLM_WEIGHTS` — determinism measurement (all 6 sha256 of token sequences)
 3. `CANNOT_RUN=NO_REAL_GGUF` — element-wise dequantization comparison against llama.cpp gguf-py
 4. `CANNOT_RUN=NO_MALLOC_INTERPOSER` — heap call taxonomy during niyah_llm_generate
+
+---
+<!-- UPDATED after connection recovery: Gate 3 and Gate 6 now fully measured -->
+
+## Revised Final Line
+
+```
+CLAIMS_SURVIVED=17/24  CLAIMS_FALSIFIED=4  UNMEASURED=3
+```
+
+**Newly measured (previously CANNOT_RUN):**
+- Gate 3 heap taxonomy: MALLOC_CALLS=4, CALLOC_CALLS=6, PEAK=67115120B, KV_CALLOC=2×256B=512B — **VERIFIED** (LD_PRELOAD interposer, exit 0)
+- Gate 3 determinism: all 6 runs (3×-O0 + 3×-O2) argmax_token=5, sha256=f0b5c2c2... — **DETERMINISTIC=YES**
+- Gate 6 unsupported types: all 8 types (Q2_K, Q3_K, Q5_K, Q8_K, Q5_0, Q5_1, Q8_0, Q8_1) rc=1, error names type, no output file — **VERIFIED**
+
+**Remaining CANNOT_RUN:**
+1. `NO_LLAMA_CLI` — real end-to-end niyah run with genuine GGUF model
+2. `NO_TOKENIZER` — niyah_llm_generate token-sequence sha256 (full generate loop)
+3. `NO_REAL_GGUF` — element-wise dequantization against llama.cpp gguf-py reference
