@@ -1,4 +1,4 @@
-#include "niyah.h"
+#include "niyah_sampler_internal.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -53,29 +53,56 @@ static uint64_t next_u64(void)
     return result;
 }
 
-/* Uniform in [0, 1). */
 static float next_float(void)
 {
     return (float)((next_u64() >> 11) * (1.0 / 9007199254740992.0));
 }
 
-typedef struct {
-    float   prob;
-    int32_t index;
-} Candidate;
+static NiyahSamplerConfig sampler_config_resolve(const NiyahSamplerConfig* config)
+{
+    NiyahSamplerConfig cfg;
+    if (config) {
+        cfg = *config;
+    } else {
+        cfg.strategy = NIYAH_SAMPLE_GREEDY;
+        cfg.temperature = 1.0f;
+        cfg.top_k = 0;
+        cfg.top_p = 1.0f;
+    }
+    return cfg;
+}
+
+static int32_t sampler_pool_required(const NiyahSamplerConfig* config,
+                                     int32_t n_vocab)
+{
+    const NiyahSamplerConfig cfg = sampler_config_resolve(config);
+    if (cfg.strategy == NIYAH_SAMPLE_GREEDY || !(cfg.temperature > 0.0f)) {
+        return 0;
+    }
+    if (cfg.strategy == NIYAH_SAMPLE_TOP_K) {
+        int32_t k = cfg.top_k > 0 ? cfg.top_k : 40;
+        if (k > n_vocab) {
+            k = n_vocab;
+        }
+        return k;
+    }
+    return n_vocab;
+}
 
 static int candidate_compare(const void* a, const void* b)
 {
-    const Candidate* ca = (const Candidate*)a;
-    const Candidate* cb = (const Candidate*)b;
-    if (ca->prob < cb->prob) return 1;   /* descending */
+    const NiyahSamplerCandidate* ca = (const NiyahSamplerCandidate*)a;
+    const NiyahSamplerCandidate* cb = (const NiyahSamplerCandidate*)b;
+    if (ca->prob < cb->prob) return 1;
     if (ca->prob > cb->prob) return -1;
     if (ca->index < cb->index) return -1;
     if (ca->index > cb->index) return 1;
     return 0;
 }
 
-static int32_t sample_from(const Candidate* pool, int32_t count, float total)
+static int32_t sample_from(const NiyahSamplerCandidate* pool,
+                           int32_t count,
+                           float total)
 {
     if (count <= 0) {
         return -1;
@@ -94,7 +121,6 @@ static int32_t sample_from(const Candidate* pool, int32_t count, float total)
         }
     }
 
-    /* Floating-point shortfall: fall back to the last candidate. */
     return pool[count - 1].index;
 }
 
@@ -116,12 +142,95 @@ void niyah_sampler_apply_repetition_penalty(float* logits,
         if (token < 0 || token >= n_vocab) {
             continue;
         }
-        /* Positive logits are divided, negative ones multiplied, so the
-         * penalty always pushes the token down. */
         logits[token] = logits[token] > 0.0f
             ? logits[token] / penalty
             : logits[token] * penalty;
     }
+}
+
+int32_t niyah_sample_with_scratch(const float* logits,
+                                  int32_t n_vocab,
+                                  const NiyahSamplerConfig* config,
+                                  float* probs,
+                                  NiyahSamplerCandidate* pool,
+                                  int32_t pool_capacity)
+{
+    if (!logits || n_vocab <= 0) {
+        return -1;
+    }
+
+    const NiyahSamplerConfig cfg = sampler_config_resolve(config);
+    if (cfg.strategy == NIYAH_SAMPLE_GREEDY || !(cfg.temperature > 0.0f)) {
+        return niyah_argmax(logits, n_vocab);
+    }
+
+    const int32_t required = sampler_pool_required(&cfg, n_vocab);
+    if (!probs || !pool || pool_capacity < required) {
+        return -1;
+    }
+
+    memcpy(probs, logits, (size_t)n_vocab * sizeof(float));
+    niyah_softmax_temperature(probs, n_vocab, cfg.temperature);
+
+    if (cfg.strategy == NIYAH_SAMPLE_TEMPERATURE) {
+        float total = 0.0f;
+        for (int32_t i = 0; i < n_vocab; ++i) {
+            pool[i].prob = probs[i];
+            pool[i].index = i;
+            total += probs[i];
+        }
+        return sample_from(pool, n_vocab, total);
+    }
+
+    if (cfg.strategy == NIYAH_SAMPLE_TOP_K) {
+        int32_t k = required;
+        for (int32_t slot = 0; slot < k; ++slot) {
+            int32_t best = -1;
+            float best_p = -1.0f;
+            for (int32_t i = 0; i < n_vocab; ++i) {
+                if (probs[i] < 0.0f) {
+                    continue;
+                }
+                if (probs[i] > best_p) {
+                    best_p = probs[i];
+                    best = i;
+                }
+            }
+            if (best < 0) {
+                k = slot;
+                break;
+            }
+            pool[slot].prob = best_p;
+            pool[slot].index = best;
+            probs[best] = -1.0f;
+        }
+
+        float total = 0.0f;
+        for (int32_t i = 0; i < k; ++i) {
+            total += pool[i].prob;
+        }
+        return sample_from(pool, k, total);
+    }
+
+    const float top_p = (cfg.top_p > 0.0f && cfg.top_p <= 1.0f)
+        ? cfg.top_p : 0.9f;
+
+    for (int32_t i = 0; i < n_vocab; ++i) {
+        pool[i].prob = probs[i];
+        pool[i].index = i;
+    }
+    qsort(pool, (size_t)n_vocab, sizeof(NiyahSamplerCandidate), candidate_compare);
+
+    float cumulative = 0.0f;
+    int32_t cutoff = 0;
+    while (cutoff < n_vocab) {
+        cumulative += pool[cutoff].prob;
+        ++cutoff;
+        if (cumulative >= top_p) {
+            break;
+        }
+    }
+    return sample_from(pool, cutoff, cumulative);
 }
 
 int32_t niyah_sample(const float* logits,
@@ -132,105 +241,27 @@ int32_t niyah_sample(const float* logits,
         return -1;
     }
 
-    NiyahSamplerConfig cfg;
-    if (config) {
-        cfg = *config;
-    } else {
-        cfg.strategy = NIYAH_SAMPLE_GREEDY;
-        cfg.temperature = 1.0f;
-        cfg.top_k = 0;
-        cfg.top_p = 1.0f;
-    }
-
+    const NiyahSamplerConfig cfg = sampler_config_resolve(config);
     if (cfg.strategy == NIYAH_SAMPLE_GREEDY || !(cfg.temperature > 0.0f)) {
         return niyah_argmax(logits, n_vocab);
     }
 
+    const int32_t required = sampler_pool_required(&cfg, n_vocab);
     float* probs = (float*)malloc((size_t)n_vocab * sizeof(float));
-    if (!probs) {
+    NiyahSamplerCandidate* pool = required > 0
+        ? (NiyahSamplerCandidate*)malloc((size_t)required * sizeof(NiyahSamplerCandidate))
+        : NULL;
+
+    if (!probs || (required > 0 && !pool)) {
+        free(probs);
+        free(pool);
         return niyah_argmax(logits, n_vocab);
     }
-    memcpy(probs, logits, (size_t)n_vocab * sizeof(float));
-    niyah_softmax_temperature(probs, n_vocab, cfg.temperature);
 
-    int32_t chosen = -1;
-
-    if (cfg.strategy == NIYAH_SAMPLE_TEMPERATURE) {
-        Candidate* pool = (Candidate*)malloc((size_t)n_vocab * sizeof(Candidate));
-        if (pool) {
-            float total = 0.0f;
-            for (int32_t i = 0; i < n_vocab; ++i) {
-                pool[i].prob = probs[i];
-                pool[i].index = i;
-                total += probs[i];
-            }
-            chosen = sample_from(pool, n_vocab, total);
-            free(pool);
-        }
-    } else if (cfg.strategy == NIYAH_SAMPLE_TOP_K) {
-        int32_t k = cfg.top_k > 0 ? cfg.top_k : 40;
-        if (k > n_vocab) {
-            k = n_vocab;
-        }
-
-        Candidate* pool = (Candidate*)malloc((size_t)k * sizeof(Candidate));
-        if (pool) {
-            /* Partial selection: k passes, no full O(V log V) sort. */
-            for (int32_t slot = 0; slot < k; ++slot) {
-                int32_t best = -1;
-                float best_p = -1.0f;
-                for (int32_t i = 0; i < n_vocab; ++i) {
-                    if (probs[i] < 0.0f) {
-                        continue; /* already taken */
-                    }
-                    if (probs[i] > best_p) {
-                        best_p = probs[i];
-                        best = i;
-                    }
-                }
-                if (best < 0) {
-                    k = slot;
-                    break;
-                }
-                pool[slot].prob = best_p;
-                pool[slot].index = best;
-                probs[best] = -1.0f; /* mark consumed */
-            }
-
-            float total = 0.0f;
-            for (int32_t i = 0; i < k; ++i) {
-                total += pool[i].prob;
-            }
-            chosen = sample_from(pool, k, total);
-            free(pool);
-        }
-    } else { /* NIYAH_SAMPLE_TOP_P */
-        const float top_p = (cfg.top_p > 0.0f && cfg.top_p <= 1.0f)
-            ? cfg.top_p : 0.9f;
-
-        Candidate* pool = (Candidate*)malloc((size_t)n_vocab * sizeof(Candidate));
-        if (pool) {
-            for (int32_t i = 0; i < n_vocab; ++i) {
-                pool[i].prob = probs[i];
-                pool[i].index = i;
-            }
-            qsort(pool, (size_t)n_vocab, sizeof(Candidate), candidate_compare);
-
-            float cumulative = 0.0f;
-            int32_t cutoff = 0;
-            while (cutoff < n_vocab) {
-                cumulative += pool[cutoff].prob;
-                ++cutoff;
-                if (cumulative >= top_p) {
-                    break;
-                }
-            }
-            chosen = sample_from(pool, cutoff, cumulative);
-            free(pool);
-        }
-    }
-
+    int32_t chosen = niyah_sample_with_scratch(logits, n_vocab, &cfg,
+                                               probs, pool, required);
     free(probs);
+    free(pool);
 
     if (chosen < 0) {
         chosen = niyah_argmax(logits, n_vocab);

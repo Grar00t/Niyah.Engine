@@ -1,4 +1,4 @@
-#include "niyah.h"
+#include "niyah_runtime.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -22,6 +22,71 @@ typedef struct {
     bool           owns_memory;
 } NiyahArena;
 
+NiyahStatus niyah_runtime_init_inplace(NiyahRuntime* runtime,
+                                       const NiyahRuntimeConfig* config)
+{
+    if (!runtime || runtime->context) {
+        return NIYAH_ERR_INVALID_ARG;
+    }
+
+    NiyahRuntimeConfig resolved;
+    if (config) {
+        resolved = *config;
+    } else {
+        memset(&resolved, 0, sizeof(resolved));
+    }
+
+    if (resolved.memory_size == 0) {
+        resolved.memory_size = NIYAH_ARENA_DEFAULT;
+    }
+
+    if (resolved.use_gpu) {
+        resolved.use_gpu = false;
+    }
+
+    NiyahArena* arena = (NiyahArena*)calloc(1, sizeof(NiyahArena));
+    if (!arena) {
+        return NIYAH_ERR_OUT_OF_MEMORY;
+    }
+
+    if (resolved.memory_pool) {
+        arena->base = (unsigned char*)resolved.memory_pool;
+        arena->owns_memory = false;
+    } else {
+        arena->base = (unsigned char*)malloc(resolved.memory_size);
+        if (!arena->base) {
+            free(arena);
+            return NIYAH_ERR_OUT_OF_MEMORY;
+        }
+        arena->owns_memory = true;
+        resolved.memory_pool = arena->base;
+    }
+
+    arena->capacity = resolved.memory_size;
+    arena->used = 0;
+
+    runtime->config = resolved;
+    runtime->context = arena;
+    return NIYAH_OK;
+}
+
+void niyah_runtime_deinit_inplace(NiyahRuntime* runtime)
+{
+    if (!runtime) {
+        return;
+    }
+
+    NiyahArena* arena = (NiyahArena*)runtime->context;
+    if (arena) {
+        if (arena->owns_memory) {
+            free(arena->base);
+        }
+        free(arena);
+    }
+
+    memset(runtime, 0, sizeof(*runtime));
+}
+
 NiyahRuntime* niyah_runtime_create(const NiyahRuntimeConfig* config)
 {
     NiyahRuntime* runtime = (NiyahRuntime*)calloc(1, sizeof(NiyahRuntime));
@@ -29,47 +94,10 @@ NiyahRuntime* niyah_runtime_create(const NiyahRuntimeConfig* config)
         return NULL;
     }
 
-    if (config) {
-        runtime->config = *config;
-    } else {
-        runtime->config.memory_pool = NULL;
-        runtime->config.memory_size = NIYAH_ARENA_DEFAULT;
-        runtime->config.device_id = 0;
-        runtime->config.use_gpu = false;
-    }
-
-    if (runtime->config.memory_size == 0) {
-        runtime->config.memory_size = NIYAH_ARENA_DEFAULT;
-    }
-
-    /* GPU execution is not implemented; say so instead of pretending. */
-    if (runtime->config.use_gpu) {
-        runtime->config.use_gpu = false;
-    }
-
-    NiyahArena* arena = (NiyahArena*)calloc(1, sizeof(NiyahArena));
-    if (!arena) {
+    if (niyah_runtime_init_inplace(runtime, config) != NIYAH_OK) {
         free(runtime);
         return NULL;
     }
-
-    if (runtime->config.memory_pool) {
-        arena->base = (unsigned char*)runtime->config.memory_pool;
-        arena->owns_memory = false;
-    } else {
-        arena->base = (unsigned char*)malloc(runtime->config.memory_size);
-        if (!arena->base) {
-            free(arena);
-            free(runtime);
-            return NULL;
-        }
-        arena->owns_memory = true;
-        runtime->config.memory_pool = arena->base;
-    }
-
-    arena->capacity = runtime->config.memory_size;
-    arena->used = 0;
-    runtime->context = arena;
 
     return runtime;
 }
@@ -79,13 +107,7 @@ void niyah_runtime_destroy(NiyahRuntime* runtime)
     if (!runtime) {
         return;
     }
-    NiyahArena* arena = (NiyahArena*)runtime->context;
-    if (arena) {
-        if (arena->owns_memory) {
-            free(arena->base);
-        }
-        free(arena);
-    }
+    niyah_runtime_deinit_inplace(runtime);
     free(runtime);
 }
 
@@ -109,7 +131,7 @@ void* niyah_runtime_alloc(NiyahRuntime* runtime, size_t bytes)
     }
     const size_t offset = arena->used + padding;
     if (bytes > arena->capacity - offset) {
-        return NULL; /* pool exhausted */
+        return NULL;
     }
 
     void* ptr = arena->base + offset;
@@ -135,6 +157,21 @@ void niyah_runtime_reset(NiyahRuntime* runtime)
         return;
     }
     ((NiyahArena*)runtime->context)->used = 0;
+}
+
+NiyahStatus niyah_runtime_rewind(NiyahRuntime* runtime, size_t used)
+{
+    if (!runtime || !runtime->context) {
+        return NIYAH_ERR_INVALID_ARG;
+    }
+
+    NiyahArena* arena = (NiyahArena*)runtime->context;
+    if (used > arena->used) {
+        return NIYAH_ERR_INVALID_ARG;
+    }
+
+    arena->used = used;
+    return NIYAH_OK;
 }
 
 size_t niyah_runtime_used(const NiyahRuntime* runtime)
