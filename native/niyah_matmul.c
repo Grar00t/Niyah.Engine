@@ -2,6 +2,10 @@
 
 #include <string.h>
 
+#if defined(__AVX2__) && defined(__FMA__)
+#include <immintrin.h>
+#endif
+
 /*
  * Was: `// MatMul stubs / TODO: Implement when types are available`.
  *
@@ -97,6 +101,37 @@ void niyah_matvec(float* out,
         return;
     }
 
+#if defined(__AVX2__) && defined(__FMA__)
+    for (int32_t i = 0; i < n_out; ++i) {
+        const float* row = w + (size_t)i * (size_t)n_in;
+        __m256 vacc = _mm256_setzero_ps();
+        int32_t p = 0;
+
+        for (; p + 7 < n_in; p += 8) {
+            const __m256 vw = _mm256_loadu_ps(row + p);
+            const __m256 vx = _mm256_loadu_ps(x + p);
+            vacc = _mm256_fmadd_ps(vw, vx, vacc);
+        }
+
+        float lanes[8];
+        _mm256_storeu_ps(lanes, vacc);
+        float s0 = lanes[0] + lanes[4];
+        float s1 = lanes[1] + lanes[5];
+        float s2 = lanes[2] + lanes[6];
+        float s3 = lanes[3] + lanes[7];
+
+        for (; p + 3 < n_in; p += 4) {
+            s0 += row[p]     * x[p];
+            s1 += row[p + 1] * x[p + 1];
+            s2 += row[p + 2] * x[p + 2];
+            s3 += row[p + 3] * x[p + 3];
+        }
+        for (; p < n_in; ++p) {
+            s0 += row[p] * x[p];
+        }
+        out[i] = (s0 + s1) + (s2 + s3);
+    }
+#else
     for (int32_t i = 0; i < n_out; ++i) {
         const float* row = w + (size_t)i * (size_t)n_in;
         float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
@@ -112,6 +147,7 @@ void niyah_matvec(float* out,
         }
         out[i] = (s0 + s1) + (s2 + s3);
     }
+#endif
 }
 
 void niyah_add_inplace(float* dst, const float* src, int32_t n)
