@@ -126,14 +126,31 @@ NiyahStatus niyah_mini_vocab_load(NiyahMiniVocab *vocab, const char *vocab_path,
     f = fopen(vocab_path, "rb");
     if (!f) return NIYAH_ERR_IO;
     while (fgets(line, sizeof(line), f)) {
+        int32_t expected_id = vocab->n_vocab;
         len = strlen(line);
         while (len > 0U && (line[len - 1U] == '\n' || line[len - 1U] == '\r')) line[--len] = '\0';
-        if (len == 0U) continue;
+        /*
+         * A vocabulary file defines the id space: line N must load as id N,
+         * because those ids index embedding and LM-head rows. Skipping a
+         * blank line, or accepting a repeat that vocab_append_token reports
+         * as NIYAH_OK without appending, would shift every later id while
+         * the loader still reported success. Refuse the file instead.
+         */
+        if (len == 0U) {
+            fclose(f);
+            niyah_mini_vocab_free(vocab);
+            return NIYAH_ERR_INVALID_ARG;
+        }
         status = vocab_append_token(vocab, line, 0.0f);
         if (status != NIYAH_OK) {
             fclose(f);
             niyah_mini_vocab_free(vocab);
             return status;
+        }
+        if (vocab->n_vocab != expected_id + 1) {
+            fclose(f);
+            niyah_mini_vocab_free(vocab);
+            return NIYAH_ERR_INVALID_ARG;
         }
     }
     if (ferror(f)) {
