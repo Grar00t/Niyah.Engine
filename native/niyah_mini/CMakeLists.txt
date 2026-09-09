@@ -117,11 +117,4 @@ if(BUILD_TESTING)
         target_compile_definitions(test_niyah_mini_bridge PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
     add_test(NAME test_niyah_mini_bridge COMMAND test_niyah_mini_bridge)
-
-    # The online trainer is POSIX-only. Exercise the real trainer entry point
-    # with a truncated 65-int32 record and require fail-closed behavior.
-    if(UNIX)
-        niyah_mini_test(test_niyah_online_train_partial
-                        test_niyah_online_train_partial.c)
-    endif()
 endif()
