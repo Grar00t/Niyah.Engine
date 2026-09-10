@@ -1,5 +1,6 @@
 #include "niyah_mini_model.h"
 #include "niyah_mini_vocab.h"
+#include "../niyah_sampler_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -639,44 +640,193 @@ void niyah_mini_reset_kv_cache(NiyahMiniModel *model)
     model->kv_cache_seq_len = 0;
 }
 
-NiyahStatus niyah_mini_generate(NiyahMiniModel *model, const int32_t *prompt_ids, int32_t prompt_len, int32_t max_tokens, float temperature, int32_t *output_ids, int32_t *output_len)
+NiyahStatus niyah_mini_generate(NiyahMiniModel *model,
+                                      const int32_t *prompt_ids,
+                                      int32_t prompt_len,
+                                      int32_t max_tokens,
+                                      float temperature,
+                                      int32_t *output_ids,
+                                      int32_t *output_len)
 {
     NiyahMiniForwardState state;
-    float *logits;
+    NiyahSamplerConfig sampler;
+    NiyahSamplerCandidate *sampler_pool = NULL;
+    float *sampler_probs = NULL;
+    float *logits = NULL;
+    size_t logits_bytes;
+    size_t probs_bytes;
+    size_t pool_bytes;
+    NiyahStatus result = NIYAH_OK;
     NiyahStatus status;
-    int32_t i, next;
-    if (!model || !prompt_ids || !output_ids || !output_len || prompt_len < 0 || max_tokens < 0 || prompt_len > model->config.n_ctx || temperature <= 0.0f || !isfinite(temperature)) return NIYAH_ERR_INVALID_ARG;
+    int32_t pool_capacity = 0;
+    int32_t i;
+    int32_t next;
+
+    if (!model ||
+        !prompt_ids ||
+        !output_ids ||
+        !output_len ||
+        prompt_len < 0 ||
+        max_tokens < 0 ||
+        prompt_len > model->config.n_ctx ||
+        temperature < 0.0f ||
+        !isfinite(temperature)) {
+        return NIYAH_ERR_INVALID_ARG;
+    }
+
+    if (model->config.n_vocab <= 0) {
+        return NIYAH_ERR_SHAPE;
+    }
+
     *output_len = 0;
-    status = niyah_mini_forward_state_init(&state, &model->config, model->config.n_ctx);
-    if (status != NIYAH_OK) return status;
-    logits = (float *)malloc((size_t)model->config.n_vocab * sizeof(float));
-    if (!logits) { niyah_mini_forward_state_free(&state); return NIYAH_ERR_OUT_OF_MEMORY; }
+
+    sampler.strategy = NIYAH_SAMPLE_TEMPERATURE;
+    sampler.temperature = temperature;
+    sampler.top_k = 0;
+    sampler.top_p = 1.0f;
+
+    if (!size_mul_ok(
+            (size_t)model->config.n_vocab,
+            sizeof(float),
+            &logits_bytes)) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
+    logits = (float *)malloc(logits_bytes);
+    if (!logits) {
+        return NIYAH_ERR_OUT_OF_MEMORY;
+    }
+
+    /*
+     * Temperature zero is the greedy limit and requires no sampler
+     * scratch. Positive temperatures allocate scratch once for the
+     * entire generation call, never once per generated token.
+     */
+    if (temperature > 0.0f) {
+        if (!size_mul_ok(
+                (size_t)model->config.n_vocab,
+                sizeof(float),
+                &probs_bytes) ||
+            !size_mul_ok(
+                (size_t)model->config.n_vocab,
+                sizeof(NiyahSamplerCandidate),
+                &pool_bytes)) {
+            result = NIYAH_ERR_OVERFLOW;
+            goto cleanup;
+        }
+
+        sampler_probs = (float *)malloc(probs_bytes);
+        sampler_pool =
+            (NiyahSamplerCandidate *)malloc(pool_bytes);
+
+        if (!sampler_probs || !sampler_pool) {
+            result = NIYAH_ERR_OUT_OF_MEMORY;
+            goto cleanup;
+        }
+
+        pool_capacity = model->config.n_vocab;
+    }
+
+    status = niyah_mini_forward_state_init(
+        &state,
+        &model->config,
+        model->config.n_ctx
+    );
+
+    if (status != NIYAH_OK) {
+        result = status;
+        goto cleanup;
+    }
+
     niyah_mini_reset_kv_cache(model);
+
     if (prompt_len > 0) {
         for (i = 0; i < prompt_len; ++i) {
-            status = niyah_mini_forward_token(model, &state, prompt_ids[i], i, logits);
-            if (status != NIYAH_OK) { free(logits); niyah_mini_forward_state_free(&state); return status; }
+            status = niyah_mini_forward_token(
+                model,
+                &state,
+                prompt_ids[i],
+                i,
+                logits
+            );
+
+            if (status != NIYAH_OK) {
+                result = status;
+                goto cleanup_state;
+            }
         }
-        next = 0;
-        for (i = 1; i < model->config.n_vocab; ++i) if (logits[i] > logits[next]) next = i;
+
+        next = niyah_sample_with_scratch(
+            logits,
+            model->config.n_vocab,
+            &sampler,
+            sampler_probs,
+            sampler_pool,
+            pool_capacity
+        );
+
+        if (next < 0 || next >= model->config.n_vocab) {
+            result = NIYAH_ERR_SHAPE;
+            goto cleanup_state;
+        }
     } else {
         next = NIYAH_MINI_BOS_TOKEN_ID;
     }
+
     for (i = 0; i < max_tokens; ++i) {
-        int32_t position = prompt_len + i;
-        int32_t best;
-        int32_t j;
-        if (position >= model->config.n_ctx) break;
+        const int32_t position = prompt_len + i;
+
+        if (position >= model->config.n_ctx) {
+            break;
+        }
+
+        if (next < 0 || next >= model->config.n_vocab) {
+            result = NIYAH_ERR_SHAPE;
+            goto cleanup_state;
+        }
+
         output_ids[*output_len] = next;
         ++(*output_len);
-        if (next == NIYAH_MINI_EOS_TOKEN_ID) break;
-        status = niyah_mini_forward_token(model, &state, next, position, logits);
-        if (status != NIYAH_OK) break;
-        best = 0;
-        for (j = 1; j < model->config.n_vocab; ++j) if (logits[j] > logits[best]) best = j;
-        next = best;
+
+        if (next == NIYAH_MINI_EOS_TOKEN_ID) {
+            break;
+        }
+
+        status = niyah_mini_forward_token(
+            model,
+            &state,
+            next,
+            position,
+            logits
+        );
+
+        if (status != NIYAH_OK) {
+            result = status;
+            goto cleanup_state;
+        }
+
+        next = niyah_sample_with_scratch(
+            logits,
+            model->config.n_vocab,
+            &sampler,
+            sampler_probs,
+            sampler_pool,
+            pool_capacity
+        );
+
+        if (next < 0 || next >= model->config.n_vocab) {
+            result = NIYAH_ERR_SHAPE;
+            goto cleanup_state;
+        }
     }
-    free(logits);
+
+cleanup_state:
     niyah_mini_forward_state_free(&state);
-    return NIYAH_OK;
+
+cleanup:
+    free(sampler_pool);
+    free(sampler_probs);
+    free(logits);
+
+    return result;
 }

@@ -103,6 +103,7 @@ if(BUILD_TESTING)
     niyah_mini_test(test_niyah_mini_config test_niyah_mini_config.c)
     niyah_mini_test(test_niyah_mini_vocab  test_niyah_mini_vocab.c)
     niyah_mini_test(test_niyah_mini_model  test_niyah_mini_model.c)
+    niyah_mini_test(test_niyah_mini_sampling test_niyah_mini_sampling.c)
 
     # Constructed-weight oracles: asserts exact closed-form outputs of the
     # forward pass rather than plausibility of random-weight output.
