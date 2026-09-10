@@ -1,9 +1,11 @@
 # Evidence — niyah-mini-k11-v5-clean held-out BPB
 
 ```
-STATUS          = HISTORICAL_MEASUREMENT
+STATUS          = FRESH_REPRODUCED
 RECORDED_UTC    = 2026-09-10T02:25:00Z
-MEASURED_UTC    = 2026-09-09T12:38:03Z (evaluation) / 2026-09-10T02:21:00Z (gates 3-6 below)
+MEASURED_UTC    = 2026-09-09T12:38:03Z (original evaluation)
+REPRODUCED_UTC  = 2026-09-10T02:40:00Z (rebuilt from source, re-executed)
+PINNED_REF      = cb5691d04a878db26953f84624d5e357a97b52f7
 ARTIFACT_ACCESS = LOCAL_ARTIFACT_REQUIRED — weights and data streams are not committed here
 ```
 
@@ -80,10 +82,55 @@ VAL_BPB            = 3.124155
 `BPB = mean_nll_nats / ln(2)`. Check: `2.165499 / 0.693147 = 3.124155`.
 Check: `1802 × 64 = 115,328`.
 
-Two independent code paths in the same evaluator agreed:
-`LEGACY_AVG_LOSS = CANONICAL_NLL = 2.165499`, `DERIVED_BPB = CANONICAL_BPB = 3.124155`,
-`SEMANTIC_EQUIVALENCE=PASS`. Agreement between two paths is not proof of
-correctness — see §4.
+### 2.1 Fresh reproduction — 2026-09-10
+
+The evaluator was rebuilt from committed source and re-executed. The
+number is reproducible, not quoted.
+
+```
+HEAD      = cb5691d04a878db26953f84624d5e357a97b52f7
+PRODUCER  = tools/niyah_eval.c  (blob e91b1bb4fc8395d33e24a4b884a7ba256b5e1502)
+COMMIT    = dab2cf9  "tools: add K8-compatible niyah mini evaluator"
+
+make -C native/niyah_mini lib          -> LIB_RC=0    libniyah_mini.a  84546 bytes
+cc -std=c11 -O2 -Wall -Wextra \
+   -Inative/niyah_mini -o /tmp/niyah_eval \
+   tools/niyah_eval.c native/niyah_mini/libniyah_mini.a -lm
+                                       -> BUILD_RC=0  /tmp/niyah_eval  65272 bytes
+
+/tmp/niyah_eval CONFIG WEIGHTS EVAL_BIN
+EVAL_COMPLETE
+windows=1802
+avg_loss=2.165499
+perplexity=8.718951
+min_loss=0.613356
+max_loss=4.041076
+EVAL_RC=0
+
+FRESH_MEAN_NLL_NATS  = 2.165499
+FRESH_BITS_PER_BYTE  = 3.124155
+GATE_BIGRAM_ADD1_BPB = 3.768400
+VERDICT              = PASS
+```
+
+The rebuilt binary agrees with the 2026-09-09 record to all six printed
+decimals, on the same 1802 windows. `HISTORICAL -> FRESH`.
+
+Two facts recorded here for the first time, both new to this run:
+
+- Per-window dispersion. `min_loss=0.613356` nats, `max_loss=4.041076` nats —
+  a 6.6× spread across windows. Derived: about `0.885` and `5.830` bits/byte.
+  The reported figure is a mean over a wide distribution, not a uniform result.
+- The evaluator's own vocabulary. `tools/niyah_eval.c` prints only
+  `avg_loss`, `perplexity`, `min_loss`, `max_loss`. The labels
+  `MEAN_NLL_NATS`, `BITS_PER_BYTE` and `SEMANTIC_EQUIVALENCE` in the
+  2026-09-09 log were produced by a wrapper above this binary, not by the
+  binary. The values agree; the label provenance is now stated correctly.
+
+One assumption remains `UNMEASURED`: `BPB = nats / ln(2)` holds only if every
+token in the stream is one byte. The 269-symbol vocabulary is 13 special ids
+plus 256 byte ids. Whether any special id occurs inside
+`val-windows-clean.bin` has not been counted.
 
 ---
 
@@ -113,18 +160,24 @@ A model that does not beat the bigram has learned nothing; this one does.
 
 ## 4. The defect this measurement exposed
 
+Re-run 2026-09-10, same gate, same inputs:
+
 ```
 check_window_disjoint.py train-windows-clean.bin val-windows-clean.bin
 
+WINDOW_TOKENS=65
+RECORD_BYTES=260
 TRAIN_BYTES=6132100 TRAIN_WINDOWS=23585 TRAIN_UNIQUE=23585
 EVAL_BYTES=468520   EVAL_WINDOWS=1802   EVAL_UNIQUE=1802
 OVERLAP_WINDOWS=2
-LEAKAGE_PCT=0.111
+LEAKAGE_PCT=0.110988
 HELDOUT_DISJOINT=FAIL
+GATE_RC=1
 ```
 
 Two of the 1802 evaluation windows are byte-identical to windows in the
-training stream. The split is therefore not strictly held out.
+training stream. The split is therefore not strictly held out. The gate
+fails loudly, as designed.
 
 **Bounded impact.** Those 2 windows carry 128 of the 115,328 predictions.
 Assigning them the most favourable possible value (zero loss, i.e. assuming
@@ -139,6 +192,8 @@ margin vs 3.768400 = 0.640774
 The leak cannot flip the baseline comparison. It is still a real pipeline
 defect and the split must be rebuilt with the gate enforced.
 Status: `TICKET3 = PASS_WITH_DISCLOSED_LEAK (0.111%)`.
+
+Tracked as issue #34.
 
 ---
 
@@ -173,7 +228,8 @@ ind_heldout_sha256 = 22e931252b41acfc114197ada7226451e2dd0216cd19ba753a57ca93470
 ```
 
 The file named `gptoss-heldout-v1.bin` (150,020 bytes) is an **independent
-evaluation stream label**, not a weight lineage. Every snapshot carrying the
+evaluation stream label**, not a weight lineage. `150,020 / 260 = 577` exactly:
+same 65-token record format, 577 windows. Every snapshot carrying the
 `gptoss` prefix is `4,074,496` bytes — the niyah-mini architecture above —
 and hashes to values distinct from each other and from k11:
 
@@ -191,11 +247,12 @@ result does not use that stream.
 
 ## 7. What this evidence does NOT prove
 
-- `FRESH_RUN` — every number above is `HISTORICAL`. The evaluator has not been
-  re-executed since this file was written.
+- Reproduction on `main`. The number was reproduced at `cb5691d0`, not here.
+  See §9.
 - Sanitizer cleanliness. `NIYAH_SANITIZE` defaults to `OFF` and no run in this
   record enabled it. `ASAN/UBSAN = UNMEASURED`.
 - CI. No workflow run is tied to these numbers. `CI_FOR_THESE_NUMBERS = NOT_RUN`.
+- Disjointness. The split leaks; §4.
 - Generalisation. 1802 windows over a 269-symbol byte vocabulary at `n_ctx=64`
   measures this split and nothing else.
 - Any claim about the training corpus licence.
@@ -204,12 +261,46 @@ result does not use that stream.
 
 ## 8. Reproduction
 
+At `cb5691d0`, with the local artifacts present:
+
 ```sh
+make -C native/niyah_mini lib
+
+cc -std=c11 -O2 -Wall -Wextra -Inative/niyah_mini \
+   -o /tmp/niyah_eval tools/niyah_eval.c \
+   native/niyah_mini/libniyah_mini.a -lm
+
+# argv contract is CONFIG WEIGHTS EVAL_BIN — three arguments, not two
+/tmp/niyah_eval <model>/config.json <model>/weights.f32.bin <val-windows-clean.bin>
+# expect: avg_loss=2.165499 ; BPB = avg_loss / ln(2) = 3.124155
+
 python3 tools/check_window_disjoint.py \
   <train-windows-clean.bin> <val-windows-clean.bin>
 # exit 0 = disjoint, 1 = leak measured, 2 = malformed input
 
 sha256sum -c SHA256SUMS.txt   # inside the release directory; RC=0 observed
 ```
+
+---
+
+## 9. The producer is not on the default branch
+
+Measured 2026-09-10 against `main` at `be73ca26`:
+
+| path | `main` | `cb5691d0` |
+|---|---|---|
+| `tools/niyah_eval.c` | absent | 3,410 B |
+| `native/niyah_mini/niyah_mini_model.c` | 28,596 B | 32,946 B |
+| `native/niyah_mini/niyah_mini_model.h` | 3,535 B | 4,329 B |
+| `native/niyah_mini/niyah_mini_train.c` | 26,484 B | 26,484 B |
+| `native/niyah_mini/test_niyah_mini_heapfree.c` | absent | present |
+
+The evaluator is absent from `main`, and the model implementation on `main`
+is 4,350 bytes smaller than the one that produced `3.124155`. Copying the
+evaluator here would not make the number reproducible on `main`; the two
+model sources have not been diffed and have not been shown to be equivalent.
+
+`REPRODUCIBLE_AT = cb5691d0`
+`REPRODUCIBLE_ON_MAIN = UNVERIFIED`
 
 Author: Suliman Nazal Alshammari · سليمان نزال الشمري
