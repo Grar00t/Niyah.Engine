@@ -5,6 +5,8 @@
 #include "niyah_index.h"
 
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static NiyahDocument make_document(uint64_t id, const char *text) {
@@ -139,6 +141,67 @@ static void test_empty_query(void) {
     niyah_index_free(&index);
 }
 
+/* DEFECT: niyah_index_add_document stores token_count = min(true_count,
+ * NIYAH_DOCUMENT_TOKEN_LIMIT) as the BM25 document length.  Documents with
+ * true length > NIYAH_DOCUMENT_TOKEN_LIMIT therefore receive the same stored
+ * length (1024) and thus the same BM25 score as a document with exactly 1024
+ * tokens, regardless of how much longer they actually are.  A correct BM25
+ * implementation must use the true document length for length normalisation
+ * even when term indexing is truncated.
+ *
+ * This test exposes the defect: a 1025-token document must score strictly
+ * lower than a 1024-token document for a term that appears once in each,
+ * because BM25 length normalisation penalises longer documents. */
+static void test_bm25_length_normalisation_uses_true_token_count(void) {
+    /* Build two documents that differ by exactly one token. */
+    /* doc_at_limit: exactly NIYAH_DOCUMENT_TOKEN_LIMIT (1024) tokens      */
+    /* doc_over_limit: NIYAH_DOCUMENT_TOKEN_LIMIT + 1 (1025) tokens        */
+    /* Both begin with the query term "target" followed by filler words.   */
+    /* With the defect, stored term_count == 1024 for both; scores equal.  */
+    /* Without the defect, stored term_count reflects true length; scores  */
+    /* differ (longer doc scores lower due to length normalisation).        */
+
+    const size_t limit = 1024; /* NIYAH_DOCUMENT_TOKEN_LIMIT */
+    const size_t word_len = 7; /* "w0000 " */
+    const size_t at_cap = (limit - 1) * word_len + 8; /* target + fillers */
+    const size_t over_cap = at_cap + word_len;
+
+    char *at_text   = (char *)calloc(at_cap + 1, 1);
+    char *over_text = (char *)calloc(over_cap + 1, 1);
+    assert(at_text && over_text);
+
+    strcpy(at_text, "target");
+    strcpy(over_text, "target");
+    for (size_t i = 0; i < limit - 1; ++i) {
+        char buf[10];
+        snprintf(buf, sizeof(buf), " w%04zu", i);
+        strcat(at_text, buf);
+        strcat(over_text, buf);
+    }
+    /* over_text gets one extra token, pushing it past the limit */
+    strcat(over_text, " w9999");
+
+    NiyahInvertedIndex index;
+    niyah_index_init(&index, 1.2, 0.75);
+    NiyahDocument d1 = make_document(1, at_text);
+    NiyahDocument d2 = make_document(2, over_text);
+    assert(niyah_index_add_document(&index, &d1));
+    assert(niyah_index_add_document(&index, &d2));
+
+    NiyahSearchHit hits[2];
+    const size_t found = niyah_index_search(&index, "target", hits, 2);
+    assert(found == 2);
+
+    /* Both documents contain "target" exactly once.  The 1025-token
+     * document is longer so BM25 must give it a strictly lower score. */
+    assert(hits[0].score != hits[1].score); /* FAILS with the defect */
+    assert(hits[0].document_id == 1);       /* shorter doc ranks first */
+
+    niyah_index_free(&index);
+    free(at_text);
+    free(over_text);
+}
+
 int main(void) {
     test_empty_index();
     test_add_and_find_document();
@@ -148,5 +211,6 @@ int main(void) {
     test_duplicate_document_rejected();
     test_search_is_deterministic();
     test_empty_query();
+    test_bm25_length_normalisation_uses_true_token_count();
     return 0;
 }
