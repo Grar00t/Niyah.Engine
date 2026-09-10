@@ -26,6 +26,49 @@ static bool token_byte(unsigned char c) {
     return isalnum(c) != 0 || c >= 0x80u || c == '_' || c == '-';
 }
 
+/*
+ * Count the complete document length for BM25 normalisation without
+ * storing every token. The inverted index may intentionally cap stored
+ * tokens, but document length must not inherit that cap.
+ *
+ * NiyahDocument.term_count is uint32_t, so fail closed rather than
+ * silently truncating a document whose token count cannot be represented.
+ */
+static bool count_document_tokens(const char *text,
+                                  uint32_t *count_out) {
+    uint32_t count = 0u;
+    const unsigned char *cursor;
+
+    if (!count_out) return false;
+
+    *count_out = 0u;
+
+    if (!text) return true;
+
+    cursor = (const unsigned char *)text;
+
+    while (*cursor) {
+        while (*cursor && !token_byte(*cursor)) {
+            ++cursor;
+        }
+
+        if (!*cursor) break;
+
+        while (*cursor && token_byte(*cursor)) {
+            ++cursor;
+        }
+
+        if (count == UINT32_MAX) {
+            return false;
+        }
+
+        ++count;
+    }
+
+    *count_out = count;
+    return true;
+}
+
 static size_t tokenize(const char *text,
                        char tokens[][NIYAH_TERM_MAX],
                        size_t max_tokens) {
@@ -206,6 +249,14 @@ bool niyah_index_add_document(NiyahInvertedIndex *index,
     if (!index || !document || document->document_id == 0) return false;
     if (niyah_index_document(index, document->document_id)) return false;
 
+    uint32_t true_token_count = 0u;
+
+    if (!count_document_tokens(
+            document->text,
+            &true_token_count)) {
+        return false;
+    }
+
     char tokens[NIYAH_DOCUMENT_TOKEN_LIMIT][NIYAH_TERM_MAX];
     const size_t token_count = tokenize(document->text, tokens,
                                         NIYAH_DOCUMENT_TOKEN_LIMIT);
@@ -290,7 +341,7 @@ bool niyah_index_add_document(NiyahInvertedIndex *index,
     NiyahDocument *destination = &index->documents[index->document_count];
     destination->document_id = document->document_id;
     destination->text = text_copy;
-    destination->term_count = (uint32_t)token_count;
+    destination->term_count = true_token_count;
 
     for (size_t i = 0; i < token_count; ++i) {
         if (token_seen_before(tokens, i, tokens[i])) continue;
@@ -304,9 +355,9 @@ bool niyah_index_add_document(NiyahInvertedIndex *index,
     const size_t previous_count = index->document_count;
     ++index->document_count;
     index->average_document_length = previous_count == 0
-        ? (double)token_count
+        ? (double)true_token_count
         : (index->average_document_length * (double)previous_count +
-           (double)token_count) / (double)index->document_count;
+           (double)true_token_count) / (double)index->document_count;
 
     return true;
 }

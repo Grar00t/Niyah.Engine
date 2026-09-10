@@ -5,6 +5,7 @@
 #include "niyah_index.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 static NiyahDocument make_document(uint64_t id, const char *text) {
@@ -139,6 +140,91 @@ static void test_empty_query(void) {
     niyah_index_free(&index);
 }
 
+
+static char *make_length_test_document(size_t token_count) {
+    const char *first = "target";
+    const char *filler = " filler";
+    const size_t first_len = strlen(first);
+    const size_t filler_len = strlen(filler);
+    size_t payload_len;
+    char *text;
+    char *cursor;
+
+    assert(token_count > 0u);
+
+    payload_len =
+        first_len + (token_count - 1u) * filler_len;
+
+    text = (char *)malloc(payload_len + 1u);
+    assert(text != NULL);
+
+    cursor = text;
+
+    memcpy(cursor, first, first_len);
+    cursor += first_len;
+
+    for (size_t i = 1u; i < token_count; ++i) {
+        memcpy(cursor, filler, filler_len);
+        cursor += filler_len;
+    }
+
+    *cursor = '\0';
+    return text;
+}
+
+static void test_bm25_length_normalisation_uses_true_document_length(void) {
+    NiyahInvertedIndex index;
+    NiyahSearchHit hits[2] = {{0}};
+    char *at_limit;
+    char *over_limit;
+    NiyahDocument short_document;
+    NiyahDocument long_document;
+    size_t found;
+
+    at_limit = make_length_test_document(1024u);
+    over_limit = make_length_test_document(1025u);
+
+    niyah_index_init(&index, 1.2, 0.75);
+
+    short_document = make_document(1u, at_limit);
+    long_document = make_document(2u, over_limit);
+
+    assert(niyah_index_add_document(
+        &index,
+        &short_document
+    ));
+
+    assert(niyah_index_add_document(
+        &index,
+        &long_document
+    ));
+
+    /*
+     * Indexing may deliberately stop storing tokens at the indexing
+     * limit, but BM25 length normalisation must retain the real
+     * document lengths.
+     */
+    assert(index.documents[0].term_count == 1024u);
+    assert(index.documents[1].term_count == 1025u);
+    assert(index.average_document_length == 1024.5);
+
+    found = niyah_index_search(
+        &index,
+        "target",
+        hits,
+        2u
+    );
+
+    assert(found == 2u);
+    assert(hits[0].document_id == 1u);
+    assert(hits[1].document_id == 2u);
+    assert(hits[0].score > hits[1].score);
+
+    niyah_index_free(&index);
+    free(at_limit);
+    free(over_limit);
+}
+
 int main(void) {
     test_empty_index();
     test_add_and_find_document();
@@ -148,5 +234,6 @@ int main(void) {
     test_duplicate_document_rejected();
     test_search_is_deterministic();
     test_empty_query();
+    test_bm25_length_normalisation_uses_true_document_length();
     return 0;
 }
