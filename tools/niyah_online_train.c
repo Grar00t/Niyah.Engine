@@ -337,7 +337,16 @@ int main(int argc, char **argv)
         if (got != SEQ + 1) {
             fprintf(stderr,
                 "PARTIAL_BATCH=%zu\n", got);
-            break;
+
+            free(logits);
+            free(dlogits);
+            niyah_mini_cache_free(&cache);
+            niyah_mini_optim_free(&opt);
+            if (micro_batch > 1)
+                niyah_mini_grads_free(&accum_grads);
+            niyah_mini_grads_free(&grads);
+            niyah_mini_model_free(&model);
+            return 22;
         }
 
         for (int i = 0; i < SEQ + 1; ++i) {
