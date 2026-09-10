@@ -117,7 +117,6 @@ if(UNIX)
     )
 endif()
 
-
 add_executable(niyah_token_tax niyah_token_tax.c)
 target_link_libraries(niyah_token_tax PRIVATE niyah)
 target_compile_definitions(niyah_token_tax PRIVATE NIYAH_BRIDGE_EXPORTS)
@@ -195,6 +194,16 @@ foreach(test_source ${NIYAH_TESTS})
 endforeach()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(test_niyah_online_train_partial
+        niyah_mini/test_niyah_online_train_partial.c)
+    target_link_libraries(test_niyah_online_train_partial PRIVATE niyah_mini)
+    target_compile_definitions(test_niyah_online_train_partial PRIVATE
+        NIYAH_BRIDGE_EXPORTS)
+    target_compile_options(test_niyah_online_train_partial PRIVATE
+        -Wall -Wextra)
+    add_test(NAME test_niyah_online_train_partial
+             COMMAND test_niyah_online_train_partial)
+
     find_program(NIYAH_BASH_EXECUTABLE bash)
     find_program(NIYAH_SHA256SUM_EXECUTABLE sha256sum)
     if(NOT NIYAH_BASH_EXECUTABLE OR NOT NIYAH_SHA256SUM_EXECUTABLE)
