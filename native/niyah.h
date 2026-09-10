@@ -454,6 +454,7 @@ typedef struct {
     int32_t head_dim;
     int32_t max_seq;
     int32_t length;
+    bool    owns_memory;
 } NiyahKVCache;
 
 NIYAH_API NiyahStatus niyah_kv_cache_init(NiyahKVCache* cache,
@@ -529,6 +530,13 @@ NIYAH_API float*        niyah_runtime_alloc_floats(NiyahRuntime* runtime, size_t
 NIYAH_API void          niyah_runtime_reset(NiyahRuntime* runtime);
 NIYAH_API size_t        niyah_runtime_used(const NiyahRuntime* runtime);
 NIYAH_API size_t        niyah_runtime_capacity(const NiyahRuntime* runtime);
+
+NIYAH_API NiyahStatus niyah_kv_cache_init_arena(NiyahKVCache* cache,
+                                                NiyahRuntime* runtime,
+                                                int32_t n_layer,
+                                                int32_t n_kv_head,
+                                                int32_t head_dim,
+                                                int32_t max_seq);
 
 /* ==========================================================================
  * Sampler

@@ -1,4 +1,5 @@
 #include "niyah.h"
+#include "niyah_runtime.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -146,27 +147,60 @@ void niyah_attention_forward(NiyahAttentionState* state,
  * KV cache
  * ========================================================================== */
 
+static NiyahStatus niyah_kv_cache_count(int32_t n_layer,
+                                        int32_t n_kv_head,
+                                        int32_t head_dim,
+                                        int32_t max_seq,
+                                        size_t* out_count)
+{
+    if (!out_count || n_layer <= 0 || n_kv_head <= 0 ||
+        head_dim <= 0 || max_seq <= 0) {
+        return NIYAH_ERR_INVALID_ARG;
+    }
+
+    size_t count = (size_t)n_layer;
+
+    if ((size_t)n_kv_head > SIZE_MAX / count) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+    count *= (size_t)n_kv_head;
+
+    if ((size_t)max_seq > SIZE_MAX / count) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+    count *= (size_t)max_seq;
+
+    if ((size_t)head_dim > SIZE_MAX / count) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+    count *= (size_t)head_dim;
+
+    if (count > SIZE_MAX / sizeof(float)) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
+    *out_count = count;
+    return NIYAH_OK;
+}
+
 NiyahStatus niyah_kv_cache_init(NiyahKVCache* cache,
                                 int32_t n_layer,
                                 int32_t n_kv_head,
                                 int32_t head_dim,
                                 int32_t max_seq)
 {
-    if (!cache || n_layer <= 0 || n_kv_head <= 0 ||
-        head_dim <= 0 || max_seq <= 0) {
+    if (!cache) {
         return NIYAH_ERR_INVALID_ARG;
     }
 
-    memset(cache, 0, sizeof(*cache));
-
-    const size_t count = (size_t)n_layer * (size_t)n_kv_head *
-                         (size_t)max_seq * (size_t)head_dim;
-
-    /* Guard the multiplication before handing it to calloc. */
-    if (count / (size_t)n_layer / (size_t)n_kv_head / (size_t)max_seq !=
-        (size_t)head_dim) {
-        return NIYAH_ERR_OVERFLOW;
+    size_t count = 0u;
+    const NiyahStatus count_status =
+        niyah_kv_cache_count(n_layer, n_kv_head, head_dim, max_seq, &count);
+    if (count_status != NIYAH_OK) {
+        return count_status;
     }
+
+    memset(cache, 0, sizeof(*cache));
 
     cache->k = (float*)calloc(count, sizeof(float));
     cache->v = (float*)calloc(count, sizeof(float));
@@ -182,6 +216,55 @@ NiyahStatus niyah_kv_cache_init(NiyahKVCache* cache,
     cache->head_dim = head_dim;
     cache->max_seq = max_seq;
     cache->length = 0;
+    cache->owns_memory = true;
+
+    return NIYAH_OK;
+}
+
+NiyahStatus niyah_kv_cache_init_arena(NiyahKVCache* cache,
+                                      NiyahRuntime* runtime,
+                                      int32_t n_layer,
+                                      int32_t n_kv_head,
+                                      int32_t head_dim,
+                                      int32_t max_seq)
+{
+    if (!cache || !runtime) {
+        return NIYAH_ERR_INVALID_ARG;
+    }
+
+    size_t count = 0u;
+    const NiyahStatus count_status =
+        niyah_kv_cache_count(n_layer, n_kv_head, head_dim, max_seq, &count);
+    if (count_status != NIYAH_OK) {
+        return count_status;
+    }
+
+    const size_t mark = niyah_runtime_used(runtime);
+
+    memset(cache, 0, sizeof(*cache));
+
+    cache->k = niyah_runtime_alloc_floats(runtime, count);
+    cache->v = niyah_runtime_alloc_floats(runtime, count);
+
+    if (!cache->k || !cache->v) {
+        const NiyahStatus rewind_status =
+            niyah_runtime_rewind(runtime, mark);
+
+        memset(cache, 0, sizeof(*cache));
+
+        if (rewind_status != NIYAH_OK) {
+            return rewind_status;
+        }
+
+        return NIYAH_ERR_OUT_OF_MEMORY;
+    }
+
+    cache->n_layer = n_layer;
+    cache->n_kv_head = n_kv_head;
+    cache->head_dim = head_dim;
+    cache->max_seq = max_seq;
+    cache->length = 0;
+    cache->owns_memory = false;
 
     return NIYAH_OK;
 }
@@ -198,8 +281,12 @@ void niyah_kv_cache_free(NiyahKVCache* cache)
     if (!cache) {
         return;
     }
-    free(cache->k);
-    free(cache->v);
+
+    if (cache->owns_memory) {
+        free(cache->k);
+        free(cache->v);
+    }
+
     memset(cache, 0, sizeof(*cache));
 }
 

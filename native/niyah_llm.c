@@ -346,13 +346,12 @@ NiyahLLMOutput niyah_llm_generate(NiyahLLM* llm,
     telemetry_started = true;
 
     /*
-     * SINGLE-POOL FAIL: niyah_kv_cache_init still allocates cache.k and
-     * cache.v with calloc. The decode scratch, hidden state, token history,
-     * logits, sampler workspace, and mapped layer views are arena-backed;
-     * these two KV-cache blocks are the remaining explicit heap exception.
+     * KV cache is generation-scoped arena memory. The standalone calloc
+     * initializer remains available for tests without a NiyahRuntime.
      */
-    status = niyah_kv_cache_init(&cache, c.n_layer, c.n_kv_head,
-                                 head_dim, c.n_ctx);
+    status = niyah_kv_cache_init_arena(&cache, &llm->runtime,
+                                       c.n_layer, c.n_kv_head,
+                                       head_dim, c.n_ctx);
     if (status != NIYAH_OK) {
         goto cleanup;
     }
@@ -411,6 +410,10 @@ NiyahLLMOutput niyah_llm_generate(NiyahLLM* llm,
         }
     }
 
+    /*
+     * Returned text/logits are caller-owned heap materialization performed
+     * only after the token loop; no output allocation occurs inside decode.
+     */
     if (status == NIYAH_OK && generated > 0) {
         char* text = niyah_detokenize(&llm->tokenizer,
                                       tokens + n_prompt, generated);
