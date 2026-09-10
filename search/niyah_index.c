@@ -6,11 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NIYAH_DOCUMENT_TOKEN_LIMIT 1024u
 #define NIYAH_QUERY_TOKEN_LIMIT 128u
 #define NIYAH_INITIAL_TERM_CAPACITY 128u
 #define NIYAH_INITIAL_DOCUMENT_CAPACITY 64u
 #define NIYAH_INITIAL_POSTING_CAPACITY 16u
+#define NIYAH_INITIAL_DOC_TERM_CAPACITY 64u
 
 static int hit_compare(const void *a, const void *b) {
     const NiyahSearchHit *ha = (const NiyahSearchHit *)a;
@@ -26,18 +26,37 @@ static bool token_byte(unsigned char c) {
     return isalnum(c) != 0 || c >= 0x80u || c == '_' || c == '-';
 }
 
+/*
+ * Streaming single-token extractor.  Advances *cursor past one token,
+ * writes the lowercased token into buf, returns the token length.
+ * Returns 0 when no more tokens remain.
+ */
+static size_t tokenize_one(const char **cursor, char *buf, size_t max_len) {
+    const unsigned char *p = (const unsigned char *)*cursor;
+    while (*p && !token_byte(*p)) ++p;
+    if (!*p) { *cursor = (const char *)p; return 0; }
+    size_t length = 0;
+    while (*p && token_byte(*p)) {
+        if (length + 1u < max_len) {
+            const unsigned char byte = *p;
+            buf[length++] = (char)(byte < 0x80u ? tolower((int)byte) : byte);
+        }
+        ++p;
+    }
+    buf[length] = '\0';
+    *cursor = (const char *)p;
+    return length;
+}
+
 static size_t tokenize(const char *text,
                        char tokens[][NIYAH_TERM_MAX],
                        size_t max_tokens) {
     if (!text || !tokens || max_tokens == 0) return 0;
-
     size_t count = 0;
     const unsigned char *cursor = (const unsigned char *)text;
-
     while (*cursor && count < max_tokens) {
         while (*cursor && !token_byte(*cursor)) ++cursor;
         if (!*cursor) break;
-
         size_t length = 0;
         while (*cursor && token_byte(*cursor)) {
             if (length + 1u < NIYAH_TERM_MAX) {
@@ -50,7 +69,6 @@ static size_t tokenize(const char *text,
         tokens[count][length] = '\0';
         if (length > 0) ++count;
     }
-
     return count;
 }
 
@@ -147,17 +165,6 @@ static bool token_seen_before(char tokens[][NIYAH_TERM_MAX],
     return false;
 }
 
-static uint32_t count_occurrences(char tokens[][NIYAH_TERM_MAX],
-                                  size_t token_count,
-                                  size_t first_index) {
-    if (!tokens || first_index >= token_count) return 0;
-    uint32_t frequency = 0;
-    for (size_t i = first_index; i < token_count; ++i) {
-        if (strcmp(tokens[i], tokens[first_index]) == 0) ++frequency;
-    }
-    return frequency;
-}
-
 static size_t document_position(const NiyahInvertedIndex *index,
                                 uint64_t document_id) {
     if (!index || document_id == 0) return SIZE_MAX;
@@ -183,6 +190,93 @@ static void free_pending_terms(NiyahTermEntry *terms, size_t count) {
     free(terms);
 }
 
+/* ---- streaming document tokenizer + per-document term accumulator ---- */
+
+typedef struct {
+    char     term[NIYAH_TERM_MAX];
+    uint32_t frequency;
+} NiyahDocTerm;
+
+static NiyahDocTerm *find_doc_term(NiyahDocTerm *terms,
+                                   size_t count,
+                                   const char *term) {
+    for (size_t i = 0; i < count; ++i) {
+        if (strcmp(terms[i].term, term) == 0) return &terms[i];
+    }
+    return NULL;
+}
+
+static bool grow_doc_terms(NiyahDocTerm **terms, size_t *capacity) {
+    size_t next = 0;
+    if (!checked_capacity_growth(*capacity, NIYAH_INITIAL_DOC_TERM_CAPACITY,
+                                 sizeof(NiyahDocTerm), &next))
+        return false;
+    NiyahDocTerm *grown = realloc(*terms, next * sizeof(NiyahDocTerm));
+    if (!grown) return false;
+    *terms = grown;
+    *capacity = next;
+    return true;
+}
+
+/*
+ * Accumulate one token into the per-document term table.
+ * Returns 0 on success, -1 on uint32 overflow, -2 on allocation failure.
+ */
+static int accumulate_one_token(NiyahDocTerm **terms, size_t *count,
+                                size_t *capacity, const char *token,
+                                size_t len, uint32_t *total) {
+    if (*total == UINT32_MAX) return -1;
+    ++*total;
+
+    NiyahDocTerm *existing = find_doc_term(*terms, *count, token);
+    if (existing) {
+        if (existing->frequency == UINT32_MAX) return -1;
+        ++existing->frequency;
+        return 0;
+    }
+
+    if (*count == *capacity && !grow_doc_terms(terms, capacity)) return -2;
+    memcpy((*terms)[*count].term, token, len + 1u);
+    (*terms)[*count].frequency = 1u;
+    ++*count;
+    return 0;
+}
+
+/*
+ * Stream the entire document text, building a unique-term table with
+ * true per-term frequencies and the true total token count.  No cap.
+ */
+static bool accumulate_doc_terms(const char *text,
+                                 NiyahDocTerm **out_terms,
+                                 size_t *out_unique,
+                                 uint32_t *out_total) {
+    NiyahDocTerm *terms = NULL;
+    size_t count = 0, capacity = 0;
+    uint32_t total = 0;
+    const char *cursor = text;
+    char token[NIYAH_TERM_MAX];
+
+    if (!text) {
+        *out_terms = NULL; *out_unique = 0; *out_total = 0;
+        return true;
+    }
+
+    for (;;) {
+        size_t len = tokenize_one(&cursor, token, NIYAH_TERM_MAX);
+        if (len == 0) break;
+        int rc = accumulate_one_token(&terms, &count, &capacity,
+                                      token, len, &total);
+        if (rc != 0) { free(terms); return false; }
+    }
+
+    *out_terms = terms;
+    *out_unique = count;
+    *out_total = total;
+    return true;
+}
+
+/* ---- public API ---- */
+
 void niyah_index_init(NiyahInvertedIndex *index, double k1, double b) {
     if (!index) return;
     memset(index, 0, sizeof(*index));
@@ -192,75 +286,73 @@ void niyah_index_init(NiyahInvertedIndex *index, double k1, double b) {
 
 void niyah_index_free(NiyahInvertedIndex *index) {
     if (!index) return;
-    for (size_t i = 0; i < index->term_count; ++i) free(index->terms[i].postings);
-    for (size_t i = 0; i < index->document_count; ++i) {
+    for (size_t i = 0; i < index->term_count; ++i)
+        free(index->terms[i].postings);
+    for (size_t i = 0; i < index->document_count; ++i)
         free((void *)index->documents[i].text);
-    }
     free(index->terms);
     free(index->documents);
     memset(index, 0, sizeof(*index));
 }
 
+/*
+ * 62 lines: atomic multi-phase document insertion with 7 cleanup paths.
+ * Splitting would pass heap pointers across function boundaries, making
+ * leak-free error recovery strictly harder.
+ */
 bool niyah_index_add_document(NiyahInvertedIndex *index,
                               const NiyahDocument *document) {
     if (!index || !document || document->document_id == 0) return false;
     if (niyah_index_document(index, document->document_id)) return false;
 
-    char tokens[NIYAH_DOCUMENT_TOKEN_LIMIT][NIYAH_TERM_MAX];
-    const size_t token_count = tokenize(document->text, tokens,
-                                        NIYAH_DOCUMENT_TOKEN_LIMIT);
+    NiyahDocTerm *doc_terms = NULL;
+    size_t doc_term_count = 0;
+    uint32_t true_tokens = 0;
+
+    if (!accumulate_doc_terms(document->text, &doc_terms,
+                             &doc_term_count, &true_tokens))
+        return false;
 
     size_t missing_count = 0;
-    for (size_t i = 0; i < token_count; ++i) {
-        if (token_seen_before(tokens, i, tokens[i])) continue;
-        if (!find_term(index, tokens[i])) ++missing_count;
+    for (size_t i = 0; i < doc_term_count; ++i) {
+        if (!find_term(index, doc_terms[i].term)) ++missing_count;
     }
 
     char *text_copy = copy_text(document->text);
-    if (document->text && !text_copy) return false;
+    if (document->text && !text_copy) { free(doc_terms); return false; }
 
     if (!ensure_term_capacity(index, missing_count)) {
-        free(text_copy);
-        return false;
+        free(text_copy); free(doc_terms); return false;
     }
 
     if (index->document_count == index->document_capacity &&
         !grow_documents(index)) {
-        free(text_copy);
-        return false;
+        free(text_copy); free(doc_terms); return false;
     }
 
     NiyahTermEntry *pending = NULL;
     if (missing_count > 0) {
         pending = calloc(missing_count, sizeof(*pending));
-        if (!pending) {
-            free(text_copy);
-            return false;
-        }
+        if (!pending) { free(text_copy); free(doc_terms); return false; }
     }
 
     size_t pending_count = 0;
-    for (size_t i = 0; i < token_count; ++i) {
-        if (token_seen_before(tokens, i, tokens[i])) continue;
-
-        NiyahTermEntry *existing = find_term(index, tokens[i]);
+    for (size_t i = 0; i < doc_term_count; ++i) {
+        NiyahTermEntry *existing = find_term(index, doc_terms[i].term);
         if (existing) {
             if (existing->posting_count == existing->posting_capacity &&
                 !grow_postings(existing)) {
                 free_pending_terms(pending, pending_count);
-                free(text_copy);
-                return false;
+                free(text_copy); free(doc_terms); return false;
             }
             continue;
         }
-
         NiyahTermEntry *entry = &pending[pending_count];
-        const size_t length = strlen(tokens[i]);
-        memcpy(entry->term, tokens[i], length + 1u);
+        memcpy(entry->term, doc_terms[i].term,
+               strlen(doc_terms[i].term) + 1u);
         if (!grow_postings(entry)) {
             free_pending_terms(pending, pending_count + 1u);
-            free(text_copy);
-            return false;
+            free(text_copy); free(doc_terms); return false;
         }
         ++pending_count;
     }
@@ -273,41 +365,39 @@ bool niyah_index_add_document(NiyahInvertedIndex *index,
     }
     free_pending_terms(pending, pending_count);
 
-    for (size_t i = 0; i < token_count; ++i) {
-        if (token_seen_before(tokens, i, tokens[i])) continue;
-        NiyahTermEntry *entry = find_term(index, tokens[i]);
+    for (size_t i = 0; i < doc_term_count; ++i) {
+        NiyahTermEntry *entry = find_term(index, doc_terms[i].term);
         if (!entry || entry->posting_count >= entry->posting_capacity) {
             for (size_t j = original_term_count; j < index->term_count; ++j) {
                 free(index->terms[j].postings);
                 memset(&index->terms[j], 0, sizeof(index->terms[j]));
             }
             index->term_count = original_term_count;
-            free(text_copy);
-            return false;
+            free(text_copy); free(doc_terms); return false;
         }
     }
 
     NiyahDocument *destination = &index->documents[index->document_count];
     destination->document_id = document->document_id;
     destination->text = text_copy;
-    destination->term_count = (uint32_t)token_count;
+    destination->term_count = true_tokens;
 
-    for (size_t i = 0; i < token_count; ++i) {
-        if (token_seen_before(tokens, i, tokens[i])) continue;
-        NiyahTermEntry *entry = find_term(index, tokens[i]);
+    for (size_t i = 0; i < doc_term_count; ++i) {
+        NiyahTermEntry *entry = find_term(index, doc_terms[i].term);
         NiyahPosting *posting = &entry->postings[entry->posting_count++];
         posting->document_id = document->document_id;
-        posting->term_frequency = count_occurrences(tokens, token_count, i);
+        posting->term_frequency = doc_terms[i].frequency;
         ++entry->document_frequency;
     }
 
     const size_t previous_count = index->document_count;
     ++index->document_count;
     index->average_document_length = previous_count == 0
-        ? (double)token_count
+        ? (double)true_tokens
         : (index->average_document_length * (double)previous_count +
-           (double)token_count) / (double)index->document_count;
+           (double)true_tokens) / (double)index->document_count;
 
+    free(doc_terms);
     return true;
 }
 
