@@ -4,6 +4,17 @@
 #include <stdio.h>
 #include <string.h>
 
+_Static_assert(NIYAH_MINI_SPECIAL_TOKENS == 13,
+               "trained byte vocabulary begins at token 13");
+_Static_assert(NIYAH_MINI_SPECIAL_TOKENS + 32 == 45,
+               "space byte must map to trained token 45");
+_Static_assert(NIYAH_MINI_SPECIAL_TOKENS + 65 == 78,
+               "ASCII A must map to trained token 78");
+_Static_assert(NIYAH_MINI_SPECIAL_TOKENS + 101 == 114,
+               "ASCII e must map to trained token 114");
+_Static_assert(NIYAH_MINI_SPECIAL_TOKENS + 255 == 268,
+               "269-token vocabulary must cover every byte");
+
 int main(void) {
     fprintf(stderr, "Testing NiyahMini vocabulary...\n");
 
