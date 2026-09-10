@@ -13,7 +13,7 @@
  * - Deterministic, reproducible behavior
  * - Memory-efficient C11 implementation
  * 
- * NO Llama, legacy-model, Mistral, or other model code/weights used.
+ * NO third-party model code or weights used.
  * ========================================================================== */
 
 /* Model hyperparameters for NiyahMini variants */

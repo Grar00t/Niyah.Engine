@@ -26,7 +26,7 @@ assertions in this harness have failed spuriously for want of that.
 
 What this does NOT prove: that the numbers are the ones a real checkpoint
 holds. Fixture scales are synthetic. The remaining risk is retired only by
-converting a real legacy-model-2.5 q4_k_m file and getting coherent generation out.
+converting a real supported q4_k_m checkpoint and getting coherent generation out.
 """
 import gc
 import os

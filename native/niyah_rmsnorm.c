@@ -3,7 +3,7 @@
 #include <math.h>
 
 /*
- * Was a stub. RMSNorm as used by Llama/legacy-model: rescale by the root mean square
+ * Was a stub. RMSNorm used by transformer decoders: rescale by the root mean square
  * (no mean subtraction), then apply the per-channel gain. `weight` may be NULL
  * for a plain normalisation.
  */

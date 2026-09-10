@@ -119,8 +119,8 @@ static void test_manifest_and_tamper(void)
     char manifest[1024];
     snprintf(manifest, sizeof(manifest),
              "{\n"
-             "  \"model_name\": \"legacy-model-2.5-0.5B-Instruct\",\n"
-             "  \"origin\": \"https://model-hub.co/legacy-model/legacy-model-2.5-0.5B\",\n"
+             "  \"model_name\": \"SyntheticModel-0.5B-Instruct\",\n"
+             "  \"origin\": \"https://example.invalid/models/synthetic-model-0.5b\",\n"
              "  \"license\": \"Apache-2.0\",\n"
              "  \"weights_sha256\": \"%s\"\n"
              "}\n", hex);
@@ -136,12 +136,12 @@ static void test_manifest_and_tamper(void)
     assert(niyah_identity_load_manifest(&id, path) == NIYAH_OK);
     assert(id.provenance_known == NIYAH_TRUE);
     assert(id.weights_match_manifest == NIYAH_TRUE);
-    assert(strcmp(id.model_name, "legacy-model-2.5-0.5B-Instruct") == 0);
+    assert(strcmp(id.model_name, "SyntheticModel-0.5B-Instruct") == 0);
     assert(strcmp(id.license, "Apache-2.0") == 0);
 
     /* Claims can now be answered with evidence. */
-    assert(niyah_identity_is(&id, "legacy-model") == NIYAH_TRUE);
-    assert(niyah_identity_is(&id, "legacy-model-2.5") == NIYAH_TRUE);
+    assert(niyah_identity_is(&id, "syntheticmodel") == NIYAH_TRUE);
+    assert(niyah_identity_is(&id, "SyntheticModel-0.5B") == NIYAH_TRUE);
     assert(niyah_identity_is(&id, "llama") == NIYAH_FALSE);
     assert(niyah_identity_is(&id, "foreign-model") == NIYAH_FALSE);
 
@@ -157,11 +157,11 @@ static void test_manifest_and_tamper(void)
     assert(id.weights_match_manifest == NIYAH_FALSE);
 
     /*
-     * The manifest still says legacy-model, but it is no longer evidence of anything.
+     * The manifest still names a model, but it is no longer evidence of anything.
      * Every model claim must collapse to UNKNOWN - not TRUE, and not FALSE
      * either, because FALSE would itself be an unsupported assertion.
      */
-    assert(niyah_identity_is(&id, "legacy-model") == NIYAH_UNKNOWN);
+    assert(niyah_identity_is(&id, "syntheticmodel") == NIYAH_UNKNOWN);
     assert(niyah_identity_is(&id, "llama") == NIYAH_UNKNOWN);
 
     /* A manifest with no model name proves nothing. */

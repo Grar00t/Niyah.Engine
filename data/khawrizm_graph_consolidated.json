@@ -3259,22 +3259,7 @@
         ],
         "confidence": 0.99
       },
-      {
-        "id": "n_alibaba_tongyi_legacy-model_2_5_bilingual",
-        "type": "technology",
-        "label": "legacy-model-2.5 Multilingual LLM Cross-Lingual Entity Linker",
-        "description": "High-capacity multilingual transformer model fine-tuned for structured entity resolution and RDF-Star quad generation across Arabic and English knowledge bases.",
-        "aliases": [
-          "legacy-model-2.5",
-          "legacy-arch_5_LLM"
-        ],
-        "scope": "entity_resolution",
-        "provenance": [
-          "ev_legacy-arch5_spec_01"
-        ],
-        "confidence": 0.98
-      },
-      {
+            {
         "id": "n_w3c_rdf_1_1_concepts_abstract_syntax",
         "type": "standard",
         "label": "W3C RDF 1.1 Concepts and Abstract Syntax Recommendation",
@@ -7581,13 +7566,7 @@
         "type": "supports",
         "confidence": 0.99
       },
-      {
-        "source": "n_alibaba_tongyi_legacy-model_2_5_bilingual",
-        "target": "n_labse_language_agnostic_bert_embeddings",
-        "type": "related_to",
-        "confidence": 0.98
-      },
-      {
+            {
         "source": "n_w3c_rdf_1_1_concepts_abstract_syntax",
         "target": "n_w3c_turtle_rdf_terse_syntax",
         "type": "enables",
@@ -9929,13 +9908,7 @@
         "content": "Depth-First Search and Linear Graph Algorithms (Tarjan SCC) algorithmic specification.",
         "timestamp": "2026-08-18T00:56:30+03:00"
       },
-      {
-        "id": "ev_legacy-arch5_spec_01",
-        "type": "document",
-        "content": "legacy-model-2.5 Technical Report on multilingual cross-lingual capability and entity alignment.",
-        "timestamp": "2026-08-18T00:57:27+03:00"
-      },
-      {
+            {
         "id": "ev_rdf11_spec_01",
         "type": "document",
         "content": "W3C RDF 1.1 Concepts and Abstract Syntax Recommendation specification.",

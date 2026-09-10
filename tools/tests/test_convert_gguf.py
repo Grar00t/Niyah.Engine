@@ -295,7 +295,7 @@ def test_metadata_types(tmp):
     gguf = writer.write(os.path.join(tmp, "meta.gguf"))
     metadata, infos = conv.parse_gguf(gguf)
 
-    check_eq(metadata.get("general.architecture"), "legacy-arch", "STRING value")
+    check_eq(metadata.get("general.architecture"), "llama", "STRING value")
     check_eq(metadata.get("general.name"), "niyah-tiny-fixture", "STRING value 2")
     check_eq(metadata.get("general.alignment"), 32, "UINT32 value")
     check_eq(metadata.get("test.uint8"), 200, "UINT8 value")
@@ -307,8 +307,8 @@ def test_metadata_types(tmp):
     check_eq(metadata.get("test.int64"), -(2 ** 40) - 7, "INT64 value")
     check(close(metadata.get("test.float64", 0.0), 0.1), "FLOAT64 value")
     check_eq(metadata.get("test.bool_false"), False, "BOOL false")
-    check_eq(metadata.get("legacy-arch.tie_word_embeddings"), False, "BOOL value")
-    check(close(metadata.get("legacy-arch.rope.freq_base", 0.0), 10000.0),
+    check_eq(metadata.get("llama.tie_word_embeddings"), False, "BOOL value")
+    check(close(metadata.get("llama.rope.freq_base", 0.0), 10000.0),
           "FLOAT32 value")
     check_eq(metadata.get("test.small_array"), [-1, 0, 1],
              "short ARRAY materialised")

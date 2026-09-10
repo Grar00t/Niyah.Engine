@@ -384,7 +384,7 @@ KQUANT_TYPES = {
 
 
 def build_model(cfg=None, tie=False, declare_tie=True, types=None,
-                arch="legacy-arch", extra_metadata=True, big_vocab_array=True):
+                arch="llama", extra_metadata=True, big_vocab_array=True):
     """Return (writer, expected_order).
 
     expected_order is the list of tensor names in the blob order documented

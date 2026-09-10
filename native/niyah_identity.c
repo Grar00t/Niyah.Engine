@@ -334,7 +334,6 @@ bool niyah_identity_is_self_query(const char* prompt)
         "which model are you",
         "what llm",
         "are you llama",
-        "are you legacy-model",
         "are you claude",
         "introduce yourself",
         "tell me about yourself",

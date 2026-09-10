@@ -270,7 +270,6 @@
 {"_file": "chunks\\khawrizm_graph_chunk_0054.json", "confidence": 1.0, "source": "n_fips_203_ml_kem_key_encapsulation_standard", "target": "n_kyber_crystals_post_quantum_key_encapsulation", "type": "supersedes"}
 {"_file": "chunks\\khawrizm_graph_chunk_0054.json", "confidence": 1.0, "source": "n_w3c_turtle_rdf_terse_syntax", "target": "n_w3c_trig_rdf_dataset_syntax", "type": "part_of"}
 {"_file": "chunks\\khawrizm_graph_chunk_0054.json", "confidence": 0.99, "source": "n_tarjan_strongly_connected_components_algorithm", "target": "n_lock_free_dag_scheduler", "type": "supports"}
-{"_file": "chunks\\khawrizm_graph_chunk_0055.json", "confidence": 0.98, "source": "n_alibaba_tongyi_legacy-model_2_5_bilingual", "target": "n_labse_language_agnostic_bert_embeddings", "type": "related_to"}
 {"_file": "chunks\\khawrizm_graph_chunk_0055.json", "confidence": 1.0, "source": "n_w3c_rdf_1_1_concepts_abstract_syntax", "target": "n_w3c_turtle_rdf_terse_syntax", "type": "enables"}
 {"_file": "chunks\\khawrizm_graph_chunk_0055.json", "confidence": 1.0, "source": "n_pqc_slh_dsa_fips_205_standard", "target": "n_sphincs_plus_stateless_hash_signature", "type": "supersedes"}
 {"_file": "chunks\\khawrizm_graph_chunk_0055.json", "confidence": 0.99, "source": "n_simd_avx_512_vector_extensions", "target": "n_graph_blas_linear_algebra_api", "type": "supports"}

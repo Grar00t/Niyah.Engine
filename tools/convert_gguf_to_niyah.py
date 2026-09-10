@@ -664,40 +664,31 @@ def first_metadata(metadata, keys, default=None):
 def infer_config(metadata, infos):
     n_vocab = first_metadata(metadata, [
         "tokenizer.ggml.vocab_size",
-        "legacy-arch.vocab_size",
         "llama.vocab_size",
     ])
     n_embd = first_metadata(metadata, [
-        "legacy-arch.embedding_length",
         "llama.embedding_length",
     ])
     n_heads = first_metadata(metadata, [
-        "legacy-arch.attention.head_count",
         "llama.attention.head_count",
     ])
     n_kv_heads = first_metadata(metadata, [
-        "legacy-arch.attention.head_count_kv",
         "llama.attention.head_count_kv",
     ], n_heads)
     n_layers = first_metadata(metadata, [
-        "legacy-arch.block_count",
         "llama.block_count",
     ])
     n_ctx = first_metadata(metadata, [
-        "legacy-arch.context_length",
         "llama.context_length",
         "general.context_length",
     ], 2048)
     n_ff = first_metadata(metadata, [
-        "legacy-arch.feed_forward_length",
         "llama.feed_forward_length",
     ])
     rope_theta = first_metadata(metadata, [
-        "legacy-arch.rope.freq_base",
         "llama.rope.freq_base",
     ], 10000.0)
     norm_eps = first_metadata(metadata, [
-        "legacy-arch.attention.layer_norm_rms_epsilon",
         "llama.attention.layer_norm_rms_epsilon",
     ], 1e-5)
     eos_token = first_metadata(metadata, [
@@ -709,7 +700,6 @@ def infer_config(metadata, infos):
     # When the metadata does not say, infer tying from whether a separate
     # output projection is present. Tied checkpoints omit it entirely.
     tie = first_metadata(metadata, [
-        "legacy-arch.tie_word_embeddings",
         "llama.tie_word_embeddings",
     ])
     if tie is None:
@@ -800,7 +790,7 @@ def build_order(infos, config):
 
     lm_head is resolved only when it is going to be emitted. Resolving it
     unconditionally broke every tied-embedding checkpoint, which do not
-    contain output.weight at all -- including legacy-model-2.5-0.5B.
+    contain output.weight at all -- including some tied-embedding checkpoints.
     """
     emb = resolve_tensor(infos, [
         "token_embd.weight",

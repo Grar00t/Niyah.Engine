@@ -20,7 +20,7 @@
  *   "rope_theta" and "norm_eps" were never parsed from the config at all.
  *   niyah_model_config_normalize() then substituted 10000.0f / 1e-5f for
  *   every model. 10000.0 is the Llama-2 rope base; Llama-3 uses 500000.0 and
- *   legacy-arch uses 1000000.0. Every position past the short-prompt regime was
+ *   other architectures may use 1000000.0 or other values. Every position past the short-prompt regime was
  *   therefore rotated at the wrong frequency, and the engine produced
  *   degraded output that still looked plausible.
  *

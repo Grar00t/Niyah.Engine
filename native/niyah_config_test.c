@@ -4,7 +4,7 @@
  * Before the 2026-08 fix the scanner could only read integers, so
  * "rope_theta" and "norm_eps" were never parsed and
  * niyah_model_config_normalize() substituted the Llama-2 constants 10000.0f
- * and 1e-5f for every checkpoint. Llama-3 uses 500000.0 and legacy-arch uses
+ * and 1e-5f for every checkpoint. Other architectures may use 500000.0 or
  * 1000000.0, so positions were rotated at the wrong frequency and the engine
  * produced degraded output that still read as plausible text.
  *
@@ -69,7 +69,7 @@ int main(void)
     assert(cfg.norm_eps > 0.0f);
     assert(cfg.norm_eps < 1.0e-4f);
 
-    /* --- 2. legacy-arch style, tied embeddings ------------------------------- */
+    /* --- 2. alternate rope base, tied embeddings ------------------------- */
     write_file(path,
         "{\n"
         "  \"vocab_size\": 151936,\n"
