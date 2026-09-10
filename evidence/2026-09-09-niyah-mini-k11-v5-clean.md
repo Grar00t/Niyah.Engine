@@ -1,12 +1,12 @@
 # Evidence — niyah-mini-k11-v5-clean held-out BPB
 
 ```
-STATUS          = FRESH_REPRODUCED
-RECORDED_UTC    = 2026-09-10T02:25:00Z
-MEASURED_UTC    = 2026-09-09T12:38:03Z (original evaluation)
-REPRODUCED_UTC  = 2026-09-10T02:40:00Z (rebuilt from source, re-executed)
-PINNED_REF      = cb5691d04a878db26953f84624d5e357a97b52f7
-ARTIFACT_ACCESS = LOCAL_ARTIFACT_REQUIRED — weights and data streams are not committed here
+STATUS             = FRESH_REPRODUCED
+RECORDED_UTC       = 2026-09-10T02:25:00Z
+MEASURED_UTC       = 2026-09-09T12:38:03Z (original evaluation)
+REPRODUCED_UTC     = 2026-09-10T02:40:00Z (rebuilt from source at cb5691d0)
+REPRODUCED_ON_MAIN = 2026-09-10T02:50:00Z (rebuilt from origin/main, EVAL_RC=0)
+ARTIFACT_ACCESS    = LOCAL_ARTIFACT_REQUIRED — weights and data streams are not committed here
 ```
 
 Every value below was printed by a command. Nothing was re-derived from prose.
@@ -84,13 +84,13 @@ Check: `1802 × 64 = 115,328`.
 
 ### 2.1 Fresh reproduction — 2026-09-10
 
-The evaluator was rebuilt from committed source and re-executed. The
-number is reproducible, not quoted.
+The evaluator was rebuilt from committed source and re-executed, twice:
+once at `cb5691d0`, once at `origin/main`. Both agree with the 2026-09-09
+record to all six printed decimals.
 
 ```
-HEAD      = cb5691d04a878db26953f84624d5e357a97b52f7
-PRODUCER  = tools/niyah_eval.c  (blob e91b1bb4fc8395d33e24a4b884a7ba256b5e1502)
-COMMIT    = dab2cf9  "tools: add K8-compatible niyah mini evaluator"
+PRODUCER = tools/niyah_eval.c  (blob e91b1bb4fc8395d33e24a4b884a7ba256b5e1502)
+COMMIT   = dab2cf9  "tools: add K8-compatible niyah mini evaluator"
 
 make -C native/niyah_mini lib          -> LIB_RC=0    libniyah_mini.a  84546 bytes
 cc -std=c11 -O2 -Wall -Wextra \
@@ -113,10 +113,19 @@ GATE_BIGRAM_ADD1_BPB = 3.768400
 VERDICT              = PASS
 ```
 
-The rebuilt binary agrees with the 2026-09-09 record to all six printed
-decimals, on the same 1802 windows. `HISTORICAL -> FRESH`.
+Same command against a worktree of `origin/main` (`be73ca26`):
 
-Two facts recorded here for the first time, both new to this run:
+```
+MAIN_LIB_RC=0
+MAIN_BUILD_RC=0
+windows=1802  avg_loss=2.165499  perplexity=8.718951
+min_loss=0.613356  max_loss=4.041076
+MAIN_EVAL_RC=0
+```
+
+`HISTORICAL -> FRESH`, on both refs.
+
+Two facts recorded here for the first time:
 
 - Per-window dispersion. `min_loss=0.613356` nats, `max_loss=4.041076` nats —
   a 6.6× spread across windows. Derived: about `0.885` and `5.830` bits/byte.
@@ -127,10 +136,32 @@ Two facts recorded here for the first time, both new to this run:
   2026-09-09 log were produced by a wrapper above this binary, not by the
   binary. The values agree; the label provenance is now stated correctly.
 
-One assumption remains `UNMEASURED`: `BPB = nats / ln(2)` holds only if every
-token in the stream is one byte. The 269-symbol vocabulary is 13 special ids
-plus 256 byte ids. Whether any special id occurs inside
-`val-windows-clean.bin` has not been counted.
+### 2.2 Byte identity — measured, and it does not hold exactly
+
+`BPB = nats / ln(2)` is only exact if every predicted token is one byte.
+The 269-symbol vocabulary is 13 special ids plus 256 byte ids. Counted:
+
+```
+TOTAL_TOKENS   = 117130          (= 1802 × 65)
+SPECIAL_TOKENS = 4
+BY_ID          = {1: 2, 2: 2}    (BOS × 2, EOS × 2)
+BYTE_IDENTITY  = BROKEN
+```
+
+Four non-byte symbols in 117,130. Worst case, all four fall on predicted
+positions, so the true byte count is 115,324 rather than 115,328:
+
+```
+bpb_byte_exact <= 3.124155 × 115328 / 115324 = 3.124263
+correction      = +0.000108 bits/byte
+```
+
+The identity is broken and the correction is `1.7e-4` of the margin against
+the bigram gate. Stated because it is true, not because it changes anything.
+
+Side observation, `UNMEASURED`: only two document boundaries fall inside a
+1802-window validation stream. Whether the two leaked windows of §4 sit at
+those boundaries has not been checked.
 
 ---
 
@@ -189,7 +220,8 @@ clean_bpb      <= 3.127626
 margin vs 3.768400 = 0.640774
 ```
 
-The leak cannot flip the baseline comparison. It is still a real pipeline
+Both corrections applied together (leak + byte identity) stay below `3.1278`.
+Neither can flip the baseline comparison. The leak is still a real pipeline
 defect and the split must be rebuilt with the gate enforced.
 Status: `TICKET3 = PASS_WITH_DISCLOSED_LEAK (0.111%)`.
 
@@ -247,12 +279,12 @@ result does not use that stream.
 
 ## 7. What this evidence does NOT prove
 
-- Reproduction on `main`. The number was reproduced at `cb5691d0`, not here.
-  See §9.
 - Sanitizer cleanliness. `NIYAH_SANITIZE` defaults to `OFF` and no run in this
   record enabled it. `ASAN/UBSAN = UNMEASURED`.
 - CI. No workflow run is tied to these numbers. `CI_FOR_THESE_NUMBERS = NOT_RUN`.
+  Both reproductions were run by hand on one host.
 - Disjointness. The split leaks; §4.
+- Exact byte identity. It is broken by four symbols; §2.2.
 - Generalisation. 1802 windows over a 269-symbol byte vocabulary at `n_ctx=64`
   measures this split and nothing else.
 - Any claim about the training corpus licence.
@@ -261,7 +293,7 @@ result does not use that stream.
 
 ## 8. Reproduction
 
-At `cb5691d0`, with the local artifacts present:
+Works at `origin/main` and at `cb5691d0`, with the local artifacts present:
 
 ```sh
 make -C native/niyah_mini lib
@@ -281,26 +313,48 @@ python3 tools/check_window_disjoint.py \
 sha256sum -c SHA256SUMS.txt   # inside the release directory; RC=0 observed
 ```
 
+`tools/niyah_eval.c` is not committed on `main`; it lives on
+`salvage/local-evolution-20260909` at `cb5691d0`. Copy it in, or build from
+that ref.
+
 ---
 
-## 9. The producer is not on the default branch
+## 9. How `main` and the salvage branch differ
 
-Measured 2026-09-10 against `main` at `be73ca26`:
+An earlier revision of this file inferred from file sizes that `main` might
+not reproduce the number, and recorded `REPRODUCIBLE_ON_MAIN = UNVERIFIED`.
+That was replaced by measurement: `main` reproduces it exactly, including
+`min_loss` and `max_loss`. Size is not semantics.
 
-| path | `main` | `cb5691d0` |
-|---|---|---|
-| `tools/niyah_eval.c` | absent | 3,410 B |
-| `native/niyah_mini/niyah_mini_model.c` | 28,596 B | 32,946 B |
-| `native/niyah_mini/niyah_mini_model.h` | 3,535 B | 4,329 B |
-| `native/niyah_mini/niyah_mini_train.c` | 26,484 B | 26,484 B |
-| `native/niyah_mini/test_niyah_mini_heapfree.c` | absent | present |
+```
+git diff --stat origin/main cb5691d0 -- native/niyah_mini/niyah_mini_model.{c,h}
+  niyah_mini_model.c | 294 +++++----
+  niyah_mini_model.h |  30 ++++
+  2 files changed, 279 insertions(+), 45 deletions(-)
+```
 
-The evaluator is absent from `main`, and the model implementation on `main`
-is 4,350 bytes smaller than the one that produced `3.124155`. Copying the
-evaluator here would not make the number reproducible on `main`; the two
-model sources have not been diffed and have not been shown to be equivalent.
+The difference is additive and does not touch the forward result. Five
+functions exist at `cb5691d0` and are absent from `main`:
 
-`REPRODUCIBLE_AT = cb5691d0`
-`REPRODUCIBLE_ON_MAIN = UNVERIFIED`
+```
+niyah_mini_arena_init
+niyah_mini_arena_alloc
+niyah_mini_forward_state_bind
+niyah_mini_runtime_memory_size
+niyah_mini_model_bind_runtime
+```
+
+`native/niyah_mini/test_niyah_mini_heapfree.c` is likewise present at
+`cb5691d0` and absent from `main`.
+
+So the arena / caller-owned-memory work for `niyah_mini`, and the test that
+guards it, exist only on the salvage branch. `main` builds and evaluates
+correctly without them, but has no heap-discipline guarantee for this module.
+
+```
+REPRODUCIBLE_AT      = cb5691d0
+REPRODUCIBLE_ON_MAIN = YES (be73ca26, MAIN_EVAL_RC=0)
+ARENA_API_ON_MAIN    = ABSENT
+```
 
 Author: Suliman Nazal Alshammari · سليمان نزال الشمري
