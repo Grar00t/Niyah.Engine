@@ -19,86 +19,57 @@ static char *bridge_strdup(const char *s)
     return copy;
 }
 
-static NiyahStatus bridge_bpe_tokenize_prompt(
+static NiyahStatus bridge_byte_tokenize_prompt(
     const NiyahMiniWrappedModel *wrapped,
     const char *prompt,
     int32_t **tokens_out,
     int32_t *token_count_out)
 {
-    NiyahMiniVocab vocab;
-    NiyahMiniBPE bpe;
     int32_t *tokens;
     size_t prompt_len;
     int32_t capacity;
-    int32_t count;
     int32_t i;
-    NiyahStatus status;
 
-    if (!wrapped || !prompt || !tokens_out || !token_count_out) return NIYAH_ERR_INVALID_ARG;
+    if (!wrapped || !prompt || !tokens_out || !token_count_out)
+        return NIYAH_ERR_INVALID_ARG;
+
     *tokens_out = NULL;
     *token_count_out = 0;
 
-    memset(&vocab, 0, sizeof(vocab));
-    memset(&bpe, 0, sizeof(bpe));
-
-    status = niyah_mini_vocab_add(&vocab, "<pad>", 0.0f);
-    if (status != NIYAH_OK) goto fail;
-    status = niyah_mini_vocab_add(&vocab, "<bos>", 0.0f);
-    if (status != NIYAH_OK) goto fail;
-    status = niyah_mini_vocab_add(&vocab, "<eos>", 0.0f);
-    if (status != NIYAH_OK) goto fail;
-    status = niyah_mini_vocab_add(&vocab, "<unk>", 0.0f);
-    if (status != NIYAH_OK) goto fail;
-
     prompt_len = strlen(prompt);
-    if (prompt_len == 0U) return NIYAH_OK;
-    if (prompt_len > (size_t)INT32_MAX) return NIYAH_ERR_OVERFLOW;
+    if (prompt_len == 0U)
+        return NIYAH_OK;
+
+    if (prompt_len > (size_t)INT32_MAX)
+        return NIYAH_ERR_OVERFLOW;
+
     capacity = (int32_t)prompt_len;
-    if (capacity > wrapped->config.n_ctx) capacity = wrapped->config.n_ctx;
-    if (capacity <= 0) return NIYAH_ERR_SHAPE;
+    if (capacity > wrapped->config.n_ctx)
+        capacity = wrapped->config.n_ctx;
 
-    for (i = 0; i < 256; ++i) {
-        char byte_token[2];
-        byte_token[0] = (char)(unsigned char)i;
-        byte_token[1] = '\0';
-        status = niyah_mini_vocab_add(&vocab, byte_token, 0.0f);
-        if (status != NIYAH_OK) goto fail;
-    }
-
-    status = niyah_mini_bpe_init(&bpe, &vocab, NULL, 0);
-    if (status != NIYAH_OK) goto fail;
+    if (capacity <= 0)
+        return NIYAH_ERR_SHAPE;
 
     tokens = (int32_t *)malloc((size_t)capacity * sizeof(*tokens));
-    if (!tokens) {
-        status = NIYAH_ERR_OUT_OF_MEMORY;
-        goto fail;
-    }
+    if (!tokens)
+        return NIYAH_ERR_OUT_OF_MEMORY;
 
-    count = niyah_mini_bpe_tokenize(&bpe, prompt, tokens, capacity);
-    if (count < 0 || count > capacity) {
-        free(tokens);
-        status = NIYAH_ERR_SHAPE;
-        goto fail;
-    }
+    for (i = 0; i < capacity; ++i) {
+        int32_t token =
+            NIYAH_MINI_SPECIAL_TOKENS +
+            (int32_t)(unsigned char)prompt[i];
 
-    for (i = 0; i < count; ++i) {
-        unsigned char byte_value = (unsigned char)prompt[i];
-        int32_t expected = NIYAH_MINI_SPECIAL_TOKENS + (int32_t)byte_value;
-        if (tokens[i] < NIYAH_MINI_SPECIAL_TOKENS || tokens[i] != expected) {
-            tokens[i] = expected;
+        if (token < 0 || token >= wrapped->config.n_vocab) {
+            free(tokens);
+            return NIYAH_ERR_SHAPE;
         }
+
+        tokens[i] = token;
     }
 
     *tokens_out = tokens;
-    *token_count_out = count;
-    niyah_mini_bpe_free(&bpe);
-    niyah_mini_vocab_free(&vocab);
+    *token_count_out = capacity;
     return NIYAH_OK;
-
-fail:
-    niyah_mini_bpe_free(&bpe);
-    niyah_mini_vocab_free(&vocab);
-    return status;
 }
 
 static char *bridge_byte_detokenize(const int32_t *tokens, int32_t n_tokens)
@@ -238,7 +209,7 @@ NiyahLLMOutput niyah_mini_wrapped_generate(
             }
         }
     } else {
-        status = bridge_bpe_tokenize_prompt(wrapped, prompt, &prompt_ids, &prompt_len);
+        status = bridge_byte_tokenize_prompt(wrapped, prompt, &prompt_ids, &prompt_len);
         if (status != NIYAH_OK) {
             output.status = status;
             goto done;
