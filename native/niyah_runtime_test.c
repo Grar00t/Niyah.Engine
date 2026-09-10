@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "niyah.h"
+#include "niyah_runtime.h"
 
 int main(void)
 {
@@ -70,6 +70,31 @@ int main(void)
     assert(def != NULL);
     assert(niyah_runtime_capacity(def) > 0);
     niyah_runtime_destroy(def);
+
+    /* Caller-owned arenas require an explicit capacity. */
+    _Alignas(64) unsigned char external_pool[512];
+    NiyahRuntimeConfig external_config;
+    memset(&external_config, 0, sizeof(external_config));
+    external_config.memory_pool = external_pool;
+    external_config.memory_size = sizeof(external_pool);
+
+    NiyahRuntime* external = niyah_runtime_create(&external_config);
+    assert(external != NULL);
+    assert(niyah_runtime_capacity(external) == sizeof(external_pool));
+    assert(niyah_runtime_alloc(external, sizeof(external_pool)) == external_pool);
+    assert(niyah_runtime_alloc(external, 1) == NULL);
+    niyah_runtime_destroy(external);
+
+    NiyahRuntimeConfig unsized_external;
+    memset(&unsized_external, 0, sizeof(unsized_external));
+    unsized_external.memory_pool = external_pool;
+    assert(niyah_runtime_create(&unsized_external) == NULL);
+
+    NiyahRuntime inplace;
+    memset(&inplace, 0, sizeof(inplace));
+    assert(niyah_runtime_init_inplace(&inplace, &unsized_external) ==
+           NIYAH_ERR_INVALID_ARG);
+    assert(inplace.context == NULL);
 
     /* Degenerate inputs. */
     assert(niyah_runtime_alloc(NULL, 10) == NULL);
