@@ -36,6 +36,15 @@ NiyahStatus niyah_runtime_init_inplace(NiyahRuntime* runtime,
         memset(&resolved, 0, sizeof(resolved));
     }
 
+    /*
+     * An external pool has no discoverable capacity. Treating a zero size as
+     * the default arena size would let the allocator write up to 64 MiB into
+     * an arbitrarily small caller-owned buffer.
+     */
+    if (resolved.memory_pool && resolved.memory_size == 0u) {
+        return NIYAH_ERR_INVALID_ARG;
+    }
+
     if (resolved.memory_size == 0) {
         resolved.memory_size = NIYAH_ARENA_DEFAULT;
     }
