@@ -1,14 +1,16 @@
 # Evidence — niyah-mini-k11-v5-clean held-out BPB
 
 ```
-STATUS             = FRESH_REPRODUCED_AND_DISJOINT
+STATUS             = FRESH_REPRODUCED_AND_DISJOINT_AND_STRATIFIED
 HEADLINE           = VAL_BPB = 3.123631 over 1800 disjoint windows
+PROSE_ONLY         = VAL_BPB = 3.180956 over 1722 windows, 15.91% under the bigram
 GATE               = BIGRAM_ADD1_BPB 3.768400   VERDICT = PASS
-RECORDED_UTC       = 2026-09-10T03:05:00Z
+RECORDED_UTC       = 2026-09-10T03:20:00Z
 MEASURED_UTC       = 2026-09-09T12:38:03Z (original evaluation, leaked split)
 REPRODUCED_UTC     = 2026-09-10T02:40:00Z (rebuilt from source at cb5691d0)
 REPRODUCED_ON_MAIN = 2026-09-10T02:50:00Z (rebuilt from origin/main, EVAL_RC=0)
 DISJOINT_UTC       = 2026-09-10T03:00:00Z (leak removed, re-evaluated)
+STRATIFIED_UTC     = 2026-09-10T03:15:00Z (filler/prose split, advantage survives)
 ARTIFACT_ACCESS    = LOCAL_ARTIFACT_REQUIRED — weights and data streams are not committed here
 ```
 
@@ -144,25 +146,85 @@ the bigram gate. Stated because it is true, not because it changes anything.
 
 ## 3. Baselines on the same split
 
-| baseline | BPB |
-|---|---|
-| uniform over 269 symbols | `8.071462` |
-| unigram + add-1 | `4.796900` |
-| **bigram + add-1 (the gate)** | **`3.768400`** |
-| **model, disjoint stream** | **`3.123631`** |
+### 3.0 The gate now has a committed producer
+
+Until 2026-09-10 none of the three baseline constants had code in this
+repository that produced them. Every `PASS` was measured against a number
+that could be quoted but not re-derived. `tools/bigram_baseline.py` closes
+that gap: it fits unigram and bigram add-1 models on the training window
+stream and scores any evaluation stream with the same prediction convention
+as `tools/niyah_eval.c` — 65-token windows, 64 shifted predictions, nats
+divided by `ln 2`.
+
+| baseline | frozen constant | producer, **disjoint** stream | delta |
+|---|---|---|---|
+| uniform over 269 symbols | `8.071462` | `8.071462` | `0` |
+| unigram + add-1 | `4.796900` | `4.796600` | `-0.000300` |
+| bigram + add-1 (the gate) | `3.768400` | `3.768088895` | `-0.000311` |
+| **model** | | **`3.123631`** | |
+
+`PRODUCER_VALIDATION = PENDING`. The columns are not comparable: the frozen
+constants were computed on the 1802-window stream, the producer ran on the
+1800-window stream. The validating run is the producer against
+`val-windows-clean.bin`.
+
+Falsifiable prediction. If the producer is faithful it must print
+`BIGRAM_ADD1_BPB = 3.7684…` on 1802 windows, and the 128 extra predictions
+must carry exactly this much loss:
 
 ```
-OFFICIAL_BIGRAM_GATE_BPB = 3.768400
-FRESH_BIGRAM_ADD1_BPB    = 3.768422516
-DELTA_VS_OFFICIAL_GATE   = -0.644769
+producer, 1800 windows : 2.611840 nats × 115200 = 300,883.97 nats
+frozen,   1802 windows : 2.612071 nats × 115328 = 301,244.97 nats
+difference             :    361.00 nats over 128 predictions
+                       =      2.820 nats each   =   4.069 bits/byte
 ```
 
-The bigram baseline was recomputed at release time and landed `2.2516e-05`
-from the frozen constant, which is marginally the stricter of the two. The
-gate value was re-derived, not copied.
+If the producer disagrees on the 1802-window stream, either the producer or
+the frozen constant is wrong, and no `PASS` in this file stands until that
+is resolved.
 
-The model beats the bigram baseline by `0.644769` bits/byte — a 17.1%
-reduction. A model that does not beat the bigram has learned nothing.
+Fit statistics, `TRAIN_PREDICTIONS = 1,509,440`:
+
+```
+TRAIN_CONTEXTS_SEEN   = 168 of 269      (101 symbols never occur as a context)
+EVAL_UNSEEN_CONTEXTS  = 0
+EVAL_UNSEEN_PAIRS     = 192 of 115200 = 0.167%
+```
+
+The effective alphabet is about 155 distinct byte values, not 256. The
+uniform-over-269 baseline is therefore a strawman, reported only for
+completeness; `log2(155) ~= 7.28`.
+
+The model beats the bigram by `0.644458` bits/byte on the same stream — a
+17.10% reduction. §3.1 shows where that reduction comes from.
+
+### 3.1 Stratified — the advantage survives on prose
+
+RFC text is heavily templated: tables of contents built from dot leaders,
+horizontal rules, page footers. A byte model beats a bigram trivially on
+`. . . . . .`, so an unstratified headline can be carried by filler.
+
+Each held-out window was classified `FILLER` if at least 20% of its 65 bytes
+fall in `.-_=*`, or if it contains a run of 8 or more identical bytes.
+Otherwise `PROSE`. The threshold is a judgement call, not a measurement.
+
+| stratum | windows | share | model BPB | bigram BPB | advantage | advantage % |
+|---|---|---|---|---|---|---|
+| filler | `78` | `4.33%` | `1.858041` | `3.444950` | `1.586909` | **`46.06%`** |
+| prose | `1722` | `95.67%` | `3.180956` | `3.782726` | `0.601769` | **`15.91%`** |
+| all | `1800` | `100%` | `3.123631` | `3.768089` | `0.644458` | `17.10%` |
+
+Check: `(4992 × 1.858041 + 110208 × 3.180956) / 115200 = 3.123631`. The
+strata reconstruct the headline exactly.
+
+**The claim survives.** Filler inflates the headline by `1.19` percentage
+points — 17.10% overall against 15.91% on the 95.67% of the stream that is
+ordinary prose. The advantage over the bigram is not an artifact of dot
+leaders.
+
+Two secondary facts. The global `min_loss = 0.613356` belongs to the filler
+stratum; prose bottoms out at `1.500355`. And the 46% advantage on filler is
+real learning of document structure — merely cheap learning.
 
 ---
 
@@ -221,30 +283,40 @@ status `PASS_WITH_DISCLOSED_LEAK (0.111%)` is superseded.
 Removing the two leaked windows made the result **better**, not worse:
 `3.124155 -> 3.123631`, a change of `-0.000524` bits/byte.
 
-The loss carried by the two dropped windows, derived from the two printed
-means (`2.165499 × 1802 - 2.165136 × 1800`) and therefore accurate to about
-`±0.001`:
+The loss carried by the two dropped windows, derived from the printed means
+and therefore accurate to about `±0.001`:
 
 ```
-dropped_total_nll  ~= 4.9844 nats over 2 windows
 dropped_mean_nll   ~= 2.4922 nats   (= ~3.595 bits/byte)
-corpus_mean_nll     = 2.1651 nats   (= 3.1236 bits/byte)
+corpus_mean_nll     = 2.1651 nats   (=  3.1236 bits/byte)
 ratio              ~= 1.151
 ```
 
 The model scored the windows it had already seen **15% worse** than its own
-average. They were not memorised. `min_loss` and `max_loss` are unchanged by
-the removal, so neither dropped window was an extreme.
+average. They were not memorised.
+
+Three independent scorers agree, each reconstructed the same way from its
+own 1800-window and 1802-window totals:
+
+| scorer | corpus mean | the two dropped windows | ratio |
+|---|---|---|---|
+| niyah-mini | `3.1236` bpb | `~3.595` bpb | `1.15` |
+| bigram + add-1 | `3.7681` bpb | `~4.069` bpb | `1.08` |
+| unigram + add-1 | `4.7966` bpb | `~5.066` bpb | `1.06` |
+
+A bigram cannot memorise a 65-token window. That all three scorers find
+these two windows harder than average is evidence that the **text** is hard —
+mixed-case masthead with heavy punctuation — not that the model had seen it.
 
 This contradicts the usual assumption that a train/val overlap flatters the
 held-out number. Here it did the opposite. The prior conservative bound
 (`clean_bpb <= 3.127626`, computed by assuming the leaked windows were
-perfectly memorised) held: measured `3.123631` sits below it.
+perfectly memorised) held: measured `3.123631` sits below it. The bound was
+right and its reasoning was wrong.
 
-The leak was still a real pipeline defect and had to be fixed. Its direction
-was simply the opposite of what was assumed. `UNMEASURED`: whether one epoch
-over 23,585 windows is enough for a 1.02M-parameter model to memorise
-anything at all.
+The leak was still a real pipeline defect and had to be fixed. `UNMEASURED`:
+whether one epoch over 23,585 windows is enough for a 1.02M-parameter model
+to memorise anything at all.
 
 Tracked as issue #34, which remains open until `build_heldout_v3.py` refuses
 to emit a split that fails the gate.
@@ -295,26 +367,56 @@ fbf91f0e…  k11-lr3e-4-20260909-121720/weights.f32.bin   (this release)
 Contents of `gptoss-heldout-v1.bin` are `UNMEASURED`. This result does not
 use that stream.
 
-**Corpus.** §4.2 establishes that the corpus contains IETF RFC text (RPKI /
-X.509 family). No manifest in this repository states that. RFC text is
-governed by the IETF Trust Legal Provisions, not by "public domain". Whether
-a derived byte-window stream may be redistributed is `UNRESOLVED`. This
-repository has no `LICENSE` file.
+### 6.1 Corpus composition — measured 2026-09-10
+
+```
+train-windows-clean.bin   WINDOWS=23585  BOS=21  EOS=23  DOCS_LOWER_BOUND=23
+val-windows-disjoint.bin  WINDOWS=1800   BOS=1   EOS=2   DOCS_LOWER_BOUND=2
+```
+
+About 1,025 windows per document, roughly 65 KB each — consistent with RFC
+lengths. Two documents are identified from window heads. `INFERRED` from
+running headers, not measured against a source manifest:
+
+```
+train: "]\n\nRFC 4271 BGP-4 Januar" ×6  ->  RFC 4271 (BGP-4)
+val:   "la & Korver Best Current"  ×2  ->  "Rescorla & Korver, Best Current
+                                             Practice" = RFC 3552 / BCP 72
+```
+
+Most frequent 24-byte window heads, showing how templated the corpus is:
+
+```
+train: '........................' ×91   '. . . . . . . . . . . . ' ×43
+       ' . . . . . . . . . . . .' ×38   '------------------------' ×11
+val:   '. . . . . . . . . . . . ' ×5    '........................' ×4
+```
+
+**Licence.** §4.2 and this section establish that the corpus is IETF RFC
+text. No manifest in this repository states that. RFC text is governed by
+the IETF Trust Legal Provisions, not by "public domain". Whether a derived
+byte-window stream may be redistributed is `UNRESOLVED`. This repository has
+no `LICENSE` file.
 
 ---
 
 ## 7. What this evidence does NOT prove
 
+- Corpus coverage. `HELDOUT_DOCUMENT_COUNT` has a measured lower bound of
+  **2** (§6.1). The held-out set spans about two documents out of about 23
+  in the corpus. `115,200` predictions is therefore not `115,200`
+  independent samples; no confidence interval has been computed, and one
+  computed under an i.i.d. assumption would be wrong by orders of magnitude.
+  **This is a larger threat to the result than the leak was. It is now
+  measured, not fixed.**
+- Baseline agreement. `PRODUCER_VALIDATION = PENDING` (§3.0). The committed
+  baseline producer has not yet been run on the same stream as the frozen
+  gate constant.
 - Sanitizer cleanliness. `NIYAH_SANITIZE` defaults to `OFF`; no run here
   enabled it. `ASAN/UBSAN = UNMEASURED`.
 - CI. No workflow run is tied to these numbers.
   `CI_FOR_THESE_NUMBERS = NOT_RUN`. Every run was by hand on one host.
 - Exact byte identity. Broken by three symbols; §2.2.
-- Corpus coverage. Only two document boundaries (`BOS`/`EOS` pairs) appear in
-  1802 windows, so the held-out set is drawn from very few distinct
-  documents. `HELDOUT_DOCUMENT_COUNT = UNMEASURED`. A held-out set spanning
-  two or three documents measures those documents, not the corpus. **This is
-  a larger threat to the result than the leak was.**
 - Generalisation. 1800 windows over a 269-symbol byte vocabulary at
   `n_ctx=64` measures this split and nothing else.
 
@@ -342,6 +444,11 @@ python3 tools/check_window_disjoint.py \
 # 3. evaluate; argv is CONFIG WEIGHTS EVAL_BIN -- three arguments, not two
 /tmp/niyah_eval <model>/config.json <model>/weights.f32.bin <val-windows-disjoint.bin>
 # expect: windows=1800  avg_loss=2.165136 ; BPB = avg_loss / ln(2) = 3.123631
+
+# 4. re-derive the baselines instead of quoting them
+python3 tools/bigram_baseline.py \
+  <train-windows-clean.bin> <val-windows-disjoint.bin>
+# expect: BIGRAM_ADD1_BPB = 3.768088895
 ```
 
 `tools/niyah_eval.c` is not committed on `main`; it lives on
@@ -401,6 +508,7 @@ VAL_BPB=3.124155       -> 3.123631
 DELTA_VS_OFFICIAL_GATE=-0.644245 -> -0.644769
 HELDOUT_DISJOINT       -> PASS (new field)
 EVAL_STREAM_SHA256     -> 9e6989b3335ab7e2c80fc879f9a77ff2a391e77e950f9e0d1750a436b49b6cfd
+PROSE_ONLY_BPB         -> 3.180956 over 1722 windows (new field)
 ```
 
 `RELEASE_MANIFEST = STALE` until updated.
