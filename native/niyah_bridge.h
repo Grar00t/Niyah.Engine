@@ -2,21 +2,14 @@
 #define NIYAH_BRIDGE_H
 
 #include "niyah.h"
+#include "niyah_document_service.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef struct {
-    char* doc_id;
-    char* snippet;
-    float score;
-} NiyahBridgeHit;
-
-typedef struct {
-    NiyahBridgeHit* hits;
-    int32_t         count;
-} NiyahBridgeResults;
+typedef NiyahDocumentSearchHit NiyahBridgeHit;
+typedef NiyahDocumentSearchResults NiyahBridgeResults;
 
 NIYAH_API const char* niyah_bridge_version(void);
 NIYAH_API const char* niyah_get_version(void);
@@ -45,6 +38,11 @@ NIYAH_API int32_t niyah_bridge_document_count(void);
 NIYAH_API void    niyah_bridge_clear(void);
 NIYAH_API void    niyah_bridge_free_results(void* results);
 NIYAH_API void    niyah_bridge_free_string(char* text);
+
+/* Contract-first adapter over the current BridgeStore. The legacy bridge
+ * remains the storage implementation for P0-A.1; callers can bind to this
+ * service now without taking a dependency on BridgeStore itself. */
+NIYAH_API const NiyahDocumentService* niyah_bridge_document_service(void);
 
 #ifdef __cplusplus
 }

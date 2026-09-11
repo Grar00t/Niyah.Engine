@@ -44,7 +44,9 @@ set(NIYAH_SOURCES
     niyah_search.c
     niyah_crawler.c
     niyah_document.c
+    niyah_document_service.c
     niyah_bridge.c
+    niyah_bridge_document_adapter.c
     evidence_envelope.c
     evidence_graph.c
     evidence_reasoner.c
@@ -60,6 +62,7 @@ set(NIYAH_HEADERS
     niyah_attention.h
     niyah_bridge.h
     niyah_document.h
+    niyah_document_service.h
     niyah_llm.h
     niyah_runtime.h
     niyah_telemetry.h
@@ -151,6 +154,7 @@ enable_testing()
 set(NIYAH_TESTS
     test_niyah_core.c
     test_niyah_document.c
+    niyah_document_service_test.c
     niyah_control_test.c
     niyah_matmul_test.c
     niyah_softmax_test.c
