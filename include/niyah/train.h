@@ -31,10 +31,7 @@ NiyahStatus niyah_cross_entropy_loss(const float *logits,
                                      float *dlogits,
                                      size_t dlogits_count);
 
-/* P5 training objective entry point. It deliberately reuses the canonical
- * inference forward path so training and inference cannot drift at logits.
- * Explicit Transformer backward is added on this same branch after this gate.
- */
+/* Canonical objective-only path. It uses the exact inference forward API. */
 NiyahStatus niyah_train_loss(const NiyahModel *model,
                              const uint32_t *tokens,
                              const uint32_t *targets,
@@ -44,6 +41,24 @@ NiyahStatus niyah_train_loss(const NiyahModel *model,
                              size_t logits_count,
                              float *workspace,
                              size_t workspace_count);
+
+/* Reference CPU backward over the exact canonical NiyahModel layout.
+ * Workspace is caller-owned and sized in floats; gradients are zeroed before
+ * each successful backward attempt. Tied embeddings naturally accumulate LM
+ * head and input-embedding contributions into the same canonical weight span.
+ */
+NiyahStatus niyah_train_backward_workspace_floats(const NiyahModelConfig *config,
+                                                  size_t token_count,
+                                                  size_t *out_floats);
+
+NiyahStatus niyah_train_backward(const NiyahModel *model,
+                                 const uint32_t *tokens,
+                                 const uint32_t *targets,
+                                 size_t token_count,
+                                 float *out_loss,
+                                 NiyahModelGradients *gradients,
+                                 float *workspace,
+                                 size_t workspace_count);
 
 #ifdef __cplusplus
 }
