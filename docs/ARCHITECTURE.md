@@ -39,17 +39,33 @@ This ordering is the contract for both future forward/backward training code and
 - Parameter initialization is deterministic for a fixed seed.
 - CPU math primitives are the reference implementation.
 
+## P1 tokenizer contract
+
+The tokenizer is implemented inside Niyah.Engine; it is not delegated to an external model or tokenizer runtime.
+
+- Byte tokens `0..255` guarantee lossless coverage of arbitrary input bytes and UTF-8 text.
+- `256` is BOS and `257` is EOS.
+- Learned tokens begin at `258`.
+- Training is deterministic byte-level BPE with explicit merge order and deterministic tie-breaking.
+- Runtime encoding starts from bytes and applies the learned merge rules in training order.
+- Decoding reconstructs the original bytes exactly while ignoring BOS/EOS control tokens.
+- Arabic and English round-trip correctness is part of the native test suite.
+
 ## Build order
 
-P0 establishes model layout and reference math. Subsequent patches add, in order:
+Completed:
 
-1. tokenizer runtime and trainer;
-2. RoPE, attention/GQA, SwiGLU and Transformer forward;
-3. KV cache and generation;
-4. cross-entropy and explicit backward gradients over this exact layout;
-5. AdamW, gradient clipping and checkpoint/resume;
-6. held-out loss/perplexity;
-7. optional CUDA acceleration without changing model semantics.
+1. canonical model layout and reference math;
+2. tokenizer runtime and deterministic byte-level BPE trainer.
+
+Next:
+
+3. RoPE, attention/GQA, SwiGLU and Transformer forward;
+4. KV cache and autoregressive generation;
+5. cross-entropy and explicit backward gradients over this exact layout;
+6. AdamW, gradient clipping and checkpoint/resume;
+7. held-out loss/perplexity;
+8. optional CUDA acceleration without changing model semantics.
 
 ## Out of core
 
