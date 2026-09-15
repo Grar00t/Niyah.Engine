@@ -13,6 +13,8 @@ add_library(niyah STATIC
     src/niyah_tokenizer.c
     src/niyah_transformer.c
     src/niyah_decode.c
+    src/niyah_sampler.c
+    src/niyah_generate.c
 )
 
 target_include_directories(niyah
@@ -45,20 +47,26 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_decode_test tests/test_decode.c)
     target_link_libraries(niyah_decode_test PRIVATE niyah)
 
+    add_executable(niyah_generation_test tests/test_generation.c)
+    target_link_libraries(niyah_generation_test PRIVATE niyah)
+
     if(MSVC)
         target_compile_options(niyah_model_test PRIVATE /W4 /WX)
         target_compile_options(niyah_tokenizer_test PRIVATE /W4 /WX)
         target_compile_options(niyah_transformer_test PRIVATE /W4 /WX)
         target_compile_options(niyah_decode_test PRIVATE /W4 /WX)
+        target_compile_options(niyah_generation_test PRIVATE /W4 /WX)
     else()
         target_compile_options(niyah_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_tokenizer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_transformer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_decode_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(niyah_generation_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
 
     add_test(NAME niyah_model_test COMMAND niyah_model_test)
     add_test(NAME niyah_tokenizer_test COMMAND niyah_tokenizer_test)
     add_test(NAME niyah_transformer_test COMMAND niyah_transformer_test)
     add_test(NAME niyah_decode_test COMMAND niyah_decode_test)
+    add_test(NAME niyah_generation_test COMMAND niyah_generation_test)
 endif()
