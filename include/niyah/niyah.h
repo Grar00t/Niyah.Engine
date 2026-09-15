@@ -13,7 +13,8 @@ typedef enum NiyahStatus {
     NIYAH_ERR_INVALID_ARGUMENT = 1,
     NIYAH_ERR_INVALID_CONFIG = 2,
     NIYAH_ERR_OVERFLOW = 3,
-    NIYAH_ERR_OUT_OF_MEMORY = 4
+    NIYAH_ERR_OUT_OF_MEMORY = 4,
+    NIYAH_ERR_BUFFER_TOO_SMALL = 5
 } NiyahStatus;
 
 typedef struct NiyahModelConfig {
