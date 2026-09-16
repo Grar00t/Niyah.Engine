@@ -54,7 +54,7 @@ static int test_workspace_contract(void)
     config.embedding_dim = 12U;
     config.n_heads = 4U;
     config.n_kv_heads = 2U;
-    CHECK(niyah_model_config_validate(&config) == NIYAH_OK);
+    CHECK(niyah_model_config_validate(&config) == NIYAH_ERR_INVALID_CONFIG);
     CHECK(niyah_transformer_workspace_floats(&config, 3U, &count) == NIYAH_ERR_INVALID_CONFIG);
     return 0;
 }

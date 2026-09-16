@@ -73,6 +73,7 @@ static int test_config_and_layout(void)
 static int test_invalid_configs(void)
 {
     NiyahModelConfig config = tiny_config(1);
+    NiyahModel model;
 
     config.embedding_dim = 10U;
     CHECK(niyah_model_config_validate(&config) == NIYAH_ERR_INVALID_CONFIG);
@@ -88,6 +89,14 @@ static int test_invalid_configs(void)
     config = tiny_config(1);
     config.rms_norm_eps = 0.0f;
     CHECK(niyah_model_config_validate(&config) == NIYAH_ERR_INVALID_CONFIG);
+
+    config = tiny_config(1);
+    config.embedding_dim = 12U;
+    config.n_heads = 4U;
+    config.n_kv_heads = 2U;
+    CHECK(niyah_model_config_validate(&config) == NIYAH_ERR_INVALID_CONFIG);
+    CHECK(niyah_model_create(&model, &config) == NIYAH_ERR_INVALID_CONFIG);
+    CHECK(model.weights == NULL);
     return 0;
 }
 

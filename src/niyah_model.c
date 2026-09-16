@@ -37,6 +37,8 @@ static NiyahStatus niyah_advance(size_t *cursor, size_t count, size_t *offset)
 
 NiyahStatus niyah_model_config_validate(const NiyahModelConfig *config)
 {
+    size_t head_dim;
+
     if (config == NULL) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
@@ -53,6 +55,11 @@ NiyahStatus niyah_model_config_validate(const NiyahModelConfig *config)
     if ((config->embedding_dim % config->n_heads) != 0U ||
         (config->n_heads % config->n_kv_heads) != 0U ||
         config->n_kv_heads > config->n_heads) {
+        return NIYAH_ERR_INVALID_CONFIG;
+    }
+
+    head_dim = (size_t)config->embedding_dim / (size_t)config->n_heads;
+    if (head_dim < 2U || (head_dim % 2U) != 0U) {
         return NIYAH_ERR_INVALID_CONFIG;
     }
     return NIYAH_OK;
