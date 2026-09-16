@@ -72,6 +72,19 @@ typedef struct NiyahCheckpointLoadTargets {
     size_t count;
 } NiyahCheckpointLoadTargets;
 
+static FILE *niyah_checkpoint_fopen(const char *path, const char *mode)
+{
+#if defined(_MSC_VER)
+    FILE *file = NULL;
+    if (fopen_s(&file, path, mode) != 0) {
+        return NULL;
+    }
+    return file;
+#else
+    return fopen(path, mode);
+#endif
+}
+
 static void niyah_store_u32_le(unsigned char out[4], uint32_t value)
 {
     out[0] = (unsigned char)(value & UINT32_C(0xff));
@@ -529,7 +542,7 @@ NiyahStatus niyah_checkpoint_save(const char *path,
         return status;
     }
 
-    file = fopen(path, "wb");
+    file = niyah_checkpoint_fopen(path, "wb");
     if (file == NULL) {
         return NIYAH_ERR_IO;
     }
@@ -889,7 +902,7 @@ NiyahStatus niyah_checkpoint_load(const char *path,
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
 
-    file = fopen(path, "rb");
+    file = niyah_checkpoint_fopen(path, "rb");
     if (file == NULL) {
         return NIYAH_ERR_IO;
     }

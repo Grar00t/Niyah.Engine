@@ -8,6 +8,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+static FILE *test_fopen(const char *path, const char *mode)
+{
+#if defined(_MSC_VER)
+    FILE *file = NULL;
+    if (fopen_s(&file, path, mode) != 0) {
+        return NULL;
+    }
+    return file;
+#else
+    return fopen(path, mode);
+#endif
+}
+
 static int failures = 0;
 
 #define CHECK(expr) do { \
@@ -147,7 +160,7 @@ static int optimizer_config_equal(const NiyahAdamWConfig *a,
 
 static int write_bytes(const char *path, const unsigned char *data, size_t size)
 {
-    FILE *f = fopen(path, "wb");
+    FILE *f = test_fopen(path, "wb");
     int ok;
     if (f == NULL) return 0;
     ok = fwrite(data, 1U, size, f) == size;
@@ -157,7 +170,7 @@ static int write_bytes(const char *path, const unsigned char *data, size_t size)
 
 static unsigned char *read_bytes(const char *path, size_t *out_size)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = test_fopen(path, "rb");
     long end;
     unsigned char *data;
     if (f == NULL) return NULL;
@@ -540,7 +553,7 @@ static void test_save_preflight_no_truncate(void)
     state.m[0] = NAN;
     CHECK(niyah_checkpoint_save(path, &model, &state, &config) == NIYAH_ERR_INVALID_CONFIG);
     {
-        FILE *f = fopen(path, "rb");
+        FILE *f = test_fopen(path, "rb");
         CHECK(f == NULL);
         if (f != NULL) fclose(f);
     }
