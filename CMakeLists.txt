@@ -99,6 +99,9 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_dataset_shard_test tests/test_dataset_shard.c)
     target_link_libraries(niyah_dataset_shard_test PRIVATE niyah)
 
+    add_executable(niyah_dataset_collection_test tests/test_dataset_collection.c)
+    target_link_libraries(niyah_dataset_collection_test PRIVATE niyah)
+
     add_executable(niyah_transformer_test tests/test_transformer.c)
     target_link_libraries(niyah_transformer_test PRIVATE niyah)
 
@@ -137,6 +140,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_tokenizer_test PRIVATE /W4 /WX)
         target_compile_options(niyah_dataset_test PRIVATE /W4 /WX)
         target_compile_options(niyah_dataset_shard_test PRIVATE /W4 /WX)
+        target_compile_options(niyah_dataset_collection_test PRIVATE /W4 /WX)
         target_compile_options(niyah_transformer_test PRIVATE /W4 /WX)
         target_compile_options(niyah_decode_test PRIVATE /W4 /WX)
         target_compile_options(niyah_generation_test PRIVATE /W4 /WX)
@@ -153,6 +157,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_tokenizer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_dataset_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_dataset_shard_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(niyah_dataset_collection_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_transformer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_decode_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_generation_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -170,6 +175,7 @@ if(NIYAH_BUILD_TESTS)
     add_test(NAME niyah_tokenizer_test COMMAND niyah_tokenizer_test)
     add_test(NAME niyah_dataset_test COMMAND niyah_dataset_test)
     add_test(NAME niyah_dataset_shard_test COMMAND niyah_dataset_shard_test)
+    add_test(NAME niyah_dataset_collection_test COMMAND niyah_dataset_collection_test)
     add_test(NAME niyah_transformer_test COMMAND niyah_transformer_test)
     add_test(NAME niyah_decode_test COMMAND niyah_decode_test)
     add_test(NAME niyah_generation_test COMMAND niyah_generation_test)
@@ -255,5 +261,16 @@ if(NIYAH_BUILD_TESTS)
             "-DNIYAH_TRAIN_CUR=${_NIYAH_TRAIN_CUR3}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_train_resume_mismatch.cmake")
     set_tests_properties(niyah_train_resume_dataset_mismatch_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
+
+    add_test(NAME niyah_train_multishard_test
+        COMMAND ${CMAKE_COMMAND}
+            "-DNIYAH_TRAIN_EXE=$<TARGET_FILE:niyah_train>"
+            "-DNIYAH_TRAIN_TOK=${_NIYAH_TRAIN_TOK}"
+            "-DNIYAH_TRAIN_SHARD_A=${_NIYAH_TRAIN_SHARD}"
+            "-DNIYAH_TRAIN_SHARD_B=${_NIYAH_TRAIN_SHARD_ALT}"
+            "-DNIYAH_TRAIN_MULTI_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/niyah_train_multishard"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_train_multishard.cmake")
+    set_tests_properties(niyah_train_multishard_test PROPERTIES
         FIXTURES_REQUIRED niyah_train_files)
 endif()

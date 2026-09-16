@@ -19,7 +19,9 @@
 typedef struct NiyahTrainOptions {
     int mode;
     const char *tokenizer_path;
-    const char *shard_path;
+    const char **shard_paths;
+    size_t shard_count;
+    size_t shard_capacity;
     const char *checkpoint_in;
     const char *cursor_in;
     const char *checkpoint_out;
@@ -49,11 +51,18 @@ typedef struct NiyahTrainOptions {
     int have_max_grad_norm;
 } NiyahTrainOptions;
 
+static void train_options_destroy(NiyahTrainOptions *options)
+{
+    if (options == NULL) return;
+    free(options->shard_paths);
+    memset(options, 0, sizeof(*options));
+}
+
 static void usage(FILE *stream)
 {
     fprintf(stream,
         "Usage:\n"
-        "  niyah-train new --tokenizer TOK --shard SHARD --checkpoint-out CKPT --cursor-out CURSOR\n"
+        "  niyah-train new --tokenizer TOK --shard SHARD [--shard SHARD ...] --checkpoint-out CKPT --cursor-out CURSOR\n"
         "      --updates N --batch-size N --accumulation-steps N\n"
         "      --model-seed N --data-seed N --context-length N --embedding-dim N\n"
         "      --layers N --heads N --kv-heads N --ffn-hidden-dim N\n"
@@ -61,7 +70,7 @@ static void usage(FILE *stream)
         "      --learning-rate F --beta1 F --beta2 F --epsilon F\n"
         "      --weight-decay F --max-grad-norm F\n"
         "\n"
-        "  niyah-train resume --tokenizer TOK --shard SHARD\n"
+        "  niyah-train resume --tokenizer TOK --shard SHARD [--shard SHARD ...]\n"
         "      --checkpoint-in CKPT --cursor-in CURSOR\n"
         "      --checkpoint-out CKPT --cursor-out CURSOR\n"
         "      --updates N --batch-size N --accumulation-steps N\n"
@@ -153,6 +162,11 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
     else if (strcmp(argv[1], "resume") == 0) options->mode = NIYAH_TRAIN_MODE_RESUME;
     else return 0;
 
+    options->shard_capacity = (size_t)argc;
+    options->shard_paths = (const char **)calloc(
+        options->shard_capacity, sizeof(*options->shard_paths));
+    if (options->shard_paths == NULL) return 0;
+
     for (i = 2; i < argc; ++i) {
         const char *key = argv[i];
         const char *value;
@@ -161,7 +175,8 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
             options->tokenizer_path = value;
         } else if (strcmp(key, "--shard") == 0) {
             value = next_value(argc, argv, &i); if (value == NULL) return 0;
-            options->shard_path = value;
+            if (options->shard_count >= options->shard_capacity) return 0;
+            options->shard_paths[options->shard_count++] = value;
         } else if (strcmp(key, "--checkpoint-in") == 0) {
             value = next_value(argc, argv, &i); if (value == NULL) return 0;
             options->checkpoint_in = value;
@@ -269,7 +284,8 @@ static int new_fields_present(const NiyahTrainOptions *o)
 
 static int validate_options(const NiyahTrainOptions *o)
 {
-    if (o->tokenizer_path == NULL || o->shard_path == NULL ||
+    if (o->tokenizer_path == NULL || o->shard_paths == NULL ||
+        o->shard_count == 0U ||
         o->checkpoint_out == NULL || o->cursor_out == NULL ||
         o->updates == 0U || o->batch_size == 0U ||
         o->accumulation_steps == 0U)
@@ -327,7 +343,7 @@ int main(int argc, char **argv)
 {
     NiyahTrainOptions options;
     NiyahTokenizer *tokenizer = NULL;
-    NiyahDatasetShard shard;
+    NiyahDatasetShard *shards = NULL;
     NiyahTrainingSample *samples = NULL;
     NiyahDatasetCursor cursor;
     NiyahModel model;
@@ -335,6 +351,8 @@ int main(int argc, char **argv)
     NiyahAdamWConfig optimizer_config;
     size_t sample_count = 0U;
     size_t sample_bytes = 0U;
+    size_t shard_index;
+    size_t sample_offset = 0U;
     size_t vocab_size;
     uint8_t dataset_identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE];
     float mean_loss = 0.0f;
@@ -342,44 +360,78 @@ int main(int argc, char **argv)
     int parsed;
     int exit_code = 1;
 
-    memset(&shard, 0, sizeof(shard));
     memset(&cursor, 0, sizeof(cursor));
     memset(&model, 0, sizeof(model));
     memset(&optimizer_state, 0, sizeof(optimizer_state));
     memset(&optimizer_config, 0, sizeof(optimizer_config));
 
     parsed = parse_options(argc, argv, &options);
-    if (parsed == 2) return 0;
+    if (parsed == 2) {
+        train_options_destroy(&options);
+        return 0;
+    }
     if (parsed == 0 || !validate_options(&options)) {
         usage(stderr);
+        train_options_destroy(&options);
         return 2;
     }
     if (path_exists(options.checkpoint_out) || path_exists(options.cursor_out)) {
         fprintf(stderr, "output_path_exists=1\n");
+        train_options_destroy(&options);
         return 2;
     }
 
     status = niyah_tokenizer_load(options.tokenizer_path, &tokenizer);
-    if (status != NIYAH_OK) return fail_status("tokenizer_load", status);
-
-    status = niyah_dataset_shard_load(options.shard_path, tokenizer, &shard);
     if (status != NIYAH_OK) {
-        exit_code = fail_status("shard_load", status);
+        train_options_destroy(&options);
+        return fail_status("tokenizer_load", status);
+    }
+
+    if (options.shard_count > SIZE_MAX / sizeof(*shards)) {
+        exit_code = fail_status("shard_allocation", NIYAH_ERR_OVERFLOW);
+        goto cleanup;
+    }
+    shards = (NiyahDatasetShard *)calloc(options.shard_count, sizeof(*shards));
+    if (shards == NULL) {
+        exit_code = fail_status("shard_allocation", NIYAH_ERR_OUT_OF_MEMORY);
         goto cleanup;
     }
 
-    status = niyah_dataset_shard_identity_sha256(
-        &shard, dataset_identity);
+    for (shard_index = 0U; shard_index < options.shard_count; ++shard_index) {
+        status = niyah_dataset_shard_load(
+            options.shard_paths[shard_index], tokenizer, &shards[shard_index]);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("shard_load", status);
+            goto cleanup;
+        }
+    }
+
+    if (options.shard_count == 1U) {
+        status = niyah_dataset_shard_identity_sha256(
+            &shards[0U], dataset_identity);
+    } else {
+        status = niyah_dataset_collection_identity_sha256(
+            shards, options.shard_count, dataset_identity);
+    }
     if (status != NIYAH_OK) {
         exit_code = fail_status("dataset_identity", status);
         goto cleanup;
     }
 
-    status = niyah_training_samples_from_shard(
-        &shard, NULL, 0U, &sample_count);
-    if (status != NIYAH_OK) {
-        exit_code = fail_status("sample_query", status);
-        goto cleanup;
+    sample_count = 0U;
+    for (shard_index = 0U; shard_index < options.shard_count; ++shard_index) {
+        size_t shard_samples = 0U;
+        status = niyah_training_samples_from_shard(
+            &shards[shard_index], NULL, 0U, &shard_samples);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("sample_query", status);
+            goto cleanup;
+        }
+        if (sample_count > SIZE_MAX - shard_samples) {
+            exit_code = fail_status("sample_count", NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+        sample_count += shard_samples;
     }
     if (sample_count > SIZE_MAX / sizeof(*samples)) {
         exit_code = fail_status("sample_allocation", NIYAH_ERR_OVERFLOW);
@@ -391,10 +443,22 @@ int main(int argc, char **argv)
         exit_code = fail_status("sample_allocation", NIYAH_ERR_OUT_OF_MEMORY);
         goto cleanup;
     }
-    status = niyah_training_samples_from_shard(
-        &shard, samples, sample_count, &sample_count);
-    if (status != NIYAH_OK) {
-        exit_code = fail_status("sample_build", status);
+    sample_offset = 0U;
+    for (shard_index = 0U; shard_index < options.shard_count; ++shard_index) {
+        size_t shard_samples = 0U;
+        status = niyah_training_samples_from_shard(
+            &shards[shard_index],
+            samples + sample_offset,
+            sample_count - sample_offset,
+            &shard_samples);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("sample_build", status);
+            goto cleanup;
+        }
+        sample_offset += shard_samples;
+    }
+    if (sample_offset != sample_count) {
+        exit_code = fail_status("sample_build", NIYAH_ERR_INVALID_CONFIG);
         goto cleanup;
     }
 
@@ -495,6 +559,7 @@ int main(int argc, char **argv)
 
     printf("mode=%s\n",
            options.mode == NIYAH_TRAIN_MODE_NEW ? "new" : "resume");
+    printf("shards=%zu\n", options.shard_count);
     printf("samples=%zu\n", sample_count);
     printf("updates=%zu\n", options.updates);
     printf("batch_size=%zu\n", options.batch_size);
@@ -512,7 +577,12 @@ cleanup:
     niyah_adamw_state_destroy(&optimizer_state);
     niyah_model_destroy(&model);
     free(samples);
-    niyah_dataset_shard_destroy(&shard);
+    if (shards != NULL) {
+        for (shard_index = 0U; shard_index < options.shard_count; ++shard_index)
+            niyah_dataset_shard_destroy(&shards[shard_index]);
+    }
+    free(shards);
     niyah_tokenizer_destroy(tokenizer);
+    train_options_destroy(&options);
     return exit_code;
 }

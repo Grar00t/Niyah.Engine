@@ -362,6 +362,51 @@ NiyahStatus niyah_dataset_shard_identity_sha256(
     return NIYAH_OK;
 }
 
+NiyahStatus niyah_dataset_collection_identity_sha256(
+    const NiyahDatasetShard *shards,
+    size_t shard_count,
+    uint8_t out_identity[NIYAH_DATASET_COLLECTION_IDENTITY_SHA256_SIZE])
+{
+    static const unsigned char domain[] = "NIYAH-DATASET-COLLECTION-V1";
+    NiyahSha256 sha;
+    unsigned char count_bytes[8];
+    uint8_t shard_identity[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    size_t i;
+    NiyahStatus status;
+
+    if (shards == NULL || out_identity == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    if (shard_count == 0U)
+        return NIYAH_ERR_INVALID_CONFIG;
+    if (shard_count > (size_t)UINT64_MAX)
+        return NIYAH_ERR_OVERFLOW;
+    if (NIYAH_DATASET_COLLECTION_IDENTITY_SHA256_SIZE !=
+        NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE)
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    niyah_sha256_init(&sha);
+    niyah_sha256_update(&sha, domain, sizeof(domain) - 1U);
+    store_u64_le(count_bytes, (uint64_t)shard_count);
+    niyah_sha256_update(&sha, count_bytes, sizeof(count_bytes));
+
+    for (i = 0U; i < shard_count; ++i) {
+        if (i != 0U &&
+            memcmp(shards[0U].tokenizer_identity,
+                   shards[i].tokenizer_identity,
+                   NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE) != 0)
+            return NIYAH_ERR_INVALID_CONFIG;
+
+        status = niyah_dataset_shard_identity_sha256(
+            &shards[i], shard_identity);
+        if (status != NIYAH_OK)
+            return status;
+        niyah_sha256_update(&sha, shard_identity, sizeof(shard_identity));
+    }
+
+    niyah_sha256_final(&sha, out_identity);
+    return NIYAH_OK;
+}
+
 NiyahStatus niyah_dataset_shard_save(
     const NiyahDatasetShard *shard,
     const NiyahTokenizer *tokenizer,
