@@ -2,6 +2,7 @@
 #define NIYAH_CHECKPOINT_H
 
 #include "niyah/optimizer.h"
+#include "niyah/tokenizer.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,6 +17,20 @@ NiyahStatus niyah_checkpoint_load(const char *path,
                                   NiyahModel *out_model,
                                   NiyahAdamWState *out_optimizer_state,
                                   NiyahAdamWConfig *out_optimizer_config);
+
+NiyahStatus niyah_checkpoint_save_with_tokenizer(
+    const char *path,
+    const NiyahModel *model,
+    const NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    const NiyahTokenizer *tokenizer);
+
+NiyahStatus niyah_checkpoint_load_with_tokenizer(
+    const char *path,
+    const NiyahTokenizer *tokenizer,
+    NiyahModel *out_model,
+    NiyahAdamWState *out_optimizer_state,
+    NiyahAdamWConfig *out_optimizer_config);
 
 #ifdef __cplusplus
 }

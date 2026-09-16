@@ -1,4 +1,5 @@
 #include "niyah/checkpoint.h"
+#include "niyah/tokenizer.h"
 #include "niyah/optimizer.h"
 #include "niyah/transformer.h"
 
@@ -572,12 +573,134 @@ static void test_public_adamw_validator(void)
     c = test_optimizer_config(); c.max_grad_norm = 0.0f; CHECK(niyah_adamw_config_validate(&c) == NIYAH_ERR_INVALID_CONFIG);
 }
 
+
+static void test_tokenizer_identity_binding(void)
+{
+    static const uint8_t corpus_a[] = "aaaaaaaaaaaaaaaaaaaaaaaa";
+    static const uint8_t corpus_b[] = "zzzzzzzzzzzzzzzzzzzzzzzz";
+    const char *v2_path = "niyah_checkpoint_tokenizer_v2.bin";
+    const char *v1_path = "niyah_checkpoint_tokenizer_v1.bin";
+
+    NiyahTokenizerTrainConfig tc;
+    NiyahTokenizer *tokenizer_a = NULL;
+    NiyahTokenizer *tokenizer_b = NULL;
+    uint8_t identity_a[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+    uint8_t identity_b[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+
+    NiyahModelConfig mc;
+    NiyahModel model;
+    NiyahAdamWState state;
+    NiyahAdamWConfig config;
+
+    NiyahModel loaded;
+    NiyahAdamWState loaded_state;
+    NiyahAdamWConfig loaded_config;
+    NiyahStatus status;
+    size_t bytes;
+
+    memset(&model, 0, sizeof(model));
+    memset(&state, 0, sizeof(state));
+    memset(&loaded, 0, sizeof(loaded));
+    memset(&loaded_state, 0, sizeof(loaded_state));
+    memset(&loaded_config, 0, sizeof(loaded_config));
+
+    tc.target_vocab_size = 260U;
+    tc.min_pair_frequency = 1U;
+
+    CHECK(niyah_tokenizer_train(
+              corpus_a, sizeof(corpus_a) - 1U,
+              &tc, &tokenizer_a) == NIYAH_OK);
+    CHECK(niyah_tokenizer_train(
+              corpus_b, sizeof(corpus_b) - 1U,
+              &tc, &tokenizer_b) == NIYAH_OK);
+    if (tokenizer_a == NULL || tokenizer_b == NULL) {
+        goto cleanup;
+    }
+
+    CHECK(niyah_tokenizer_vocab_size(tokenizer_a) == 260U);
+    CHECK(niyah_tokenizer_vocab_size(tokenizer_b) == 260U);
+    CHECK(niyah_tokenizer_identity_sha256(
+              tokenizer_a, identity_a) == NIYAH_OK);
+    CHECK(niyah_tokenizer_identity_sha256(
+              tokenizer_b, identity_b) == NIYAH_OK);
+    CHECK(memcmp(identity_a, identity_b, sizeof(identity_a)) != 0);
+
+    mc = test_model_config(1);
+    mc.vocab_size = (uint32_t)niyah_tokenizer_vocab_size(tokenizer_a);
+    config = test_optimizer_config();
+
+    CHECK(niyah_model_create(&model, &mc) == NIYAH_OK);
+    if (model.weights == NULL) {
+        goto cleanup;
+    }
+    CHECK(niyah_model_reset_parameters(
+              &model, UINT64_C(20260916)) == NIYAH_OK);
+    CHECK(niyah_adamw_state_create(&state, &model) == NIYAH_OK);
+    if (state.m == NULL || state.v == NULL) {
+        goto cleanup;
+    }
+
+    CHECK(niyah_checkpoint_save_with_tokenizer(
+              v2_path, &model, &state, &config,
+              tokenizer_a) == NIYAH_OK);
+
+    status = niyah_checkpoint_load_with_tokenizer(
+        v2_path, tokenizer_a,
+        &loaded, &loaded_state, &loaded_config);
+    CHECK(status == NIYAH_OK);
+    if (status == NIYAH_OK) {
+        bytes = model.weight_count * sizeof(float);
+        CHECK(config_equal(&model.config, &loaded.config));
+        CHECK(model.weight_count == loaded.weight_count);
+        CHECK(memcmp(model.weights, loaded.weights, bytes) == 0);
+        CHECK(memcmp(state.m, loaded_state.m, bytes) == 0);
+        CHECK(memcmp(state.v, loaded_state.v, bytes) == 0);
+        CHECK(optimizer_config_equal(&config, &loaded_config));
+    }
+    destroy_loaded(&loaded, &loaded_state);
+    memset(&loaded, 0, sizeof(loaded));
+    memset(&loaded_state, 0, sizeof(loaded_state));
+    memset(&loaded_config, 0, sizeof(loaded_config));
+
+    status = niyah_checkpoint_load_with_tokenizer(
+        v2_path, tokenizer_b,
+        &loaded, &loaded_state, &loaded_config);
+    CHECK(status == NIYAH_ERR_INVALID_CONFIG);
+    CHECK(outputs_empty(&loaded, &loaded_state));
+
+    memset(&loaded_config, 0, sizeof(loaded_config));
+    status = niyah_checkpoint_load(
+        v2_path, &loaded, &loaded_state, &loaded_config);
+    CHECK(status == NIYAH_ERR_UNSUPPORTED_VERSION);
+    CHECK(outputs_empty(&loaded, &loaded_state));
+
+    CHECK(niyah_checkpoint_save(
+              v1_path, &model, &state, &config) == NIYAH_OK);
+
+    memset(&loaded_config, 0, sizeof(loaded_config));
+    status = niyah_checkpoint_load_with_tokenizer(
+        v1_path, tokenizer_a,
+        &loaded, &loaded_state, &loaded_config);
+    CHECK(status == NIYAH_ERR_UNSUPPORTED_VERSION);
+    CHECK(outputs_empty(&loaded, &loaded_state));
+
+cleanup:
+    destroy_loaded(&loaded, &loaded_state);
+    niyah_adamw_state_destroy(&state);
+    niyah_model_destroy(&model);
+    niyah_tokenizer_destroy(tokenizer_b);
+    niyah_tokenizer_destroy(tokenizer_a);
+    (void)remove(v2_path);
+    (void)remove(v1_path);
+}
+
 int main(void)
 {
     test_public_adamw_validator();
     roundtrip_case(1, "niyah_checkpoint_tied.bin");
     roundtrip_case(0, "niyah_checkpoint_untied.bin");
     test_resume_equivalence();
+    test_tokenizer_identity_binding();
     test_format_and_malformed();
     test_save_preflight_no_truncate();
 
