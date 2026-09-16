@@ -183,16 +183,20 @@ if(NIYAH_BUILD_TESTS)
 
     set(_NIYAH_TRAIN_TOK "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture.tok")
     set(_NIYAH_TRAIN_SHARD "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture.srd")
+    set(_NIYAH_TRAIN_SHARD_ALT "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_alt.srd")
     set(_NIYAH_TRAIN_CKPT1 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_1.ckpt")
     set(_NIYAH_TRAIN_CUR1 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_1.cursor")
     set(_NIYAH_TRAIN_CKPT2 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_2.ckpt")
     set(_NIYAH_TRAIN_CUR2 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_2.cursor")
+    set(_NIYAH_TRAIN_CKPT3 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_3.ckpt")
+    set(_NIYAH_TRAIN_CUR3 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_3.cursor")
 
     add_test(NAME niyah_train_help_test COMMAND niyah_train --help)
 
     add_test(NAME niyah_training_fixture_test
         COMMAND niyah_training_fixture
             "${_NIYAH_TRAIN_TOK}" "${_NIYAH_TRAIN_SHARD}"
+            "${_NIYAH_TRAIN_SHARD_ALT}"
             "${_NIYAH_TRAIN_CKPT1}" "${_NIYAH_TRAIN_CUR1}"
             "${_NIYAH_TRAIN_CKPT2}" "${_NIYAH_TRAIN_CUR2}")
     set_tests_properties(niyah_training_fixture_test PROPERTIES
@@ -240,4 +244,16 @@ if(NIYAH_BUILD_TESTS)
     set_tests_properties(niyah_train_resume_test PROPERTIES
         FIXTURES_REQUIRED niyah_train_files
         DEPENDS niyah_train_new_test)
+
+    add_test(NAME niyah_train_resume_dataset_mismatch_test
+        COMMAND ${CMAKE_COMMAND}
+            "-DNIYAH_TRAIN_EXE=$<TARGET_FILE:niyah_train>"
+            "-DNIYAH_TRAIN_TOK=${_NIYAH_TRAIN_TOK}"
+            "-DNIYAH_TRAIN_SHARD=${_NIYAH_TRAIN_SHARD}"
+            "-DNIYAH_TRAIN_SHARD_ALT=${_NIYAH_TRAIN_SHARD_ALT}"
+            "-DNIYAH_TRAIN_CKPT=${_NIYAH_TRAIN_CKPT3}"
+            "-DNIYAH_TRAIN_CUR=${_NIYAH_TRAIN_CUR3}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_train_resume_mismatch.cmake")
+    set_tests_properties(niyah_train_resume_dataset_mismatch_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
 endif()

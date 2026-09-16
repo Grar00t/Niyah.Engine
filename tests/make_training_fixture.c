@@ -18,7 +18,7 @@ int main(int argc, char **argv)
     NiyahStatus status;
     int i;
 
-    if (argc < 3) return 2;
+    if (argc < 4) return 2;
     for (i = 1; i < argc; ++i) (void)remove(argv[i]);
     memset(&shard, 0, sizeof(shard));
 
@@ -39,6 +39,27 @@ int main(int argc, char **argv)
         return 5;
     }
     status = niyah_dataset_shard_save(&shard, tokenizer, argv[2]);
+    if (status == NIYAH_OK) {
+        size_t i;
+        size_t j;
+        int changed = 0;
+        for (i = 1U; i + 1U < shard.token_count && changed == 0; ++i) {
+            for (j = i + 1U; j + 1U < shard.token_count; ++j) {
+                if (shard.tokens[i] != shard.tokens[j]) {
+                    uint32_t tmp = shard.tokens[i];
+                    shard.tokens[i] = shard.tokens[j];
+                    shard.tokens[j] = tmp;
+                    changed = 1;
+                    break;
+                }
+            }
+        }
+        if (changed == 0) {
+            status = NIYAH_ERR_INVALID_CONFIG;
+        } else {
+            status = niyah_dataset_shard_save(&shard, tokenizer, argv[3]);
+        }
+    }
     niyah_dataset_shard_destroy(&shard);
     niyah_tokenizer_destroy(tokenizer);
     return status == NIYAH_OK ? 0 : 6;

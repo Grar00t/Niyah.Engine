@@ -84,12 +84,50 @@ static void test_resume(void)
     CHECK(niyah_dataset_cursor_load(p,&b)==NIYAH_OK);
     CHECK(a.sample_count==b.sample_count);CHECK(a.position==b.position);
     CHECK(a.seed==b.seed);CHECK(a.epoch==b.epoch);
+    CHECK(a.has_dataset_identity==0);CHECK(b.has_dataset_identity==0);
     for(i=0U;i<50U;++i){
         CHECK(niyah_dataset_cursor_next(&a,&ai)==NIYAH_OK);
         CHECK(niyah_dataset_cursor_next(&b,&bi)==NIYAH_OK);
         CHECK(ai==bi);CHECK(a.epoch==b.epoch);CHECK(a.position==b.position);
     }
     niyah_dataset_cursor_destroy(&b);niyah_dataset_cursor_destroy(&a);(void)remove(p);
+}
+
+static void test_bound_resume_v2(void)
+{
+    const char *p="niyah_dataset_cursor_v2.bin";
+    NiyahDatasetCursor a,b;
+    unsigned char identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE];
+    unsigned char *d=NULL;
+    size_t n=0U;
+    size_t i;
+
+    memset(&a,0,sizeof(a));memset(&b,0,sizeof(b));(void)remove(p);
+    for(i=0U;i<sizeof(identity);++i) identity[i]=(unsigned char)(i*7U+3U);
+
+    CHECK(niyah_dataset_cursor_init(&a,13U,UINT64_C(55))==NIYAH_OK);
+    CHECK(niyah_dataset_cursor_bind_identity(&a,identity)==NIYAH_OK);
+    CHECK(a.has_dataset_identity==1);
+    CHECK(memcmp(a.dataset_identity,identity,sizeof(identity))==0);
+    CHECK(niyah_dataset_cursor_save(&a,p)==NIYAH_OK);
+
+    d=read_all(p,&n);CHECK(d!=NULL);CHECK(n==88U);
+    if(d!=NULL&&n==88U){
+        CHECK(d[8U]==2U);
+        CHECK(d[12U]==1U);
+        CHECK(memcmp(d+48U,identity,sizeof(identity))==0);
+    }
+
+    CHECK(niyah_dataset_cursor_load(p,&b)==NIYAH_OK);
+    CHECK(b.has_dataset_identity==1);
+    CHECK(memcmp(b.dataset_identity,identity,sizeof(identity))==0);
+    CHECK(a.sample_count==b.sample_count);
+    CHECK(a.seed==b.seed);CHECK(a.epoch==b.epoch);CHECK(a.position==b.position);
+
+    free(d);
+    niyah_dataset_cursor_destroy(&b);
+    niyah_dataset_cursor_destroy(&a);
+    (void)remove(p);
 }
 
 static void test_rejection(void)
@@ -103,7 +141,7 @@ static void test_rejection(void)
     if(d&&n==56U){
         d[55U]^=1U;CHECK(write_all(bad,d,n));
         CHECK(niyah_dataset_cursor_load(bad,&l)==NIYAH_ERR_CORRUPT_DATA);CHECK(l.order==NULL);
-        d[55U]^=1U;d[8U]=2U;CHECK(write_all(bad,d,n));
+        d[55U]^=1U;d[8U]=3U;CHECK(write_all(bad,d,n));
         CHECK(niyah_dataset_cursor_load(bad,&l)==NIYAH_ERR_UNSUPPORTED_VERSION);CHECK(l.order==NULL);
         d[8U]=1U;CHECK(write_all(bad,d,n-1U));
         CHECK(niyah_dataset_cursor_load(bad,&l)==NIYAH_ERR_CORRUPT_DATA);CHECK(l.order==NULL);
@@ -116,6 +154,7 @@ int main(void)
     test_permutation();
     test_determinism();
     test_resume();
+    test_bound_resume_v2();
     test_rejection();
     if(failures){fprintf(stderr,"niyah_dataset_test: %d failure(s)\n",failures);return 1;}
     puts("NIYAH_DATASET_LIFECYCLE_P6_D=PASS");
