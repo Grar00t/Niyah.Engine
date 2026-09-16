@@ -65,7 +65,7 @@ Implemented:
 
 Planned:
 
-8. Deterministic dataset/training lifecycle: cursor/order persistence, tokenizer-bound binary shard V1 preprocessing/persistence, the reference training loop, and deterministic per-sample gradient accumulation with one averaged optimizer update are implemented; production multi-shard tooling, a training executable, and true tensor mini-batching remain.
+8. Deterministic dataset/training lifecycle: cursor/order persistence, tokenizer-bound binary shard V1 preprocessing/persistence, zero-copy shard-to-training sample adaptation, the reference training loop, and deterministic per-sample gradient accumulation with one averaged optimizer update are implemented; production multi-shard tooling, a training executable, and true tensor mini-batching remain.
 9. Held-out validation/perplexity: read-only token-weighted mean loss and perplexity evaluation are implemented.
 10. Optional CUDA kernels and residency.
 

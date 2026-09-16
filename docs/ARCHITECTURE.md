@@ -77,6 +77,7 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 - tokenizer-bound Checkpoint V2 while Checkpoint V1 remains supported;
 - deterministic dataset sample ordering with resumable cursor persistence;
 - deterministic text preprocessing into tokenizer-bound NIYAHSRD V1 binary shards with shifted causal-LM sample views;
+- zero-copy adaptation from a loaded dataset shard into NiyahTrainingSample descriptors;
 - deterministic single-sample reference training loop over dataset cursor, backward gradients, and AdamW;
 - deterministic sequential per-sample gradient accumulation with one averaged AdamW update per accumulated group;
 - read-only held-out evaluation with token-weighted mean cross-entropy and perplexity;
