@@ -168,6 +168,14 @@ if(NIYAH_BUILD_TESTS)
     add_test(NAME niyah_cli_help_test
              COMMAND niyah_cli --help)
 
+    add_test(NAME niyah_cli_prepare_test
+        COMMAND ${CMAKE_COMMAND}
+            -DNIYAH_CLI=$<TARGET_FILE:niyah_cli>
+            -DNIYAH_TRAIN=$<TARGET_FILE:niyah_train>
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_prepare.cmake)
+
+
     if(NIYAH_ENABLE_CUDA)
         add_executable(niyah_cuda_matvec_test tests/test_cuda_matvec.c)
         target_include_directories(niyah_cuda_matvec_test

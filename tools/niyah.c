@@ -1,4 +1,5 @@
 #include "niyah/checkpoint.h"
+#include "niyah/dataset.h"
 #include "niyah/decode.h"
 #include "niyah/generate.h"
 #include "niyah/optimizer.h"
@@ -15,6 +16,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct NiyahPrepareOptions {
+    const char *corpus_path;
+    const char *tokenizer_out;
+    const char *shard_out;
+    uint32_t target_vocab_size;
+    uint32_t min_pair_frequency;
+    size_t sequence_length;
+    int have_target_vocab_size;
+    int have_min_pair_frequency;
+    int have_sequence_length;
+} NiyahPrepareOptions;
+
 typedef struct NiyahRunOptions {
     const char *tokenizer_path;
     const char *checkpoint_path;
@@ -30,6 +43,9 @@ static void usage(FILE *stream)
 {
     fprintf(stream,
         "Usage:\n"
+        "  niyah prepare --corpus FILE --tokenizer-out TOK --shard-out SHARD\n"
+        "      --target-vocab N --min-pair-frequency N --sequence-length N\n"
+        "\n"
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
         "      [--backend cpu|cuda]\n");
@@ -93,6 +109,19 @@ static int parse_size(const char *text, size_t *out)
     return 1;
 }
 
+static int parse_u32(const char *text, uint32_t *out)
+{
+    uint64_t value;
+
+    if (!parse_u64(text, &value) ||
+        value > (uint64_t)UINT32_MAX) {
+        return 0;
+    }
+
+    *out = (uint32_t)value;
+    return 1;
+}
+
 static int parse_float_value(const char *text, float *out)
 {
     char *end = NULL;
@@ -123,6 +152,272 @@ static const char *next_value(int argc, char **argv, int *index)
 
     *index += 1;
     return argv[*index];
+}
+
+static int parse_prepare_options(
+    int argc,
+    char **argv,
+    NiyahPrepareOptions *options)
+{
+    int i;
+
+    memset(options, 0, sizeof(*options));
+
+    for (i = 2; i < argc; ++i) {
+        const char *key = argv[i];
+        const char *value;
+
+        if (strcmp(key, "--corpus") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->corpus_path = value;
+        } else if (strcmp(key, "--tokenizer-out") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->tokenizer_out = value;
+        } else if (strcmp(key, "--shard-out") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->shard_out = value;
+        } else if (strcmp(key, "--target-vocab") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL ||
+                !parse_u32(value, &options->target_vocab_size)) {
+                return 0;
+            }
+            options->have_target_vocab_size = 1;
+        } else if (strcmp(key, "--min-pair-frequency") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL ||
+                !parse_u32(value, &options->min_pair_frequency)) {
+                return 0;
+            }
+            options->have_min_pair_frequency = 1;
+        } else if (strcmp(key, "--sequence-length") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL ||
+                !parse_size(value, &options->sequence_length)) {
+                return 0;
+            }
+            options->have_sequence_length = 1;
+        } else {
+            return 0;
+        }
+    }
+
+    return options->corpus_path != NULL &&
+           options->tokenizer_out != NULL &&
+           options->shard_out != NULL &&
+           strcmp(options->tokenizer_out, options->shard_out) != 0 &&
+           options->have_target_vocab_size &&
+           options->target_vocab_size >= NIYAH_TOKENIZER_BASE_VOCAB_SIZE &&
+           options->have_min_pair_frequency &&
+           options->min_pair_frequency > 0U &&
+           options->have_sequence_length &&
+           options->sequence_length > 0U;
+}
+
+static FILE *niyah_cli_fopen(const char *path, const char *mode)
+{
+#if defined(_MSC_VER)
+    FILE *file = NULL;
+    if (fopen_s(&file, path, mode) != 0) {
+        return NULL;
+    }
+    return file;
+#else
+    return fopen(path, mode);
+#endif
+}
+
+static int path_exists(const char *path)
+{
+    FILE *file;
+
+    if (path == NULL) {
+        return 0;
+    }
+
+    file = niyah_cli_fopen(path, "rb");
+    if (file == NULL) {
+        return 0;
+    }
+
+    (void)fclose(file);
+    return 1;
+}
+
+static int read_file_bytes(
+    const char *path,
+    uint8_t **out_bytes,
+    size_t *out_size)
+{
+    FILE *file = NULL;
+    uint8_t *bytes = NULL;
+    long end;
+    size_t size;
+
+    if (path == NULL || out_bytes == NULL || out_size == NULL) {
+        return 0;
+    }
+
+    *out_bytes = NULL;
+    *out_size = 0U;
+
+    file = niyah_cli_fopen(path, "rb");
+    if (file == NULL) {
+        return 0;
+    }
+
+    if (fseek(file, 0L, SEEK_END) != 0) {
+        (void)fclose(file);
+        return 0;
+    }
+
+    end = ftell(file);
+    if (end <= 0L) {
+        (void)fclose(file);
+        return 0;
+    }
+
+    if ((uint64_t)end > (uint64_t)SIZE_MAX) {
+        (void)fclose(file);
+        return 0;
+    }
+
+    size = (size_t)end;
+
+    if (fseek(file, 0L, SEEK_SET) != 0) {
+        (void)fclose(file);
+        return 0;
+    }
+
+    bytes = (uint8_t *)malloc(size);
+    if (bytes == NULL) {
+        (void)fclose(file);
+        return 0;
+    }
+
+    if (fread(bytes, 1U, size, file) != size) {
+        free(bytes);
+        (void)fclose(file);
+        return 0;
+    }
+
+    if (fclose(file) != 0) {
+        free(bytes);
+        return 0;
+    }
+
+    *out_bytes = bytes;
+    *out_size = size;
+    return 1;
+}
+
+static int prepare_command(int argc, char **argv)
+{
+    NiyahPrepareOptions options;
+    NiyahTokenizerTrainConfig tokenizer_config;
+    NiyahTokenizer *tokenizer = NULL;
+    NiyahDatasetShard shard;
+    uint8_t *corpus = NULL;
+    size_t corpus_size = 0U;
+    NiyahStatus status;
+    int tokenizer_created = 0;
+    int shard_created = 0;
+    int exit_code = 1;
+
+    memset(&tokenizer_config, 0, sizeof(tokenizer_config));
+    memset(&shard, 0, sizeof(shard));
+
+    if (!parse_prepare_options(argc, argv, &options)) {
+        usage(stderr);
+        return 2;
+    }
+
+    if (path_exists(options.tokenizer_out) ||
+        path_exists(options.shard_out)) {
+        fprintf(stderr, "error_stage=output_exists status=NIYAH_ERR_INVALID_ARGUMENT\n");
+        return 2;
+    }
+
+    if (!read_file_bytes(
+            options.corpus_path,
+            &corpus,
+            &corpus_size)) {
+        exit_code = fail_status("corpus_read", NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    tokenizer_config.target_vocab_size =
+        options.target_vocab_size;
+    tokenizer_config.min_pair_frequency =
+        options.min_pair_frequency;
+
+    status = niyah_tokenizer_train(
+        corpus,
+        corpus_size,
+        &tokenizer_config,
+        &tokenizer);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("tokenizer_train", status);
+        goto cleanup;
+    }
+
+    status = niyah_dataset_shard_build_text(
+        tokenizer,
+        corpus,
+        corpus_size,
+        options.sequence_length,
+        &shard);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("shard_build", status);
+        goto cleanup;
+    }
+
+    status = niyah_tokenizer_save(
+        tokenizer,
+        options.tokenizer_out);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("tokenizer_save", status);
+        goto cleanup;
+    }
+    tokenizer_created = 1;
+
+    status = niyah_dataset_shard_save(
+        &shard,
+        tokenizer,
+        options.shard_out);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("shard_save", status);
+        goto cleanup;
+    }
+    shard_created = 1;
+
+    fprintf(
+        stdout,
+        "P8C_PREPARE=PASS vocab=%zu merges=%zu tokens=%zu samples=%zu\n",
+        niyah_tokenizer_vocab_size(tokenizer),
+        niyah_tokenizer_merge_count(tokenizer),
+        shard.token_count,
+        shard.sample_count);
+
+    exit_code = 0;
+
+cleanup:
+    if (exit_code != 0) {
+        if (shard_created) {
+            (void)remove(options.shard_out);
+        }
+        if (tokenizer_created) {
+            (void)remove(options.tokenizer_out);
+        }
+    }
+
+    niyah_dataset_shard_destroy(&shard);
+    niyah_tokenizer_destroy(tokenizer);
+    free(corpus);
+    return exit_code;
 }
 
 static int parse_run_options(
@@ -522,6 +817,11 @@ int main(int argc, char **argv)
         strcmp(argv[1], "--help") == 0) {
         usage(stdout);
         return 0;
+    }
+
+    if (argc >= 2 &&
+        strcmp(argv[1], "prepare") == 0) {
+        return prepare_command(argc, argv);
     }
 
     if (argc >= 2 &&
