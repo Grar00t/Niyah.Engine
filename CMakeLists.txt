@@ -93,6 +93,37 @@ target_include_directories(niyah
 
 if(NIYAH_ENABLE_CUDA)
     target_link_libraries(niyah_cuda_backend PRIVATE niyah)
+
+    add_executable(niyah_cuda_generation_bench
+        tools/niyah_cuda_generation_bench.c
+    )
+    set_target_properties(
+        niyah_cuda_generation_bench
+        PROPERTIES OUTPUT_NAME "niyah-cuda-generation-bench"
+    )
+    target_include_directories(
+        niyah_cuda_generation_bench
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(
+        niyah_cuda_generation_bench
+        PRIVATE
+            niyah
+            niyah_cuda_backend
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_cuda_generation_bench
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_cuda_generation_bench
+            PRIVATE -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
 endif()
 
 if(MSVC)
