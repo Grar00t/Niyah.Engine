@@ -1416,3 +1416,159 @@ extern "C" int niyah_cuda_decode_token(
     decode_state->next_position = position + 1U;
     return 0;
 }
+
+static NiyahStatus niyah_cuda_generation_fail(
+    NiyahCudaDecodeState *decode_state,
+    NiyahGenerationResult *result,
+    NiyahStatus status)
+{
+    if (decode_state != NULL) {
+        (void)niyah_cuda_decode_state_reset(decode_state);
+    }
+
+    if (result != NULL) {
+        memset(result, 0, sizeof(*result));
+    }
+
+    return status;
+}
+
+extern "C" NiyahStatus niyah_cuda_generate(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaDecodeState *decode_state,
+    const uint32_t *prompt_tokens,
+    size_t prompt_count,
+    const NiyahGenerationConfig *config,
+    uint32_t *output_tokens,
+    size_t output_capacity,
+    NiyahGenerationResult *result,
+    float *host_logits,
+    size_t host_logits_count)
+{
+    const NiyahModelConfig *model_config;
+    size_t required_context;
+    size_t vocab;
+    size_t i;
+    size_t generated = 0U;
+    NiyahSampler sampler;
+    NiyahStatus status;
+
+    if (model_state == NULL ||
+        decode_state == NULL ||
+        prompt_tokens == NULL ||
+        prompt_count == 0U ||
+        config == NULL ||
+        output_tokens == NULL ||
+        result == NULL ||
+        host_logits == NULL ||
+        !niyah_cuda_decode_state_matches_model(
+            decode_state,
+            model_state)) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    memset(result, 0, sizeof(*result));
+
+    model_config = &model_state->config;
+    vocab = (size_t)model_config->vocab_size;
+
+    if (config->max_new_tokens == 0U ||
+        output_capacity < config->max_new_tokens ||
+        prompt_count >
+            (size_t)model_config->context_length ||
+        !niyah_cuda_size_add_ok(
+            prompt_count,
+            config->max_new_tokens,
+            &required_context) ||
+        required_context >
+            (size_t)model_config->context_length ||
+        host_logits_count < vocab ||
+        decode_state->next_position != 0U) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    if (config->stop_on_eos != 0 &&
+        (size_t)config->eos_token >= vocab) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    /*
+     * Validate the complete prompt before mutating CUDA KV state.
+     * The CPU path reaches the same final externally visible state on an
+     * invalid prompt because its failure path resets the cache/result.
+     */
+    for (i = 0U; i < prompt_count; ++i) {
+        if ((size_t)prompt_tokens[i] >= vocab) {
+            return niyah_cuda_generation_fail(
+                decode_state,
+                result,
+                NIYAH_ERR_INVALID_ARGUMENT);
+        }
+    }
+
+    status = niyah_sampler_init(
+        &sampler,
+        &config->sampler);
+    if (status != NIYAH_OK) {
+        return niyah_cuda_generation_fail(
+            decode_state,
+            result,
+            status);
+    }
+
+    for (i = 0U; i < prompt_count; ++i) {
+        if (niyah_cuda_decode_token(
+                model_state,
+                decode_state,
+                prompt_tokens[i],
+                host_logits,
+                host_logits_count) != 0) {
+            return niyah_cuda_generation_fail(
+                decode_state,
+                result,
+                NIYAH_ERR_IO);
+        }
+    }
+
+    result->prompt_tokens = prompt_count;
+
+    while (generated < config->max_new_tokens) {
+        uint32_t token = 0U;
+
+        status = niyah_sampler_sample(
+            &sampler,
+            host_logits,
+            vocab,
+            &token);
+        if (status != NIYAH_OK) {
+            return niyah_cuda_generation_fail(
+                decode_state,
+                result,
+                status);
+        }
+
+        output_tokens[generated] = token;
+        generated += 1U;
+        result->generated_tokens = generated;
+
+        if (config->stop_on_eos != 0 &&
+            token == config->eos_token) {
+            result->stopped_on_eos = 1;
+            break;
+        }
+
+        if (niyah_cuda_decode_token(
+                model_state,
+                decode_state,
+                token,
+                host_logits,
+                host_logits_count) != 0) {
+            return niyah_cuda_generation_fail(
+                decode_state,
+                result,
+                NIYAH_ERR_IO);
+        }
+    }
+
+    return NIYAH_OK;
+}
