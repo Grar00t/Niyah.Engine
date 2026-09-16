@@ -489,8 +489,9 @@ extern "C" int niyah_cuda_decode_state_create(
     }
 
     /*
-     * Matches niyah_decode_workspace_floats():
-     * 5*dim + 2*kv_dim + 2*ffn + context_length.
+     * CUDA attention keeps one context-length score slice per head:
+     * 5*dim + 2*kv_dim + 2*ffn + n_heads*context_length.
+     * The public CPU decode workspace contract remains unchanged.
      */
     if (!niyah_cuda_size_mul_ok(5U, dim, &workspace_floats) ||
         !niyah_cuda_size_mul_ok(2U, kv_dim, &term) ||
@@ -499,9 +500,13 @@ extern "C" int niyah_cuda_decode_state_create(
         !niyah_cuda_size_mul_ok(2U, ffn, &term) ||
         !niyah_cuda_size_add_ok(
             workspace_floats, term, &workspace_floats) ||
+        !niyah_cuda_size_mul_ok(
+            (size_t)config->n_heads,
+            (size_t)config->context_length,
+            &term) ||
         !niyah_cuda_size_add_ok(
             workspace_floats,
-            (size_t)config->context_length,
+            term,
             &workspace_floats)) {
         return 1;
     }
@@ -704,75 +709,69 @@ __global__ static void niyah_cuda_attention_one_kernel(
     const float *keys,
     const float *values,
     float *scores,
+    size_t score_stride,
     size_t layer_base,
     size_t position,
-    size_t dim,
     size_t n_heads,
     size_t n_kv_heads,
     size_t head_dim,
     size_t kv_dim)
 {
-    if (blockIdx.x == 0U && threadIdx.x == 0U) {
-        const size_t group_size = n_heads / n_kv_heads;
-        const float scale = 1.0f / sqrtf((float)head_dim);
-        size_t head;
-        size_t i;
+    const size_t head = (size_t)blockIdx.x;
 
-        for (i = 0U; i < dim; ++i) {
-            out[i] = 0.0f;
+    if (head < n_heads && threadIdx.x == 0U) {
+        const size_t group_size = n_heads / n_kv_heads;
+        const size_t kv_head = head / group_size;
+        const float *q_head = q + head * head_dim;
+        float *head_scores = scores + head * score_stride;
+        const float scale = 1.0f / sqrtf((float)head_dim);
+        float max_score = -FLT_MAX;
+        float normalizer = 0.0f;
+        size_t source;
+        size_t d;
+
+        for (source = 0U; source <= position; ++source) {
+            const float *k_head =
+                keys +
+                layer_base +
+                source * kv_dim +
+                kv_head * head_dim;
+            float dot = 0.0f;
+
+            for (d = 0U; d < head_dim; ++d) {
+                dot += q_head[d] * k_head[d];
+            }
+
+            head_scores[source] = dot * scale;
+            if (head_scores[source] > max_score) {
+                max_score = head_scores[source];
+            }
         }
 
-        for (head = 0U; head < n_heads; ++head) {
-            const size_t kv_head = head / group_size;
-            const float *q_head = q + head * head_dim;
-            float max_score = -FLT_MAX;
-            float normalizer = 0.0f;
-            size_t source;
-            size_t d;
+        for (source = 0U; source <= position; ++source) {
+            head_scores[source] =
+                expf(head_scores[source] - max_score);
+            normalizer += head_scores[source];
+        }
 
-            for (source = 0U; source <= position; ++source) {
-                const float *k_head =
-                    keys +
+        for (d = 0U; d < head_dim; ++d) {
+            float value = 0.0f;
+
+            for (source = 0U;
+                 source <= position;
+                 ++source) {
+                const float *v_head =
+                    values +
                     layer_base +
                     source * kv_dim +
                     kv_head * head_dim;
-                float dot = 0.0f;
 
-                for (d = 0U; d < head_dim; ++d) {
-                    dot += q_head[d] * k_head[d];
-                }
-
-                scores[source] = dot * scale;
-                if (scores[source] > max_score) {
-                    max_score = scores[source];
-                }
+                value +=
+                    (head_scores[source] / normalizer) *
+                    v_head[d];
             }
 
-            for (source = 0U; source <= position; ++source) {
-                scores[source] =
-                    expf(scores[source] - max_score);
-                normalizer += scores[source];
-            }
-
-            for (d = 0U; d < head_dim; ++d) {
-                float value = 0.0f;
-
-                for (source = 0U;
-                     source <= position;
-                     ++source) {
-                    const float *v_head =
-                        values +
-                        layer_base +
-                        source * kv_dim +
-                        kv_head * head_dim;
-
-                    value +=
-                        (scores[source] / normalizer) *
-                        v_head[d];
-                }
-
-                out[head * head_dim + d] = value;
-            }
+            out[head * head_dim + d] = value;
         }
     }
 }
@@ -907,9 +906,13 @@ static int niyah_cuda_decode_state_matches_model(
             expected_workspace,
             term,
             &expected_workspace) ||
+        !niyah_cuda_size_mul_ok(
+            (size_t)config->n_heads,
+            decode_state->context_length,
+            &term) ||
         !niyah_cuda_size_add_ok(
             expected_workspace,
-            decode_state->context_length,
+            term,
             &expected_workspace)) {
         return 0;
     }
@@ -1101,6 +1104,7 @@ static int niyah_cuda_attention_one_device(
         (size_t)decode_state->config.n_kv_heads;
     size_t layer_base;
     size_t per_layer;
+    unsigned int blocks;
 
     if (out == NULL ||
         q == NULL ||
@@ -1118,19 +1122,21 @@ static int niyah_cuda_attention_one_device(
         !niyah_cuda_size_mul_ok(
             (size_t)layer_index,
             per_layer,
-            &layer_base)) {
+            &layer_base) ||
+        niyah_cuda_blocks_for(
+            n_heads, 1U, &blocks) != 0) {
         return 1;
     }
 
-    niyah_cuda_attention_one_kernel<<<1U, 1U>>>(
+    niyah_cuda_attention_one_kernel<<<blocks, 1U>>>(
         out,
         q,
         (const float *)decode_state->device_keys,
         (const float *)decode_state->device_values,
         scores,
+        decode_state->context_length,
         layer_base,
         position,
-        (size_t)decode_state->config.embedding_dim,
         n_heads,
         n_kv_heads,
         decode_state->head_dim,
@@ -1207,6 +1213,7 @@ extern "C" int niyah_cuda_decode_token(
     size_t embedding_offset;
     size_t embedding_bytes;
     size_t kv_bytes;
+    size_t score_floats;
     uint32_t layer_index;
 
     if (!niyah_cuda_decode_state_matches_model(
@@ -1236,7 +1243,11 @@ extern "C" int niyah_cuda_decode_token(
         !niyah_cuda_size_mul_ok(
             dim, sizeof(float), &embedding_bytes) ||
         !niyah_cuda_size_mul_ok(
-            kv_dim, sizeof(float), &kv_bytes)) {
+            kv_dim, sizeof(float), &kv_bytes) ||
+        !niyah_cuda_size_mul_ok(
+            (size_t)config->n_heads,
+            decode_state->context_length,
+            &score_floats)) {
         return 1;
     }
 
@@ -1256,7 +1267,7 @@ extern "C" int niyah_cuda_decode_token(
 
     if ((size_t)(scores - workspace) >
             decode_state->workspace_floats ||
-        decode_state->context_length >
+        score_floats >
             decode_state->workspace_floats -
                 (size_t)(scores - workspace)) {
         return 1;

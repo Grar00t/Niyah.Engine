@@ -59,7 +59,7 @@ int main(void)
     CHECK(decode.head_dim == 2U);
     CHECK(decode.kv_dim == 4U);
     CHECK(decode.values_per_tensor == 64U);
-    CHECK(decode.workspace_floats == 88U);
+    CHECK(decode.workspace_floats == 112U);
     CHECK(decode.logits_capacity == 32U);
     CHECK(decode.next_position == 0U);
 
