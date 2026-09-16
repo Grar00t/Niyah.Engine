@@ -80,6 +80,7 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 - zero-copy adaptation from a loaded dataset shard into NiyahTrainingSample descriptors;
 - deterministic single-sample reference training loop over dataset cursor, backward gradients, and AdamW;
 - deterministic sequential per-sample gradient accumulation with one averaged AdamW update per accumulated group;
+- native niyah-train orchestration for fresh and resumed single-shard training using tokenizer-bound checkpoints plus separately persisted dataset cursors;
 - read-only held-out evaluation with token-weighted mean cross-entropy and perplexity;
 - RMSNorm;
 - RoPE;
@@ -132,7 +133,7 @@ These are later engineering targets. Checkpoint persistence does not refactor th
 
 ## Architectural boundary
 
-The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, versioned checkpoint persistence, and deterministic dataset cursor sequencing/persistence. Production multi-shard dataset tooling, a production training executable, true tensor mini-batching, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
+The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, versioned checkpoint persistence, and deterministic dataset cursor sequencing/persistence. Production multi-shard dataset tooling, production-scale training orchestration, true tensor mini-batching, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
 
 ## Out of core
 
