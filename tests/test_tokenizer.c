@@ -1,6 +1,7 @@
 #include "niyah/tokenizer.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define CHECK(expr) do { \
@@ -59,6 +60,169 @@ static int check_roundtrip(const NiyahTokenizer *tokenizer,
     return 0;
 }
 
+
+static FILE *test_fopen(const char *path, const char *mode)
+{
+#if defined(_MSC_VER)
+    FILE *file = NULL;
+    if (fopen_s(&file, path, mode) != 0) {
+        return NULL;
+    }
+    return file;
+#else
+    return fopen(path, mode);
+#endif
+}
+
+static unsigned char *read_file(const char *path, size_t *out_size)
+{
+    FILE *file;
+    long end;
+    unsigned char *data;
+
+    *out_size = 0U;
+
+    file = test_fopen(path, "rb");
+    if (file == NULL) return NULL;
+
+    if (fseek(file, 0L, SEEK_END) != 0) {
+        fclose(file);
+        return NULL;
+    }
+
+    end = ftell(file);
+    if (end < 0L ||
+        fseek(file, 0L, SEEK_SET) != 0) {
+        fclose(file);
+        return NULL;
+    }
+
+    data = (unsigned char *)malloc(
+        (size_t)end == 0U ? 1U : (size_t)end);
+
+    if (data == NULL) {
+        fclose(file);
+        return NULL;
+    }
+
+    if ((size_t)end != 0U &&
+        fread(data, 1U, (size_t)end, file) !=
+            (size_t)end) {
+        free(data);
+        fclose(file);
+        return NULL;
+    }
+
+    if (fclose(file) != 0) {
+        free(data);
+        return NULL;
+    }
+
+    *out_size = (size_t)end;
+    return data;
+}
+
+static int write_file(const char *path,
+                      const unsigned char *data,
+                      size_t size)
+{
+    FILE *file = test_fopen(path, "wb");
+
+    if (file == NULL) return 0;
+
+    if (size != 0U &&
+        fwrite(data, 1U, size, file) != size) {
+        fclose(file);
+        return 0;
+    }
+
+    return fclose(file) == 0;
+}
+
+static int check_persistence(const NiyahTokenizer *tokenizer,
+                             const uint8_t *sample,
+                             size_t sample_size)
+{
+    static const char path[] = "niyah_tokenizer_v1.bin";
+    static const char bad[] = "niyah_tokenizer_v1_bad.bin";
+
+    NiyahTokenizer *loaded = NULL;
+    NiyahTokenizer *rejected = NULL;
+    unsigned char *data = NULL;
+    uint32_t a[128];
+    uint32_t b[128];
+    size_t ac = 0U;
+    size_t bc = 0U;
+    size_t size = 0U;
+
+    (void)remove(path);
+    (void)remove(bad);
+
+    CHECK(niyah_tokenizer_save(tokenizer, path) == NIYAH_OK);
+    CHECK(niyah_tokenizer_load(path, &loaded) == NIYAH_OK);
+    CHECK(loaded != NULL);
+
+    CHECK(check_deterministic_merges(
+              tokenizer, loaded) == 0);
+    {
+        uint8_t before[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+        uint8_t after[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+        CHECK(niyah_tokenizer_identity_sha256(tokenizer, before) == NIYAH_OK);
+        CHECK(niyah_tokenizer_identity_sha256(loaded, after) == NIYAH_OK);
+        CHECK(memcmp(before, after, sizeof(before)) == 0);
+    }
+
+    CHECK(niyah_tokenizer_encode(
+              tokenizer,
+              sample,
+              sample_size,
+              a,
+              sizeof(a) / sizeof(a[0]),
+              &ac) == NIYAH_OK);
+
+    CHECK(niyah_tokenizer_encode(
+              loaded,
+              sample,
+              sample_size,
+              b,
+              sizeof(b) / sizeof(b[0]),
+              &bc) == NIYAH_OK);
+
+    CHECK(ac == bc);
+    CHECK(memcmp(a, b, ac * sizeof(uint32_t)) == 0);
+
+    data = read_file(path, &size);
+    CHECK(data != NULL);
+    CHECK(size > 40U);
+
+    data[size - 1U] ^= 1U;
+    CHECK(write_file(bad, data, size));
+    CHECK(niyah_tokenizer_load(
+              bad, &rejected) == NIYAH_ERR_CORRUPT_DATA);
+    CHECK(rejected == NULL);
+    data[size - 1U] ^= 1U;
+
+    data[8U] = 2U;
+    CHECK(write_file(bad, data, size));
+    CHECK(niyah_tokenizer_load(
+              bad, &rejected) ==
+          NIYAH_ERR_UNSUPPORTED_VERSION);
+    CHECK(rejected == NULL);
+    data[8U] = 1U;
+
+    CHECK(write_file(bad, data, size - 1U));
+    CHECK(niyah_tokenizer_load(
+              bad, &rejected) == NIYAH_ERR_CORRUPT_DATA);
+    CHECK(rejected == NULL);
+
+    free(data);
+    niyah_tokenizer_destroy(loaded);
+    (void)remove(path);
+    (void)remove(bad);
+
+    return 0;
+}
+
 int main(void)
 {
     static const uint8_t corpus[] =
@@ -74,6 +238,8 @@ int main(void)
     NiyahTokenizerTrainConfig config;
     NiyahTokenizer *first = NULL;
     NiyahTokenizer *second = NULL;
+    uint8_t first_identity[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+    uint8_t second_identity[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
     size_t sample_tokens = 0U;
     uint32_t special_tokens[3];
     uint8_t special_decoded[4];
@@ -93,6 +259,9 @@ int main(void)
     CHECK(niyah_tokenizer_vocab_size(first) <= config.target_vocab_size);
     CHECK(niyah_tokenizer_merge_count(first) > 0U);
     CHECK(check_deterministic_merges(first, second) == 0);
+    CHECK(niyah_tokenizer_identity_sha256(first, first_identity) == NIYAH_OK);
+    CHECK(niyah_tokenizer_identity_sha256(second, second_identity) == NIYAH_OK);
+    CHECK(memcmp(first_identity, second_identity, sizeof(first_identity)) == 0);
     niyah_tokenizer_destroy(second);
     second = NULL;
 
@@ -102,6 +271,7 @@ int main(void)
 
     CHECK(check_roundtrip(first, sample, sizeof(sample) - 1U) == 0);
     CHECK(check_roundtrip(first, arabic_utf8, sizeof(arabic_utf8)) == 0);
+    CHECK(check_persistence(first, sample, sizeof(sample) - 1U) == 0);
 
     special_tokens[0] = NIYAH_TOKEN_BOS;
     special_tokens[1] = (uint32_t)'A';

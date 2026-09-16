@@ -14,6 +14,7 @@ extern "C" {
 #define NIYAH_TOKEN_BOS 256U
 #define NIYAH_TOKEN_EOS 257U
 #define NIYAH_TOKENIZER_BASE_VOCAB_SIZE 258U
+#define NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE 32U
 
 typedef struct NiyahTokenizer NiyahTokenizer;
 
@@ -37,6 +38,16 @@ NiyahStatus niyah_tokenizer_merge_at(const NiyahTokenizer *tokenizer,
                                      uint32_t *left_token,
                                      uint32_t *right_token,
                                      uint32_t *output_token);
+
+NiyahStatus niyah_tokenizer_identity_sha256(
+    const NiyahTokenizer *tokenizer,
+    uint8_t out_identity[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE]);
+
+NiyahStatus niyah_tokenizer_save(const NiyahTokenizer *tokenizer,
+                                 const char *path);
+
+NiyahStatus niyah_tokenizer_load(const char *path,
+                                 NiyahTokenizer **out_tokenizer);
 
 NiyahStatus niyah_tokenizer_encode(const NiyahTokenizer *tokenizer,
                                    const uint8_t *input,

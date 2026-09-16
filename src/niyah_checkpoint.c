@@ -15,21 +15,27 @@ _Static_assert(FLT_RADIX == 2, "checkpoint v1 requires binary float");
 _Static_assert(FLT_MANT_DIG == 24, "checkpoint v1 requires IEEE-754 binary32 precision");
 _Static_assert(FLT_MAX_EXP == 128, "checkpoint v1 requires IEEE-754 binary32 exponent range");
 
-#define NIYAH_CHECKPOINT_VERSION UINT32_C(1)
+#define NIYAH_CHECKPOINT_VERSION_V1 UINT32_C(1)
+#define NIYAH_CHECKPOINT_VERSION_V2 UINT32_C(2)
+#define NIYAH_CHECKPOINT_VERSION NIYAH_CHECKPOINT_VERSION_V1
 #define NIYAH_CHECKPOINT_HEADER_FLAGS UINT32_C(0)
 #define NIYAH_CHECKPOINT_RESERVED UINT32_C(0)
-#define NIYAH_CHECKPOINT_SECTION_COUNT UINT32_C(4)
+#define NIYAH_CHECKPOINT_SECTION_COUNT_V1 UINT32_C(4)
+#define NIYAH_CHECKPOINT_SECTION_COUNT_V2 UINT32_C(5)
+#define NIYAH_CHECKPOINT_SECTION_COUNT NIYAH_CHECKPOINT_SECTION_COUNT_V1
 #define NIYAH_CHECKPOINT_MAX_SECTIONS UINT32_C(64)
 #define NIYAH_CHECKPOINT_SECTION_REQUIRED UINT32_C(1)
 #define NIYAH_CHECKPOINT_KNOWN_SECTION_FLAGS NIYAH_CHECKPOINT_SECTION_REQUIRED
 #define NIYAH_CHECKPOINT_CHECKSUM_CRC32 UINT32_C(1)
 #define NIYAH_CHECKPOINT_IO_BUFFER_SIZE 65536U
 #define NIYAH_CHECKPOINT_ADAMW_META_BYTES UINT64_C(32)
+#define NIYAH_CHECKPOINT_TOKENIZER_IDENTITY_BYTES UINT64_C(32)
 
 #define NIYAH_CHECKPOINT_SECTION_MODEL_WEIGHTS UINT32_C(1)
 #define NIYAH_CHECKPOINT_SECTION_ADAMW_M UINT32_C(2)
 #define NIYAH_CHECKPOINT_SECTION_ADAMW_V UINT32_C(3)
 #define NIYAH_CHECKPOINT_SECTION_ADAMW_META UINT32_C(4)
+#define NIYAH_CHECKPOINT_SECTION_TOKENIZER_IDENTITY UINT32_C(5)
 
 static const unsigned char NIYAH_CHECKPOINT_MAGIC[8] = {
     'N', 'I', 'Y', 'A', 'H', 'C', 'K', 'P'
@@ -56,6 +62,8 @@ typedef struct NiyahCheckpointMeta {
 typedef struct NiyahCheckpointScan {
     NiyahCheckpointHeader header;
     NiyahCheckpointMeta meta;
+    uint8_t tokenizer_identity[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+    int has_tokenizer_identity;
     uint32_t crc32;
 } NiyahCheckpointScan;
 
@@ -469,17 +477,19 @@ static NiyahStatus niyah_validate_save_state(const NiyahModel *model,
 
 static NiyahStatus niyah_write_header(FILE *file,
                                       NiyahCheckpointCrc32 *crc,
-                                      const NiyahModel *model)
+                                      const NiyahModel *model,
+                                      uint32_t version,
+                                      uint32_t section_count)
 {
     const uint32_t tie = model->config.tie_word_embeddings != 0 ? UINT32_C(1) : UINT32_C(0);
     NiyahStatus status = niyah_write_crc(file, crc, NIYAH_CHECKPOINT_MAGIC,
                                          sizeof(NIYAH_CHECKPOINT_MAGIC));
     if (status != NIYAH_OK) return status;
-    status = niyah_write_u32_crc(file, crc, NIYAH_CHECKPOINT_VERSION);
+    status = niyah_write_u32_crc(file, crc, version);
     if (status != NIYAH_OK) return status;
     status = niyah_write_u32_crc(file, crc, NIYAH_CHECKPOINT_HEADER_FLAGS);
     if (status != NIYAH_OK) return status;
-    status = niyah_write_u32_crc(file, crc, NIYAH_CHECKPOINT_SECTION_COUNT);
+    status = niyah_write_u32_crc(file, crc, section_count);
     if (status != NIYAH_OK) return status;
     status = niyah_write_u32_crc(file, crc, NIYAH_CHECKPOINT_RESERVED);
     if (status != NIYAH_OK) return status;
@@ -520,16 +530,21 @@ static NiyahStatus niyah_write_meta(FILE *file,
     return niyah_write_crc(file, crc, payload, sizeof(payload));
 }
 
-NiyahStatus niyah_checkpoint_save(const char *path,
-                                  const NiyahModel *model,
-                                  const NiyahAdamWState *optimizer_state,
-                                  const NiyahAdamWConfig *optimizer_config)
+static NiyahStatus niyah_checkpoint_save_impl(
+    const char *path,
+    const NiyahModel *model,
+    const NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    const NiyahTokenizer *tokenizer)
 {
     FILE *file = NULL;
     NiyahCheckpointCrc32 crc;
     unsigned char buffer[NIYAH_CHECKPOINT_IO_BUFFER_SIZE];
     unsigned char footer[8];
+    uint8_t tokenizer_identity[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
     uint64_t tensor_bytes = UINT64_C(0);
+    uint32_t version = NIYAH_CHECKPOINT_VERSION_V1;
+    uint32_t section_count = NIYAH_CHECKPOINT_SECTION_COUNT_V1;
     NiyahStatus status;
     int close_result;
 
@@ -542,13 +557,27 @@ NiyahStatus niyah_checkpoint_save(const char *path,
         return status;
     }
 
+    if (tokenizer != NULL) {
+        if (niyah_tokenizer_vocab_size(tokenizer) !=
+            (size_t)model->config.vocab_size) {
+            return NIYAH_ERR_INVALID_CONFIG;
+        }
+        status = niyah_tokenizer_identity_sha256(
+            tokenizer, tokenizer_identity);
+        if (status != NIYAH_OK) {
+            return status;
+        }
+        version = NIYAH_CHECKPOINT_VERSION_V2;
+        section_count = NIYAH_CHECKPOINT_SECTION_COUNT_V2;
+    }
+
     file = niyah_checkpoint_fopen(path, "wb");
     if (file == NULL) {
         return NIYAH_ERR_IO;
     }
     niyah_crc32_init(&crc);
 
-    status = niyah_write_header(file, &crc, model);
+    status = niyah_write_header(file, &crc, model, version, section_count);
     if (status == NIYAH_OK) {
         status = niyah_write_section_header(file, &crc,
                                             NIYAH_CHECKPOINT_SECTION_MODEL_WEIGHTS,
@@ -584,6 +613,17 @@ NiyahStatus niyah_checkpoint_save(const char *path,
     if (status == NIYAH_OK) {
         status = niyah_write_meta(file, &crc, optimizer_state, optimizer_config);
     }
+    if (status == NIYAH_OK && tokenizer != NULL) {
+        status = niyah_write_section_header(
+            file, &crc,
+            NIYAH_CHECKPOINT_SECTION_TOKENIZER_IDENTITY,
+            NIYAH_CHECKPOINT_TOKENIZER_IDENTITY_BYTES);
+    }
+    if (status == NIYAH_OK && tokenizer != NULL) {
+        status = niyah_write_crc(
+            file, &crc, tokenizer_identity,
+            NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE);
+    }
     if (status == NIYAH_OK) {
         niyah_store_u32_le(footer + 0U, NIYAH_CHECKPOINT_CHECKSUM_CRC32);
         niyah_store_u32_le(footer + 4U, niyah_crc32_final(&crc));
@@ -603,9 +643,33 @@ NiyahStatus niyah_checkpoint_save(const char *path,
     return status;
 }
 
+NiyahStatus niyah_checkpoint_save(const char *path,
+                                  const NiyahModel *model,
+                                  const NiyahAdamWState *optimizer_state,
+                                  const NiyahAdamWConfig *optimizer_config)
+{
+    return niyah_checkpoint_save_impl(
+        path, model, optimizer_state, optimizer_config, NULL);
+}
+
+NiyahStatus niyah_checkpoint_save_with_tokenizer(
+    const char *path,
+    const NiyahModel *model,
+    const NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    const NiyahTokenizer *tokenizer)
+{
+    if (tokenizer == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    return niyah_checkpoint_save_impl(
+        path, model, optimizer_state, optimizer_config, tokenizer);
+}
+
 static NiyahStatus niyah_read_header(FILE *file,
                                      NiyahCheckpointCrc32 *crc,
-                                     NiyahCheckpointHeader *out)
+                                     NiyahCheckpointHeader *out,
+                                     uint32_t required_version)
 {
     unsigned char bytes[68];
     uint32_t version;
@@ -624,7 +688,7 @@ static NiyahStatus niyah_read_header(FILE *file,
         return NIYAH_ERR_CORRUPT_DATA;
     }
     version = niyah_load_u32_le(bytes + 8U);
-    if (version != NIYAH_CHECKPOINT_VERSION) {
+    if (version != required_version) {
         return NIYAH_ERR_UNSUPPORTED_VERSION;
     }
     flags = niyah_load_u32_le(bytes + 12U);
@@ -732,7 +796,9 @@ static int niyah_optimizer_config_equal(const NiyahAdamWConfig *a,
            niyah_float_bits(a->max_grad_norm) == niyah_float_bits(b->max_grad_norm);
 }
 
-static NiyahStatus niyah_scan_checkpoint(FILE *file,
+static NiyahStatus niyah_scan_checkpoint(
+                                         FILE *file,
+                                         uint32_t required_version,
                                          const NiyahCheckpointScan *expected,
                                          NiyahCheckpointLoadTargets *targets,
                                          NiyahCheckpointScan *out)
@@ -746,7 +812,7 @@ static NiyahStatus niyah_scan_checkpoint(FILE *file,
 
     memset(out, 0, sizeof(*out));
     niyah_crc32_init(&crc);
-    status = niyah_read_header(file, &crc, &out->header);
+    status = niyah_read_header(file, &crc, &out->header, required_version);
     if (status != NIYAH_OK) {
         return status;
     }
@@ -824,6 +890,23 @@ static NiyahStatus niyah_scan_checkpoint(FILE *file,
                 seen |= bit;
                 status = niyah_read_meta(file, &crc, &out->meta);
                 break;
+            case NIYAH_CHECKPOINT_SECTION_TOKENIZER_IDENTITY:
+                bit = UINT32_C(1) << 4;
+                if (required_version != NIYAH_CHECKPOINT_VERSION_V2 ||
+                    (seen & bit) != 0U ||
+                    (section_flags & NIYAH_CHECKPOINT_SECTION_REQUIRED) == 0U ||
+                    payload_bytes != NIYAH_CHECKPOINT_TOKENIZER_IDENTITY_BYTES) {
+                    return NIYAH_ERR_CORRUPT_DATA;
+                }
+                seen |= bit;
+                status = niyah_read_exact(
+                    file, out->tokenizer_identity,
+                    NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE,
+                    &crc, 1);
+                if (status == NIYAH_OK) {
+                    out->has_tokenizer_identity = 1;
+                }
+                break;
             default:
                 if ((section_flags & NIYAH_CHECKPOINT_SECTION_REQUIRED) != 0U) {
                     return NIYAH_ERR_UNSUPPORTED_VERSION;
@@ -836,7 +919,10 @@ static NiyahStatus niyah_scan_checkpoint(FILE *file,
         }
     }
 
-    if (seen != UINT32_C(0x0f)) {
+    if ((required_version == NIYAH_CHECKPOINT_VERSION_V1 &&
+         seen != UINT32_C(0x0f)) ||
+        (required_version == NIYAH_CHECKPOINT_VERSION_V2 &&
+         seen != UINT32_C(0x1f))) {
         return NIYAH_ERR_CORRUPT_DATA;
     }
     status = niyah_read_exact(file, footer, sizeof(footer), &crc, 0);
@@ -880,10 +966,12 @@ static int niyah_optimizer_output_is_empty(const NiyahAdamWState *state)
            state->bound_model == NULL && state->bound_weights == NULL;
 }
 
-NiyahStatus niyah_checkpoint_load(const char *path,
-                                  NiyahModel *out_model,
-                                  NiyahAdamWState *out_optimizer_state,
-                                  NiyahAdamWConfig *out_optimizer_config)
+static NiyahStatus niyah_checkpoint_load_impl(
+    const char *path,
+    const NiyahTokenizer *tokenizer,
+    NiyahModel *out_model,
+    NiyahAdamWState *out_optimizer_state,
+    NiyahAdamWConfig *out_optimizer_config)
 {
     FILE *file;
     NiyahCheckpointScan first;
@@ -891,6 +979,8 @@ NiyahStatus niyah_checkpoint_load(const char *path,
     NiyahModel temp_model;
     NiyahAdamWState temp_state;
     NiyahCheckpointLoadTargets targets;
+    uint8_t tokenizer_identity[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+    uint32_t required_version;
     NiyahStatus status;
 
     if (path == NULL || path[0] == '\0' || out_model == NULL ||
@@ -902,14 +992,35 @@ NiyahStatus niyah_checkpoint_load(const char *path,
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
 
+    required_version = tokenizer == NULL
+        ? NIYAH_CHECKPOINT_VERSION_V1
+        : NIYAH_CHECKPOINT_VERSION_V2;
+
+    if (tokenizer != NULL) {
+        status = niyah_tokenizer_identity_sha256(
+            tokenizer, tokenizer_identity);
+        if (status != NIYAH_OK) {
+            return status;
+        }
+    }
+
     file = niyah_checkpoint_fopen(path, "rb");
     if (file == NULL) {
         return NIYAH_ERR_IO;
     }
-    status = niyah_scan_checkpoint(file, NULL, NULL, &first);
+    status = niyah_scan_checkpoint(file, required_version, NULL, NULL, &first);
     if (status != NIYAH_OK) {
         (void)fclose(file);
         return status;
+    }
+    if (tokenizer != NULL &&
+        (niyah_tokenizer_vocab_size(tokenizer) !=
+             (size_t)first.header.config.vocab_size ||
+         first.has_tokenizer_identity == 0 ||
+         memcmp(first.tokenizer_identity, tokenizer_identity,
+                NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE) != 0)) {
+        (void)fclose(file);
+        return NIYAH_ERR_INVALID_CONFIG;
     }
     if (fseek(file, 0L, SEEK_SET) != 0) {
         (void)fclose(file);
@@ -935,7 +1046,7 @@ NiyahStatus niyah_checkpoint_load(const char *path,
     targets.m = temp_state.m;
     targets.v = temp_state.v;
     targets.count = temp_model.weight_count;
-    status = niyah_scan_checkpoint(file, &first, &targets, &second);
+    status = niyah_scan_checkpoint(file, required_version, &first, &targets, &second);
     if (status == NIYAH_OK) {
         temp_state.step = second.meta.step;
         temp_state.model_config = temp_model.config;
@@ -963,4 +1074,28 @@ NiyahStatus niyah_checkpoint_load(const char *path,
     memset(&temp_model, 0, sizeof(temp_model));
     memset(&temp_state, 0, sizeof(temp_state));
     return NIYAH_OK;
+}
+
+NiyahStatus niyah_checkpoint_load(const char *path,
+                                  NiyahModel *out_model,
+                                  NiyahAdamWState *out_optimizer_state,
+                                  NiyahAdamWConfig *out_optimizer_config)
+{
+    return niyah_checkpoint_load_impl(
+        path, NULL, out_model, out_optimizer_state, out_optimizer_config);
+}
+
+NiyahStatus niyah_checkpoint_load_with_tokenizer(
+    const char *path,
+    const NiyahTokenizer *tokenizer,
+    NiyahModel *out_model,
+    NiyahAdamWState *out_optimizer_state,
+    NiyahAdamWConfig *out_optimizer_config)
+{
+    if (tokenizer == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    return niyah_checkpoint_load_impl(
+        path, tokenizer, out_model, out_optimizer_state,
+        out_optimizer_config);
 }

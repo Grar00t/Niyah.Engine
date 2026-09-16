@@ -1,6 +1,7 @@
 #include "niyah/tokenizer.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -340,6 +341,633 @@ NiyahStatus niyah_tokenizer_merge_at(const NiyahTokenizer *tokenizer,
     *left_token = merge->left;
     *right_token = merge->right;
     *output_token = merge->output;
+    return NIYAH_OK;
+}
+
+
+_Static_assert(CHAR_BIT == 8, "tokenizer v1 requires 8-bit bytes");
+
+#define P6C_TOKENIZER_IDENTITY_SHA256 1
+
+typedef struct NiyahTokenizerSha256 {
+    uint32_t h[8];
+    uint64_t bit_count;
+    unsigned char block[64];
+    size_t block_used;
+} NiyahTokenizerSha256;
+
+static uint32_t niyah_sha256_rotr(uint32_t x, unsigned n)
+{
+    return (x >> n) | (x << (32U - n));
+}
+
+static void niyah_sha256_transform(NiyahTokenizerSha256 *s,
+                                   const unsigned char block[64])
+{
+    static const uint32_t k[64] = {
+        UINT32_C(0x428a2f98), UINT32_C(0x71374491), UINT32_C(0xb5c0fbcf), UINT32_C(0xe9b5dba5),
+        UINT32_C(0x3956c25b), UINT32_C(0x59f111f1), UINT32_C(0x923f82a4), UINT32_C(0xab1c5ed5),
+        UINT32_C(0xd807aa98), UINT32_C(0x12835b01), UINT32_C(0x243185be), UINT32_C(0x550c7dc3),
+        UINT32_C(0x72be5d74), UINT32_C(0x80deb1fe), UINT32_C(0x9bdc06a7), UINT32_C(0xc19bf174),
+        UINT32_C(0xe49b69c1), UINT32_C(0xefbe4786), UINT32_C(0x0fc19dc6), UINT32_C(0x240ca1cc),
+        UINT32_C(0x2de92c6f), UINT32_C(0x4a7484aa), UINT32_C(0x5cb0a9dc), UINT32_C(0x76f988da),
+        UINT32_C(0x983e5152), UINT32_C(0xa831c66d), UINT32_C(0xb00327c8), UINT32_C(0xbf597fc7),
+        UINT32_C(0xc6e00bf3), UINT32_C(0xd5a79147), UINT32_C(0x06ca6351), UINT32_C(0x14292967),
+        UINT32_C(0x27b70a85), UINT32_C(0x2e1b2138), UINT32_C(0x4d2c6dfc), UINT32_C(0x53380d13),
+        UINT32_C(0x650a7354), UINT32_C(0x766a0abb), UINT32_C(0x81c2c92e), UINT32_C(0x92722c85),
+        UINT32_C(0xa2bfe8a1), UINT32_C(0xa81a664b), UINT32_C(0xc24b8b70), UINT32_C(0xc76c51a3),
+        UINT32_C(0xd192e819), UINT32_C(0xd6990624), UINT32_C(0xf40e3585), UINT32_C(0x106aa070),
+        UINT32_C(0x19a4c116), UINT32_C(0x1e376c08), UINT32_C(0x2748774c), UINT32_C(0x34b0bcb5),
+        UINT32_C(0x391c0cb3), UINT32_C(0x4ed8aa4a), UINT32_C(0x5b9cca4f), UINT32_C(0x682e6ff3),
+        UINT32_C(0x748f82ee), UINT32_C(0x78a5636f), UINT32_C(0x84c87814), UINT32_C(0x8cc70208),
+        UINT32_C(0x90befffa), UINT32_C(0xa4506ceb), UINT32_C(0xbef9a3f7), UINT32_C(0xc67178f2)
+    };
+    uint32_t w[64];
+    uint32_t a, b, c, d, e, f, g, h;
+    size_t i;
+
+    for (i = 0U; i < 16U; ++i) {
+        const size_t j = i * 4U;
+        w[i] = ((uint32_t)block[j] << 24) |
+               ((uint32_t)block[j + 1U] << 16) |
+               ((uint32_t)block[j + 2U] << 8) |
+               (uint32_t)block[j + 3U];
+    }
+    for (i = 16U; i < 64U; ++i) {
+        const uint32_t x = w[i - 15U];
+        const uint32_t y = w[i - 2U];
+        const uint32_t s0 = niyah_sha256_rotr(x, 7U) ^
+                            niyah_sha256_rotr(x, 18U) ^ (x >> 3U);
+        const uint32_t s1 = niyah_sha256_rotr(y, 17U) ^
+                            niyah_sha256_rotr(y, 19U) ^ (y >> 10U);
+        w[i] = w[i - 16U] + s0 + w[i - 7U] + s1;
+    }
+
+    a = s->h[0]; b = s->h[1]; c = s->h[2]; d = s->h[3];
+    e = s->h[4]; f = s->h[5]; g = s->h[6]; h = s->h[7];
+
+    for (i = 0U; i < 64U; ++i) {
+        const uint32_t s1 = niyah_sha256_rotr(e, 6U) ^
+                            niyah_sha256_rotr(e, 11U) ^
+                            niyah_sha256_rotr(e, 25U);
+        const uint32_t ch = (e & f) ^ ((~e) & g);
+        const uint32_t t1 = h + s1 + ch + k[i] + w[i];
+        const uint32_t s0 = niyah_sha256_rotr(a, 2U) ^
+                            niyah_sha256_rotr(a, 13U) ^
+                            niyah_sha256_rotr(a, 22U);
+        const uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+        const uint32_t t2 = s0 + maj;
+        h = g; g = f; f = e; e = d + t1;
+        d = c; c = b; b = a; a = t1 + t2;
+    }
+
+    s->h[0] += a; s->h[1] += b; s->h[2] += c; s->h[3] += d;
+    s->h[4] += e; s->h[5] += f; s->h[6] += g; s->h[7] += h;
+}
+
+static void niyah_sha256_init(NiyahTokenizerSha256 *s)
+{
+    static const uint32_t initial[8] = {
+        UINT32_C(0x6a09e667), UINT32_C(0xbb67ae85),
+        UINT32_C(0x3c6ef372), UINT32_C(0xa54ff53a),
+        UINT32_C(0x510e527f), UINT32_C(0x9b05688c),
+        UINT32_C(0x1f83d9ab), UINT32_C(0x5be0cd19)
+    };
+    memcpy(s->h, initial, sizeof(initial));
+    s->bit_count = UINT64_C(0);
+    s->block_used = 0U;
+}
+
+static int niyah_sha256_update(NiyahTokenizerSha256 *s,
+                               const unsigned char *data,
+                               size_t size)
+{
+    size_t offset = 0U;
+
+    if (size > (size_t)(UINT64_MAX / UINT64_C(8)) ||
+        s->bit_count > UINT64_MAX - (uint64_t)size * UINT64_C(8)) {
+        return 0;
+    }
+    s->bit_count += (uint64_t)size * UINT64_C(8);
+
+    while (offset < size) {
+        const size_t available = 64U - s->block_used;
+        const size_t remaining = size - offset;
+        const size_t take = remaining < available ? remaining : available;
+
+        memcpy(s->block + s->block_used, data + offset, take);
+        s->block_used += take;
+        offset += take;
+
+        if (s->block_used == 64U) {
+            niyah_sha256_transform(s, s->block);
+            s->block_used = 0U;
+        }
+    }
+    return 1;
+}
+
+static void niyah_sha256_final(NiyahTokenizerSha256 *s,
+                               unsigned char out[32])
+{
+    size_t i;
+    uint64_t bits = s->bit_count;
+
+    s->block[s->block_used++] = 0x80U;
+    if (s->block_used > 56U) {
+        memset(s->block + s->block_used, 0, 64U - s->block_used);
+        niyah_sha256_transform(s, s->block);
+        s->block_used = 0U;
+    }
+    memset(s->block + s->block_used, 0, 56U - s->block_used);
+
+    for (i = 0U; i < 8U; ++i) {
+        s->block[63U - i] = (unsigned char)(bits & UINT64_C(0xff));
+        bits >>= 8U;
+    }
+    niyah_sha256_transform(s, s->block);
+
+    for (i = 0U; i < 8U; ++i) {
+        out[i * 4U + 0U] = (unsigned char)(s->h[i] >> 24);
+        out[i * 4U + 1U] = (unsigned char)(s->h[i] >> 16);
+        out[i * 4U + 2U] = (unsigned char)(s->h[i] >> 8);
+        out[i * 4U + 3U] = (unsigned char)s->h[i];
+    }
+}
+
+
+#define NIYAH_TOKENIZER_FILE_VERSION UINT32_C(1)
+#define NIYAH_TOKENIZER_FILE_FLAGS UINT32_C(0)
+#define NIYAH_TOKENIZER_FILE_RESERVED UINT32_C(0)
+#define NIYAH_TOKENIZER_CHECKSUM_CRC32 UINT32_C(1)
+
+static const unsigned char NIYAH_TOKENIZER_MAGIC[8] = {
+    'N', 'I', 'Y', 'A', 'H', 'T', 'O', 'K'
+};
+
+typedef struct NiyahTokenizerCrc32 {
+    uint32_t value;
+    uint32_t table[256];
+} NiyahTokenizerCrc32;
+
+static FILE *niyah_tokenizer_fopen(const char *path, const char *mode)
+{
+#if defined(_MSC_VER)
+    FILE *file = NULL;
+    if (fopen_s(&file, path, mode) != 0) {
+        return NULL;
+    }
+    return file;
+#else
+    return fopen(path, mode);
+#endif
+}
+
+static void niyah_tok_store_u32_le(unsigned char out[4], uint32_t value)
+{
+    out[0] = (unsigned char)(value & UINT32_C(0xff));
+    out[1] = (unsigned char)((value >> 8) & UINT32_C(0xff));
+    out[2] = (unsigned char)((value >> 16) & UINT32_C(0xff));
+    out[3] = (unsigned char)((value >> 24) & UINT32_C(0xff));
+}
+
+static uint32_t niyah_tok_load_u32_le(const unsigned char in[4])
+{
+    return ((uint32_t)in[0]) |
+           ((uint32_t)in[1] << 8) |
+           ((uint32_t)in[2] << 16) |
+           ((uint32_t)in[3] << 24);
+}
+
+static void niyah_tok_crc_init(NiyahTokenizerCrc32 *crc)
+{
+    uint32_t i;
+
+    for (i = 0U; i < UINT32_C(256); ++i) {
+        uint32_t c = i;
+        unsigned bit;
+
+        for (bit = 0U; bit < 8U; ++bit) {
+            c = (c & UINT32_C(1)) != 0U
+                ? UINT32_C(0xedb88320) ^ (c >> 1)
+                : c >> 1;
+        }
+        crc->table[i] = c;
+    }
+    crc->value = UINT32_C(0xffffffff);
+}
+
+static void niyah_tok_crc_update(NiyahTokenizerCrc32 *crc,
+                                 const unsigned char *data,
+                                 size_t size)
+{
+    size_t i;
+
+    for (i = 0U; i < size; ++i) {
+        const uint32_t index =
+            (crc->value ^ (uint32_t)data[i]) & UINT32_C(0xff);
+        crc->value = crc->table[index] ^ (crc->value >> 8);
+    }
+}
+
+static uint32_t niyah_tok_crc_final(const NiyahTokenizerCrc32 *crc)
+{
+    return crc->value ^ UINT32_C(0xffffffff);
+}
+
+static NiyahStatus niyah_tok_write(FILE *file,
+                                   const void *data,
+                                   size_t size,
+                                   NiyahTokenizerCrc32 *crc)
+{
+    if (size != 0U && fwrite(data, 1U, size, file) != size) {
+        return NIYAH_ERR_IO;
+    }
+    if (crc != NULL && size != 0U) {
+        niyah_tok_crc_update(crc,
+                             (const unsigned char *)data,
+                             size);
+    }
+    return NIYAH_OK;
+}
+
+static NiyahStatus niyah_tok_write_u32(FILE *file,
+                                       NiyahTokenizerCrc32 *crc,
+                                       uint32_t value)
+{
+    unsigned char b[4];
+    niyah_tok_store_u32_le(b, value);
+    return niyah_tok_write(file, b, sizeof(b), crc);
+}
+
+static NiyahStatus niyah_tok_read(FILE *file,
+                                  void *data,
+                                  size_t size,
+                                  NiyahTokenizerCrc32 *crc)
+{
+    const size_t got = fread(data, 1U, size, file);
+
+    if (got != 0U && crc != NULL) {
+        niyah_tok_crc_update(crc,
+                             (const unsigned char *)data,
+                             got);
+    }
+
+    if (got != size) {
+        return ferror(file) != 0
+            ? NIYAH_ERR_IO
+            : NIYAH_ERR_CORRUPT_DATA;
+    }
+    return NIYAH_OK;
+}
+
+static NiyahStatus niyah_tok_validate(const NiyahTokenizer *tokenizer)
+{
+    size_t i;
+
+    if (tokenizer == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    if (tokenizer->vocab == NULL ||
+        tokenizer->vocab_size <
+            (size_t)NIYAH_TOKENIZER_BASE_VOCAB_SIZE ||
+        tokenizer->vocab_size > (size_t)UINT32_MAX ||
+        tokenizer->merge_count !=
+            tokenizer->vocab_size -
+            (size_t)NIYAH_TOKENIZER_BASE_VOCAB_SIZE ||
+        tokenizer->vocab_capacity < tokenizer->vocab_size ||
+        tokenizer->merge_capacity < tokenizer->merge_count ||
+        (tokenizer->merge_count != 0U &&
+         tokenizer->merges == NULL)) {
+        return NIYAH_ERR_INVALID_CONFIG;
+    }
+
+    for (i = 0U; i < tokenizer->merge_count; ++i) {
+        const NiyahMerge *m = &tokenizer->merges[i];
+        const uint32_t expected =
+            NIYAH_TOKENIZER_BASE_VOCAB_SIZE + (uint32_t)i;
+
+        if (m->output != expected ||
+            m->left >= expected ||
+            m->right >= expected ||
+            m->left == NIYAH_TOKEN_BOS ||
+            m->left == NIYAH_TOKEN_EOS ||
+            m->right == NIYAH_TOKEN_BOS ||
+            m->right == NIYAH_TOKEN_EOS) {
+            return NIYAH_ERR_INVALID_CONFIG;
+        }
+    }
+
+    return NIYAH_OK;
+}
+
+
+NiyahStatus niyah_tokenizer_identity_sha256(
+    const NiyahTokenizer *tokenizer,
+    uint8_t out_identity[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE])
+{
+    static const unsigned char domain[] = {
+        'N','I','Y','A','H','-','T','O','K','E','N','I','Z','E','R','-','V','1'
+    };
+    NiyahTokenizerSha256 sha;
+    unsigned char u32[4];
+    size_t i;
+    NiyahStatus status;
+
+    if (tokenizer == NULL || out_identity == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    status = niyah_tok_validate(tokenizer);
+    if (status != NIYAH_OK) {
+        return status;
+    }
+
+    niyah_sha256_init(&sha);
+    if (!niyah_sha256_update(&sha, domain, sizeof(domain))) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
+    niyah_tok_store_u32_le(u32, NIYAH_TOKENIZER_BASE_VOCAB_SIZE);
+    if (!niyah_sha256_update(&sha, u32, sizeof(u32))) return NIYAH_ERR_OVERFLOW;
+
+    niyah_tok_store_u32_le(u32, (uint32_t)tokenizer->vocab_size);
+    if (!niyah_sha256_update(&sha, u32, sizeof(u32))) return NIYAH_ERR_OVERFLOW;
+
+    niyah_tok_store_u32_le(u32, (uint32_t)tokenizer->merge_count);
+    if (!niyah_sha256_update(&sha, u32, sizeof(u32))) return NIYAH_ERR_OVERFLOW;
+
+    for (i = 0U; i < tokenizer->merge_count; ++i) {
+        const NiyahMerge *merge = &tokenizer->merges[i];
+
+        niyah_tok_store_u32_le(u32, merge->left);
+        if (!niyah_sha256_update(&sha, u32, sizeof(u32))) return NIYAH_ERR_OVERFLOW;
+
+        niyah_tok_store_u32_le(u32, merge->right);
+        if (!niyah_sha256_update(&sha, u32, sizeof(u32))) return NIYAH_ERR_OVERFLOW;
+
+        niyah_tok_store_u32_le(u32, merge->output);
+        if (!niyah_sha256_update(&sha, u32, sizeof(u32))) return NIYAH_ERR_OVERFLOW;
+    }
+
+    niyah_sha256_final(&sha, out_identity);
+    return NIYAH_OK;
+}
+
+NiyahStatus niyah_tokenizer_save(const NiyahTokenizer *tokenizer,
+                                 const char *path)
+{
+    FILE *file;
+    NiyahTokenizerCrc32 crc;
+    unsigned char footer[8];
+    NiyahStatus status;
+    size_t i;
+    int close_result;
+
+    if (path == NULL || path[0] == '\0') {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    status = niyah_tok_validate(tokenizer);
+    if (status != NIYAH_OK) {
+        return status;
+    }
+
+    file = niyah_tokenizer_fopen(path, "wb");
+    if (file == NULL) {
+        return NIYAH_ERR_IO;
+    }
+
+    niyah_tok_crc_init(&crc);
+
+    status = niyah_tok_write(
+        file,
+        NIYAH_TOKENIZER_MAGIC,
+        sizeof(NIYAH_TOKENIZER_MAGIC),
+        &crc);
+
+    if (status == NIYAH_OK)
+        status = niyah_tok_write_u32(
+            file, &crc, NIYAH_TOKENIZER_FILE_VERSION);
+
+    if (status == NIYAH_OK)
+        status = niyah_tok_write_u32(
+            file, &crc, NIYAH_TOKENIZER_FILE_FLAGS);
+
+    if (status == NIYAH_OK)
+        status = niyah_tok_write_u32(
+            file, &crc, NIYAH_TOKENIZER_BASE_VOCAB_SIZE);
+
+    if (status == NIYAH_OK)
+        status = niyah_tok_write_u32(
+            file, &crc, (uint32_t)tokenizer->vocab_size);
+
+    if (status == NIYAH_OK)
+        status = niyah_tok_write_u32(
+            file, &crc, (uint32_t)tokenizer->merge_count);
+
+    if (status == NIYAH_OK)
+        status = niyah_tok_write_u32(
+            file, &crc, NIYAH_TOKENIZER_FILE_RESERVED);
+
+    for (i = 0U;
+         status == NIYAH_OK && i < tokenizer->merge_count;
+         ++i) {
+        const NiyahMerge *m = &tokenizer->merges[i];
+
+        status = niyah_tok_write_u32(file, &crc, m->left);
+        if (status == NIYAH_OK)
+            status = niyah_tok_write_u32(file, &crc, m->right);
+        if (status == NIYAH_OK)
+            status = niyah_tok_write_u32(file, &crc, m->output);
+    }
+
+    if (status == NIYAH_OK) {
+        niyah_tok_store_u32_le(
+            footer + 0U,
+            NIYAH_TOKENIZER_CHECKSUM_CRC32);
+        niyah_tok_store_u32_le(
+            footer + 4U,
+            niyah_tok_crc_final(&crc));
+
+        status = niyah_tok_write(
+            file, footer, sizeof(footer), NULL);
+    }
+
+    if (status == NIYAH_OK && fflush(file) != 0) {
+        status = NIYAH_ERR_IO;
+    }
+
+    close_result = fclose(file);
+    if (status == NIYAH_OK && close_result != 0) {
+        status = NIYAH_ERR_IO;
+    }
+
+    if (status != NIYAH_OK) {
+        (void)remove(path);
+    }
+
+    return status;
+}
+
+NiyahStatus niyah_tokenizer_load(const char *path,
+                                 NiyahTokenizer **out_tokenizer)
+{
+    FILE *file = NULL;
+    NiyahTokenizer *tokenizer = NULL;
+    NiyahTokenizerCrc32 crc;
+    unsigned char header[32];
+    unsigned char triple[12];
+    unsigned char footer[8];
+    unsigned char extra;
+    uint32_t version;
+    uint32_t flags;
+    uint32_t base_vocab;
+    uint32_t vocab_size;
+    uint32_t merge_count;
+    uint32_t reserved;
+    NiyahStatus status;
+    size_t i;
+    int close_result;
+
+    if (path == NULL ||
+        path[0] == '\0' ||
+        out_tokenizer == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    *out_tokenizer = NULL;
+
+    file = niyah_tokenizer_fopen(path, "rb");
+    if (file == NULL) {
+        return NIYAH_ERR_IO;
+    }
+
+    niyah_tok_crc_init(&crc);
+
+    status = niyah_tok_read(
+        file, header, sizeof(header), &crc);
+
+    if (status != NIYAH_OK) {
+        goto done;
+    }
+
+    if (memcmp(header,
+               NIYAH_TOKENIZER_MAGIC,
+               sizeof(NIYAH_TOKENIZER_MAGIC)) != 0) {
+        status = NIYAH_ERR_CORRUPT_DATA;
+        goto done;
+    }
+
+    version = niyah_tok_load_u32_le(header + 8U);
+    flags = niyah_tok_load_u32_le(header + 12U);
+    base_vocab = niyah_tok_load_u32_le(header + 16U);
+    vocab_size = niyah_tok_load_u32_le(header + 20U);
+    merge_count = niyah_tok_load_u32_le(header + 24U);
+    reserved = niyah_tok_load_u32_le(header + 28U);
+
+    if (version != NIYAH_TOKENIZER_FILE_VERSION) {
+        status = NIYAH_ERR_UNSUPPORTED_VERSION;
+        goto done;
+    }
+
+    if (flags != NIYAH_TOKENIZER_FILE_FLAGS ||
+        reserved != NIYAH_TOKENIZER_FILE_RESERVED ||
+        base_vocab != NIYAH_TOKENIZER_BASE_VOCAB_SIZE ||
+        vocab_size < NIYAH_TOKENIZER_BASE_VOCAB_SIZE ||
+        merge_count !=
+            vocab_size - NIYAH_TOKENIZER_BASE_VOCAB_SIZE) {
+        status = NIYAH_ERR_CORRUPT_DATA;
+        goto done;
+    }
+
+    status = niyah_tokenizer_alloc_base(
+        vocab_size, &tokenizer);
+    if (status != NIYAH_OK) {
+        goto done;
+    }
+
+    for (i = 0U; i < (size_t)merge_count; ++i) {
+        uint32_t left;
+        uint32_t right;
+        uint32_t output;
+        uint32_t created;
+        const uint32_t expected =
+            NIYAH_TOKENIZER_BASE_VOCAB_SIZE + (uint32_t)i;
+
+        status = niyah_tok_read(
+            file, triple, sizeof(triple), &crc);
+        if (status != NIYAH_OK) {
+            goto done;
+        }
+
+        left = niyah_tok_load_u32_le(triple + 0U);
+        right = niyah_tok_load_u32_le(triple + 4U);
+        output = niyah_tok_load_u32_le(triple + 8U);
+
+        if (output != expected ||
+            left >= expected ||
+            right >= expected ||
+            left == NIYAH_TOKEN_BOS ||
+            left == NIYAH_TOKEN_EOS ||
+            right == NIYAH_TOKEN_BOS ||
+            right == NIYAH_TOKEN_EOS) {
+            status = NIYAH_ERR_CORRUPT_DATA;
+            goto done;
+        }
+
+        status = niyah_tokenizer_add_merge(
+            tokenizer, left, right, &created);
+
+        if (status != NIYAH_OK) {
+            goto done;
+        }
+
+        if (created != output) {
+            status = NIYAH_ERR_CORRUPT_DATA;
+            goto done;
+        }
+    }
+
+    status = niyah_tok_read(
+        file, footer, sizeof(footer), NULL);
+
+    if (status != NIYAH_OK) {
+        goto done;
+    }
+
+    if (niyah_tok_load_u32_le(footer + 0U) !=
+            NIYAH_TOKENIZER_CHECKSUM_CRC32 ||
+        niyah_tok_load_u32_le(footer + 4U) !=
+            niyah_tok_crc_final(&crc)) {
+        status = NIYAH_ERR_CORRUPT_DATA;
+        goto done;
+    }
+
+    if (fread(&extra, 1U, 1U, file) != 0U) {
+        status = NIYAH_ERR_CORRUPT_DATA;
+        goto done;
+    }
+
+    if (ferror(file) != 0) {
+        status = NIYAH_ERR_IO;
+        goto done;
+    }
+
+done:
+    close_result = fclose(file);
+
+    if (status == NIYAH_OK && close_result != 0) {
+        status = NIYAH_ERR_IO;
+    }
+
+    if (status != NIYAH_OK) {
+        niyah_tokenizer_destroy(tokenizer);
+        return status;
+    }
+
+    *out_tokenizer = tokenizer;
     return NIYAH_OK;
 }
 
