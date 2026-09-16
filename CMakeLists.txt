@@ -57,6 +57,7 @@ if(NIYAH_ENABLE_CUDA)
     target_include_directories(niyah_cuda_backend
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_link_libraries(niyah_cuda_backend PRIVATE CUDA::cudart)
     set_target_properties(niyah_cuda_backend PROPERTIES
@@ -133,6 +134,26 @@ if(NIYAH_BUILD_TESTS)
         endif()
 
         add_test(NAME niyah_cuda_matvec_test COMMAND niyah_cuda_matvec_test)
+
+        add_executable(niyah_cuda_model_test tests/test_cuda_model.c)
+        target_include_directories(niyah_cuda_model_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_model_test
+            PRIVATE
+                niyah
+                niyah_cuda_backend
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_model_test PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_model_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(NAME niyah_cuda_model_test COMMAND niyah_cuda_model_test)
     endif()
 
     add_executable(niyah_model_test tests/test_model.c)
