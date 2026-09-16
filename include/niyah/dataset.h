@@ -12,6 +12,7 @@ extern "C" {
 #endif
 
 #define NIYAH_DATASET_IDENTITY_SHA256_SIZE 32U
+#define NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE 32U
 
 typedef struct NiyahDatasetCursor {
     size_t sample_count;
@@ -20,6 +21,8 @@ typedef struct NiyahDatasetCursor {
     uint64_t epoch;
     uint8_t dataset_identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE];
     int has_dataset_identity;
+    uint8_t checkpoint_identity[NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE];
+    int has_checkpoint_identity;
     size_t *order;
 } NiyahDatasetCursor;
 
@@ -44,6 +47,14 @@ NiyahStatus niyah_dataset_cursor_seek(NiyahDatasetCursor *cursor,
 NiyahStatus niyah_dataset_cursor_bind_identity(
     NiyahDatasetCursor *cursor,
     const uint8_t identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE]);
+
+/* Bind a dataset-bound cursor to the exact checkpoint bytes that form the
+ * other half of one persisted training-state pair. Such cursors persist as
+ * NIYAHDST V3. Dataset-only cursors retain V2 persistence.
+ */
+NiyahStatus niyah_dataset_cursor_bind_checkpoint_identity(
+    NiyahDatasetCursor *cursor,
+    const uint8_t identity[NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE]);
 
 NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
                                       const char *path);

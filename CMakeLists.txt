@@ -273,4 +273,14 @@ if(NIYAH_BUILD_TESTS)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_train_multishard.cmake")
     set_tests_properties(niyah_train_multishard_test PROPERTIES
         FIXTURES_REQUIRED niyah_train_files)
+
+    add_test(NAME niyah_train_pair_mismatch_test
+        COMMAND ${CMAKE_COMMAND}
+            "-DNIYAH_TRAIN_EXE=$<TARGET_FILE:niyah_train>"
+            "-DNIYAH_TRAIN_TOK=${_NIYAH_TRAIN_TOK}"
+            "-DNIYAH_TRAIN_SHARD=${_NIYAH_TRAIN_SHARD}"
+            "-DNIYAH_TRAIN_PAIR_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/niyah_train_pair"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_train_pair_mismatch.cmake")
+    set_tests_properties(niyah_train_pair_mismatch_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
 endif()

@@ -355,6 +355,7 @@ int main(int argc, char **argv)
     size_t sample_offset = 0U;
     size_t vocab_size;
     uint8_t dataset_identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE];
+    uint8_t checkpoint_identity[NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
     float mean_loss = 0.0f;
     NiyahStatus status;
     int parsed;
@@ -520,10 +521,19 @@ int main(int argc, char **argv)
             exit_code = fail_status("cursor_load", status);
             goto cleanup;
         }
+        status = niyah_checkpoint_identity_sha256(
+            options.checkpoint_in, checkpoint_identity);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("checkpoint_identity", status);
+            goto cleanup;
+        }
         if (cursor.sample_count != sample_count ||
             cursor.has_dataset_identity == 0 ||
+            cursor.has_checkpoint_identity == 0 ||
             memcmp(cursor.dataset_identity, dataset_identity,
                    NIYAH_DATASET_IDENTITY_SHA256_SIZE) != 0 ||
+            memcmp(cursor.checkpoint_identity, checkpoint_identity,
+                   NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE) != 0 ||
             !validate_sample_context(samples, sample_count,
                                      model.config.context_length)) {
             exit_code = fail_status("resume_compatibility",
@@ -547,6 +557,20 @@ int main(int argc, char **argv)
         &optimizer_config, tokenizer);
     if (status != NIYAH_OK) {
         exit_code = fail_status("checkpoint_save", status);
+        goto cleanup;
+    }
+    status = niyah_checkpoint_identity_sha256(
+        options.checkpoint_out, checkpoint_identity);
+    if (status != NIYAH_OK) {
+        (void)remove(options.checkpoint_out);
+        exit_code = fail_status("checkpoint_identity", status);
+        goto cleanup;
+    }
+    status = niyah_dataset_cursor_bind_checkpoint_identity(
+        &cursor, checkpoint_identity);
+    if (status != NIYAH_OK) {
+        (void)remove(options.checkpoint_out);
+        exit_code = fail_status("cursor_checkpoint_bind", status);
         goto cleanup;
     }
     status = niyah_dataset_cursor_save(&cursor, options.cursor_out);

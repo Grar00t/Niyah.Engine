@@ -1,4 +1,5 @@
 #include "niyah/checkpoint.h"
+#include "niyah_sha256.h"
 
 #include <float.h>
 #include <limits.h>
@@ -1073,6 +1074,39 @@ static NiyahStatus niyah_checkpoint_load_impl(
     out_optimizer_state->model_layout = out_model->layout;
     memset(&temp_model, 0, sizeof(temp_model));
     memset(&temp_state, 0, sizeof(temp_state));
+    return NIYAH_OK;
+}
+
+NiyahStatus niyah_checkpoint_identity_sha256(
+    const char *path,
+    uint8_t out_identity[NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE])
+{
+    FILE *file;
+    NiyahSha256 sha;
+    unsigned char buffer[NIYAH_CHECKPOINT_IO_BUFFER_SIZE];
+    size_t received;
+    int close_result;
+
+    if (path == NULL || path[0] == '\0' || out_identity == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    file = niyah_checkpoint_fopen(path, "rb");
+    if (file == NULL)
+        return NIYAH_ERR_IO;
+
+    niyah_sha256_init(&sha);
+    while ((received = fread(buffer, 1U, sizeof(buffer), file)) != 0U)
+        niyah_sha256_update(&sha, buffer, received);
+
+    if (ferror(file) != 0) {
+        (void)fclose(file);
+        return NIYAH_ERR_IO;
+    }
+
+    close_result = fclose(file);
+    if (close_result != 0)
+        return NIYAH_ERR_IO;
+
+    niyah_sha256_final(&sha, out_identity);
     return NIYAH_OK;
 }
 
