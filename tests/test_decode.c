@@ -206,6 +206,79 @@ static int test_reset_bounds_and_fail_closed_position(void)
     return 0;
 }
 
+static int test_token_changes_logits(void)
+{
+    NiyahModelConfig config = tiny_config();
+    NiyahModel model;
+    NiyahKVCache cache;
+    size_t workspace_count = 0U;
+    float *workspace = NULL;
+    float *logits_a = NULL;
+    float *logits_b = NULL;
+    size_t i;
+    int differs = 0;
+
+    memset(&model, 0, sizeof(model));
+    memset(&cache, 0, sizeof(cache));
+
+    CHECK(niyah_model_create(&model, &config) == NIYAH_OK);
+    CHECK(niyah_model_reset_parameters(
+              &model, UINT64_C(0x12345678)) == NIYAH_OK);
+    CHECK(niyah_kv_cache_create(&cache, &config) == NIYAH_OK);
+    CHECK(niyah_decode_workspace_floats(
+              &config, &workspace_count) == NIYAH_OK);
+
+    workspace = (float *)calloc(workspace_count, sizeof(float));
+    logits_a = (float *)calloc(
+        (size_t)config.vocab_size, sizeof(float));
+    logits_b = (float *)calloc(
+        (size_t)config.vocab_size, sizeof(float));
+
+    CHECK(workspace != NULL);
+    CHECK(logits_a != NULL);
+    CHECK(logits_b != NULL);
+
+    CHECK(niyah_transformer_decode_token(
+              &model,
+              &cache,
+              1U,
+              logits_a,
+              (size_t)config.vocab_size,
+              workspace,
+              workspace_count) == NIYAH_OK);
+
+    niyah_kv_cache_reset(&cache);
+    memset(workspace, 0, workspace_count * sizeof(float));
+
+    CHECK(niyah_transformer_decode_token(
+              &model,
+              &cache,
+              2U,
+              logits_b,
+              (size_t)config.vocab_size,
+              workspace,
+              workspace_count) == NIYAH_OK);
+
+    for (i = 0U; i < (size_t)config.vocab_size; ++i) {
+        CHECK(isfinite(logits_a[i]));
+        CHECK(isfinite(logits_b[i]));
+        if (logits_a[i] != logits_b[i]) {
+            differs = 1;
+        }
+    }
+
+    CHECK(differs != 0);
+
+    free(logits_b);
+    free(logits_a);
+    free(workspace);
+    niyah_kv_cache_destroy(&cache);
+    niyah_model_destroy(&model);
+
+    puts("P8D_DECODE_TOKEN_SENSITIVITY=PASS");
+    return 0;
+}
+
 static int test_cache_model_mismatch(void)
 {
     NiyahModelConfig cache_config = tiny_config();
@@ -246,6 +319,7 @@ static int test_cache_model_mismatch(void)
 
 int main(void)
 {
+    if (test_token_changes_logits() != 0) return 1;
     CHECK(test_incremental_matches_full_forward() == 0);
     CHECK(test_reset_bounds_and_fail_closed_position() == 0);
     CHECK(test_cache_model_mismatch() == 0);

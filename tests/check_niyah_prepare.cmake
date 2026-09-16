@@ -15,6 +15,11 @@ set(TOK_B "${WORK_DIR}/p8c_b.tok")
 set(SHARD_B "${WORK_DIR}/p8c_b.srd")
 set(CKPT "${WORK_DIR}/p8c_train.ckpt")
 set(CURSOR "${WORK_DIR}/p8c_train.cursor")
+set(RECORD_CORPUS "${WORK_DIR}/p8d_records.txt")
+set(RECORD_TOK "${WORK_DIR}/p8d_records.tok")
+set(RECORD_SHARD "${WORK_DIR}/p8d_records.srd")
+set(RECORD_CKPT "${WORK_DIR}/p8d_records.ckpt")
+set(RECORD_CURSOR "${WORK_DIR}/p8d_records.cursor")
 
 file(REMOVE
     "${CORPUS}"
@@ -23,7 +28,12 @@ file(REMOVE
     "${TOK_B}"
     "${SHARD_B}"
     "${CKPT}"
-    "${CURSOR}")
+    "${CURSOR}"
+    "${RECORD_CORPUS}"
+    "${RECORD_TOK}"
+    "${RECORD_SHARD}"
+    "${RECORD_CKPT}"
+    "${RECORD_CURSOR}")
 
 file(WRITE "${CORPUS}"
     "hello world hello world\n"
@@ -126,5 +136,70 @@ endif()
 if(NOT EXISTS "${CKPT}" OR NOT EXISTS "${CURSOR}")
     message(FATAL_ERROR "training outputs missing")
 endif()
+
+file(WRITE "${RECORD_CORPUS}"
+    "User: A\n"
+    "Assistant: 1\n"
+    "\n"
+    "User: B\n"
+    "Assistant: 2\n")
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" prepare
+        --corpus "${RECORD_CORPUS}"
+        --tokenizer-out "${RECORD_TOK}"
+        --shard-out "${RECORD_SHARD}"
+        --target-vocab 258
+        --min-pair-frequency 1
+        --sequence-length 64
+        --record-mode blank-line
+    RESULT_VARIABLE record_prepare_result
+    OUTPUT_VARIABLE record_prepare_output
+    ERROR_VARIABLE record_prepare_error)
+
+if(NOT record_prepare_result EQUAL 0)
+    message(FATAL_ERROR
+        "boundary-aware prepare failed: ${record_prepare_result}\n"
+        "stdout=${record_prepare_output}\n"
+        "stderr=${record_prepare_error}")
+endif()
+
+execute_process(
+    COMMAND "${NIYAH_TRAIN}" new
+        --tokenizer "${RECORD_TOK}"
+        --shard "${RECORD_SHARD}"
+        --checkpoint-out "${RECORD_CKPT}"
+        --cursor-out "${RECORD_CURSOR}"
+        --updates 1
+        --batch-size 1
+        --accumulation-steps 1
+        --model-seed 42
+        --data-seed 7
+        --context-length 64
+        --embedding-dim 8
+        --layers 1
+        --heads 2
+        --kv-heads 1
+        --ffn-hidden-dim 16
+        --rms-norm-eps 0.00001
+        --tie-word-embeddings 1
+        --learning-rate 0.001
+        --beta1 0.9
+        --beta2 0.999
+        --epsilon 0.00000001
+        --weight-decay 0
+        --max-grad-norm 1
+    RESULT_VARIABLE record_train_result
+    OUTPUT_VARIABLE record_train_output
+    ERROR_VARIABLE record_train_error)
+
+if(NOT record_train_result EQUAL 0)
+    message(FATAL_ERROR
+        "boundary-aware shard rejected by niyah-train: ${record_train_result}\n"
+        "stdout=${record_train_output}\n"
+        "stderr=${record_train_error}")
+endif()
+
+message("P8D_BOUNDARY_AWARE_PREPARE=PASS")
 
 message("P8C_NATIVE_CORPUS_PREPARE=PASS")

@@ -70,6 +70,9 @@ typedef struct NiyahDatasetShard {
     size_t token_count;
     size_t sequence_length;
     size_t sample_count;
+    size_t *sample_offsets;
+    size_t *sample_lengths;
+    int has_explicit_samples;
     uint8_t tokenizer_identity[NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE];
 } NiyahDatasetShard;
 
@@ -86,6 +89,25 @@ NiyahStatus niyah_dataset_shard_build_text(
     const NiyahTokenizer *tokenizer,
     const uint8_t *text,
     size_t text_size,
+    size_t sequence_length,
+    NiyahDatasetShard *out_shard);
+
+/* Boundary-aware preprocessing over explicit byte ranges.
+ *
+ * Each record is independently encoded as:
+ *   BOS, tokenizer(record), EOS
+ *
+ * Samples may split a long record at sequence_length, but never cross from
+ * one record into another. V2 persistence stores the resulting explicit
+ * sample offsets and lengths.
+ */
+NiyahStatus niyah_dataset_shard_build_records(
+    const NiyahTokenizer *tokenizer,
+    const uint8_t *text,
+    size_t text_size,
+    const size_t *record_offsets,
+    const size_t *record_lengths,
+    size_t record_count,
     size_t sequence_length,
     NiyahDatasetShard *out_shard);
 
@@ -115,7 +137,8 @@ NiyahStatus niyah_dataset_collection_identity_sha256(
     size_t shard_count,
     uint8_t out_identity[NIYAH_DATASET_COLLECTION_IDENTITY_SHA256_SIZE]);
 
-/* Binary NIYAHSRD V1 persistence. The tokenizer SHA-256 identity is required
+/* Binary NIYAHSRD V1/V2 persistence. V2 stores explicit sample geometry.
+ * The tokenizer SHA-256 identity is required
  * and checked on load. CRC32 detects accidental corruption only; it is not an
  * authenticity mechanism.
  */
