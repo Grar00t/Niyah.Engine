@@ -549,7 +549,7 @@ fail:
     return 1;
 }
 
-extern "C" int niyah_cuda_model_state_matvec_device(
+static int niyah_cuda_model_state_matvec_device_launch(
     const NiyahCudaModelState *state,
     size_t weight_offset,
     const void *device_x,
@@ -557,10 +557,10 @@ extern "C" int niyah_cuda_model_state_matvec_device(
     size_t rows,
     size_t cols)
 {
-    const unsigned int threads = 128U;
     size_t matrix_count;
-    size_t block_count;
-    cudaError_t error;
+    size_t launch_count;
+    unsigned int blocks;
+    const unsigned int threads = 128U;
 
     if (state == NULL ||
         state->device_weights == NULL ||
@@ -569,45 +569,65 @@ extern "C" int niyah_cuda_model_state_matvec_device(
         device_x == device_out ||
         rows == 0U ||
         cols == 0U ||
-        rows > ((size_t)-1) / cols) {
-        return 1;
-    }
-
-    matrix_count = rows * cols;
-
-    if (weight_offset > state->weight_count ||
-        matrix_count > state->weight_count - weight_offset ||
-        rows > ((size_t)-1) - ((size_t)threads - 1U)) {
-        return 1;
-    }
-
-    block_count =
-        (rows + (size_t)threads - 1U) / (size_t)threads;
-
-    if (block_count == 0U ||
-        block_count > (size_t)UINT_MAX) {
-        return 1;
-    }
-
-    niyah_cuda_matvec_kernel<<<
-        (unsigned int)block_count,
-        threads>>>(
-            (float *)device_out,
-            (const float *)state->device_weights + weight_offset,
-            (const float *)device_x,
+        !niyah_cuda_size_mul_ok(
+            rows, cols, &matrix_count) ||
+        weight_offset > state->weight_count ||
+        matrix_count >
+            state->weight_count - weight_offset ||
+        !niyah_cuda_size_add_ok(
             rows,
-            cols);
+            (size_t)threads - 1U,
+            &launch_count)) {
+        return 1;
+    }
 
-    error = cudaGetLastError();
-    if (error != cudaSuccess) {
+    launch_count /= (size_t)threads;
+
+    if (launch_count == 0U ||
+        launch_count > (size_t)UINT_MAX) {
+        return 1;
+    }
+
+    blocks = (unsigned int)launch_count;
+
+    niyah_cuda_matvec_kernel<<<blocks, threads>>>(
+        (float *)device_out,
+        (const float *)state->device_weights +
+            weight_offset,
+        (const float *)device_x,
+        rows,
+        cols);
+
+    return cudaGetLastError() == cudaSuccess
+        ? 0
+        : 1;
+}
+
+extern "C" int niyah_cuda_model_state_matvec_device(
+    const NiyahCudaModelState *state,
+    size_t weight_offset,
+    const void *device_x,
+    void *device_out,
+    size_t rows,
+    size_t cols)
+{
+    if (niyah_cuda_model_state_matvec_device_launch(
+            state,
+            weight_offset,
+            device_x,
+            device_out,
+            rows,
+            cols) != 0) {
         return 1;
     }
 
     /*
-     * No host/device copies occur here. Synchronization keeps this primitive
-     * fail-closed until a later phase introduces stream-aware execution.
+     * Preserve the P7-D public primitive contract: completion and
+     * asynchronous execution errors are observed before return.
      */
-    return cudaDeviceSynchronize() == cudaSuccess ? 0 : 1;
+    return cudaDeviceSynchronize() == cudaSuccess
+        ? 0
+        : 1;
 }
 
 __global__ static void niyah_cuda_rmsnorm_kernel(
@@ -777,15 +797,9 @@ __global__ static void niyah_cuda_silu_mul_kernel(
     }
 }
 
-static int niyah_cuda_sync_kernel(void)
+static int niyah_cuda_check_launch(void)
 {
-    cudaError_t error = cudaGetLastError();
-
-    if (error != cudaSuccess) {
-        return 1;
-    }
-
-    return cudaDeviceSynchronize() == cudaSuccess ? 0 : 1;
+    return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
 
 static int niyah_cuda_blocks_for(
@@ -1016,7 +1030,7 @@ static int niyah_cuda_rmsnorm_device(
         n,
         model_state->config.rms_norm_eps);
 
-    return niyah_cuda_sync_kernel();
+    return niyah_cuda_check_launch();
 }
 
 static int niyah_cuda_rope_device(
@@ -1038,7 +1052,7 @@ static int niyah_cuda_rope_device(
         head_dim,
         position);
 
-    return niyah_cuda_sync_kernel();
+    return niyah_cuda_check_launch();
 }
 
 static int niyah_cuda_attention_one_device(
@@ -1090,7 +1104,7 @@ static int niyah_cuda_attention_one_device(
         decode_state->head_dim,
         decode_state->kv_dim);
 
-    return niyah_cuda_sync_kernel();
+    return niyah_cuda_check_launch();
 }
 
 static int niyah_cuda_add_device(
@@ -1110,7 +1124,7 @@ static int niyah_cuda_add_device(
     niyah_cuda_add_kernel<<<blocks, threads>>>(
         dst, src, n);
 
-    return niyah_cuda_sync_kernel();
+    return niyah_cuda_check_launch();
 }
 
 static int niyah_cuda_silu_mul_device(
@@ -1130,7 +1144,7 @@ static int niyah_cuda_silu_mul_device(
     niyah_cuda_silu_mul_kernel<<<blocks, threads>>>(
         gate, up, n);
 
-    return niyah_cuda_sync_kernel();
+    return niyah_cuda_check_launch();
 }
 
 extern "C" int niyah_cuda_decode_token(
@@ -1271,21 +1285,21 @@ extern "C" int niyah_cuda_decode_token(
             return 1;
         }
 
-        if (niyah_cuda_model_state_matvec_device(
+        if (niyah_cuda_model_state_matvec_device_launch(
                 model_state,
                 layer.wq,
                 norm,
                 q,
                 dim,
                 dim) != 0 ||
-            niyah_cuda_model_state_matvec_device(
+            niyah_cuda_model_state_matvec_device_launch(
                 model_state,
                 layer.wk,
                 norm,
                 k,
                 kv_dim,
                 dim) != 0 ||
-            niyah_cuda_model_state_matvec_device(
+            niyah_cuda_model_state_matvec_device_launch(
                 model_state,
                 layer.wv,
                 norm,
@@ -1333,7 +1347,7 @@ extern "C" int niyah_cuda_decode_token(
             return 1;
         }
 
-        if (niyah_cuda_model_state_matvec_device(
+        if (niyah_cuda_model_state_matvec_device_launch(
                 model_state,
                 layer.wo,
                 attn,
@@ -1356,14 +1370,14 @@ extern "C" int niyah_cuda_decode_token(
             return 1;
         }
 
-        if (niyah_cuda_model_state_matvec_device(
+        if (niyah_cuda_model_state_matvec_device_launch(
                 model_state,
                 layer.w_gate,
                 norm,
                 gate,
                 ffn,
                 dim) != 0 ||
-            niyah_cuda_model_state_matvec_device(
+            niyah_cuda_model_state_matvec_device_launch(
                 model_state,
                 layer.w_up,
                 norm,
@@ -1374,7 +1388,7 @@ extern "C" int niyah_cuda_decode_token(
                 gate,
                 up,
                 ffn) != 0 ||
-            niyah_cuda_model_state_matvec_device(
+            niyah_cuda_model_state_matvec_device_launch(
                 model_state,
                 layer.w_down,
                 gate,
@@ -1395,7 +1409,7 @@ extern "C" int niyah_cuda_decode_token(
             hidden,
             model_state->layout.final_norm,
             dim) != 0 ||
-        niyah_cuda_model_state_matvec_device(
+        niyah_cuda_model_state_matvec_device_launch(
             model_state,
             model_state->layout.lm_head,
             norm,
