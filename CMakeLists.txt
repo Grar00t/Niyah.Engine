@@ -146,8 +146,21 @@ else()
     target_compile_options(niyah_train PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+add_executable(niyah_cli tools/niyah.c)
+set_target_properties(niyah_cli PROPERTIES OUTPUT_NAME "niyah")
+target_link_libraries(niyah_cli PRIVATE niyah)
+
+if(MSVC)
+    target_compile_options(niyah_cli PRIVATE /W4 /WX)
+else()
+    target_compile_options(niyah_cli PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 if(NIYAH_BUILD_TESTS)
     enable_testing()
+
+    add_test(NAME niyah_cli_help_test
+             COMMAND niyah_cli --help)
 
     if(NIYAH_ENABLE_CUDA)
         add_executable(niyah_cuda_matvec_test tests/test_cuda_matvec.c)
@@ -446,6 +459,14 @@ if(NIYAH_BUILD_TESTS)
             --max-grad-norm 1.0)
     set_tests_properties(niyah_train_new_test PROPERTIES
         FIXTURES_REQUIRED niyah_train_files)
+
+    add_test(NAME niyah_cli_run_test
+        COMMAND ${CMAKE_COMMAND}
+            -DNIYAH_FIXTURE=$<TARGET_FILE:niyah_training_fixture>
+            -DNIYAH_TRAIN=$<TARGET_FILE:niyah_train>
+            -DNIYAH_CLI=$<TARGET_FILE:niyah_cli>
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_run.cmake)
 
     add_test(NAME niyah_train_resume_test
         COMMAND niyah_train resume
