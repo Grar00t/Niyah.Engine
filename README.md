@@ -33,7 +33,7 @@ token ids
   -> global gradient clipping
   -> AdamW
   -> same canonical weights updated
-  -> [planned] checkpoint / resume
+  -> versioned model + AdamW checkpoint / resume foundation
 ```
 
 ## Core rules
@@ -41,7 +41,7 @@ token ids
 - Native C11 implementation.
 - CPU FP32 is the current reference path; optional CUDA acceleration is planned later.
 - One canonical `NiyahModel` layout for training and inference.
-- Deterministic tests currently cover model math, tokenizer behavior, forward/decode parity, gradients, generation, the tokenizer-to-model text pipeline, AdamW arithmetic, global clipping, and a tiny backward-to-AdamW training chain.
+- Deterministic tests currently cover model math, tokenizer behavior, forward/decode parity, gradients, generation, the tokenizer-to-model text pipeline, AdamW arithmetic, global clipping, the tiny backward-to-AdamW training chain, and checkpoint roundtrip/resume, corruption rejection, and failure-atomic behavior.
 - The tiny deterministic training-chain tests verify executable integration and loss decrease on a synthetic task; they do not establish real-corpus convergence or Arabic/English model capability.
 - No hidden telemetry.
 - No hosted-model API dependency.
@@ -61,16 +61,18 @@ Implemented:
 4. KV cache and autoregressive generation.
 5. Cross-entropy and explicit backward gradients on the canonical weights.
 6. Native reference AdamW with robust global gradient clipping over the canonical gradient vector.
+7. Versioned model + AdamW checkpoint/resume foundation.
 
 Planned:
 
-7. Versioned checkpoint/resume foundation.
 8. Tokenizer persistence/identity binding and deterministic dataset/training lifecycle.
 9. Held-out validation/perplexity.
 10. Optional CUDA kernels and residency.
 
 ## Status
 
-The current implementation is the native CPU reference path through explicit backward gradients, robust global gradient clipping, and AdamW updates to the same canonical FP32 model weights.
+The current implementation is the native CPU reference path through explicit backward gradients, robust global gradient clipping, AdamW updates to the same canonical FP32 model weights, and versioned persistence of the canonical model plus AdamW training state.
 
-Checkpoint/resume, tokenizer persistence, production dataset preprocessing/sharding, a production training executable/loop, true mini-batches, gradient accumulation, held-out validation/perplexity, mixed precision, CUDA, instruction tuning, and conversational tuning are not implemented. Real-corpus convergence, Arabic model capability, and English model capability have not been demonstrated.
+Checkpoint V1 persists model configuration and weights together with AdamW moments, step, and optimizer hyperparameters. It does not yet persist tokenizer identity/state, dataset position/order, scheduler state, gradient accumulation state, mixed-precision/CUDA state, or any training-path RNG state that does not currently exist.
+
+Tokenizer persistence, production dataset preprocessing/sharding, a production training executable/loop, true mini-batches, gradient accumulation, held-out validation/perplexity, mixed precision, CUDA, instruction tuning, and conversational tuning are not implemented. Real-corpus convergence, Arabic model capability, and English model capability have not been demonstrated.
