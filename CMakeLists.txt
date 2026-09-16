@@ -91,6 +91,10 @@ target_include_directories(niyah
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+if(NIYAH_ENABLE_CUDA)
+    target_link_libraries(niyah_cuda_backend PRIVATE niyah)
+endif()
+
 if(MSVC)
     target_compile_options(niyah PRIVATE /W4 /WX)
 else()
@@ -233,6 +237,33 @@ if(NIYAH_BUILD_TESTS)
         add_test(
             NAME niyah_cuda_decode_token_test
             COMMAND niyah_cuda_decode_token_test
+        )
+
+        add_executable(niyah_cuda_generation_test
+            tests/test_cuda_generation.c
+        )
+        target_include_directories(niyah_cuda_generation_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_generation_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_generation_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_generation_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_generation_test
+            COMMAND niyah_cuda_generation_test
         )
     endif()
 
