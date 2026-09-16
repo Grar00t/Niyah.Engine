@@ -38,6 +38,14 @@ int niyah_cuda_model_state_matvec(NiyahCudaModelState *state,
                                   size_t rows,
                                   size_t cols);
 
+int niyah_cuda_model_state_matvec_device(
+    const NiyahCudaModelState *state,
+    size_t weight_offset,
+    const void *device_x,
+    void *device_out,
+    size_t rows,
+    size_t cols);
+
 typedef struct NiyahCudaDecodeState {
     void *device_keys;
     void *device_values;
