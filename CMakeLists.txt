@@ -43,6 +43,7 @@ endif()
 add_library(niyah STATIC
     src/niyah_model.c
     src/niyah_math.c
+    src/niyah_sha256.c
     src/niyah_tokenizer.c
     src/niyah_dataset.c
     src/niyah_dataset_shard.c
