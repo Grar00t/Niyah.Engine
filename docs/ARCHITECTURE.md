@@ -76,6 +76,7 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 - tokenizer persistence V1 with stable SHA-256 tokenizer identity;
 - tokenizer-bound Checkpoint V2 while Checkpoint V1 remains supported;
 - deterministic dataset sample ordering with resumable cursor persistence;
+- deterministic text preprocessing into tokenizer-bound NIYAHSRD V1 binary shards with shifted causal-LM sample views;
 - deterministic single-sample reference training loop over dataset cursor, backward gradients, and AdamW;
 - deterministic sequential per-sample gradient accumulation with one averaged AdamW update per accumulated group;
 - read-only held-out evaluation with token-weighted mean cross-entropy and perplexity;
@@ -103,7 +104,7 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 
 ## Not implemented yet
 
-- dataset preprocessing and binary sharding;
+- production multi-shard dataset tooling;
 - production training executable;
 - true tensor mini-batch training;
 - mixed precision;
@@ -130,7 +131,7 @@ These are later engineering targets. Checkpoint persistence does not refactor th
 
 ## Architectural boundary
 
-The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, versioned checkpoint persistence, and deterministic dataset cursor sequencing/persistence. Production dataset preprocessing/sharding, a production training executable, true tensor mini-batching, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
+The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, versioned checkpoint persistence, and deterministic dataset cursor sequencing/persistence. Production multi-shard dataset tooling, a production training executable, true tensor mini-batching, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
 
 ## Out of core
 
