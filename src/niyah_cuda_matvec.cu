@@ -2,7 +2,9 @@
 
 #include <cuda_runtime.h>
 
+#include <float.h>
 #include <limits.h>
+#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -606,4 +608,811 @@ extern "C" int niyah_cuda_model_state_matvec_device(
      * fail-closed until a later phase introduces stream-aware execution.
      */
     return cudaDeviceSynchronize() == cudaSuccess ? 0 : 1;
+}
+
+__global__ static void niyah_cuda_rmsnorm_kernel(
+    float *out,
+    const float *x,
+    const float *weight,
+    size_t n,
+    float eps)
+{
+    if (blockIdx.x == 0U && threadIdx.x == 0U) {
+        double sum_sq = 0.0;
+        float inv_rms;
+        size_t i;
+
+        for (i = 0U; i < n; ++i) {
+            const double v = (double)x[i];
+            sum_sq += v * v;
+        }
+
+        inv_rms =
+            1.0f / sqrtf((float)(sum_sq / (double)n) + eps);
+
+        for (i = 0U; i < n; ++i) {
+            out[i] = x[i] * inv_rms * weight[i];
+        }
+    }
+}
+
+__global__ static void niyah_cuda_rope_kernel(
+    float *vector,
+    size_t n_heads,
+    size_t head_dim,
+    size_t position)
+{
+    if (blockIdx.x == 0U && threadIdx.x == 0U) {
+        const float pos = (float)position;
+        size_t head;
+
+        for (head = 0U; head < n_heads; ++head) {
+            float *head_vector = vector + head * head_dim;
+            size_t i;
+
+            for (i = 0U; i + 1U < head_dim; i += 2U) {
+                const float exponent =
+                    -((float)i / (float)head_dim);
+                const float inv_freq =
+                    powf(10000.0f, exponent);
+                const float angle = pos * inv_freq;
+                const float c = cosf(angle);
+                const float sn = sinf(angle);
+                const float x0 = head_vector[i];
+                const float x1 = head_vector[i + 1U];
+
+                head_vector[i] = x0 * c - x1 * sn;
+                head_vector[i + 1U] = x0 * sn + x1 * c;
+            }
+        }
+    }
+}
+
+__global__ static void niyah_cuda_attention_one_kernel(
+    float *out,
+    const float *q,
+    const float *keys,
+    const float *values,
+    float *scores,
+    size_t layer_base,
+    size_t position,
+    size_t dim,
+    size_t n_heads,
+    size_t n_kv_heads,
+    size_t head_dim,
+    size_t kv_dim)
+{
+    if (blockIdx.x == 0U && threadIdx.x == 0U) {
+        const size_t group_size = n_heads / n_kv_heads;
+        const float scale = 1.0f / sqrtf((float)head_dim);
+        size_t head;
+        size_t i;
+
+        for (i = 0U; i < dim; ++i) {
+            out[i] = 0.0f;
+        }
+
+        for (head = 0U; head < n_heads; ++head) {
+            const size_t kv_head = head / group_size;
+            const float *q_head = q + head * head_dim;
+            float max_score = -FLT_MAX;
+            float normalizer = 0.0f;
+            size_t source;
+            size_t d;
+
+            for (source = 0U; source <= position; ++source) {
+                const float *k_head =
+                    keys +
+                    layer_base +
+                    source * kv_dim +
+                    kv_head * head_dim;
+                float dot = 0.0f;
+
+                for (d = 0U; d < head_dim; ++d) {
+                    dot += q_head[d] * k_head[d];
+                }
+
+                scores[source] = dot * scale;
+                if (scores[source] > max_score) {
+                    max_score = scores[source];
+                }
+            }
+
+            for (source = 0U; source <= position; ++source) {
+                scores[source] =
+                    expf(scores[source] - max_score);
+                normalizer += scores[source];
+            }
+
+            for (d = 0U; d < head_dim; ++d) {
+                float value = 0.0f;
+
+                for (source = 0U;
+                     source <= position;
+                     ++source) {
+                    const float *v_head =
+                        values +
+                        layer_base +
+                        source * kv_dim +
+                        kv_head * head_dim;
+
+                    value +=
+                        (scores[source] / normalizer) *
+                        v_head[d];
+                }
+
+                out[head * head_dim + d] = value;
+            }
+        }
+    }
+}
+
+__global__ static void niyah_cuda_add_kernel(
+    float *dst,
+    const float *src,
+    size_t n)
+{
+    const size_t i =
+        (size_t)blockIdx.x * (size_t)blockDim.x +
+        (size_t)threadIdx.x;
+
+    if (i < n) {
+        dst[i] += src[i];
+    }
+}
+
+__global__ static void niyah_cuda_silu_mul_kernel(
+    float *gate,
+    const float *up,
+    size_t n)
+{
+    const size_t i =
+        (size_t)blockIdx.x * (size_t)blockDim.x +
+        (size_t)threadIdx.x;
+
+    if (i < n) {
+        const float x = gate[i];
+        gate[i] =
+            (x / (1.0f + expf(-x))) * up[i];
+    }
+}
+
+static int niyah_cuda_sync_kernel(void)
+{
+    cudaError_t error = cudaGetLastError();
+
+    if (error != cudaSuccess) {
+        return 1;
+    }
+
+    return cudaDeviceSynchronize() == cudaSuccess ? 0 : 1;
+}
+
+static int niyah_cuda_blocks_for(
+    size_t n,
+    unsigned int threads,
+    unsigned int *out_blocks)
+{
+    size_t blocks;
+
+    if (n == 0U || threads == 0U || out_blocks == NULL ||
+        n > ((size_t)-1) - ((size_t)threads - 1U)) {
+        return 1;
+    }
+
+    blocks =
+        (n + (size_t)threads - 1U) /
+        (size_t)threads;
+
+    if (blocks == 0U || blocks > (size_t)UINT_MAX) {
+        return 1;
+    }
+
+    *out_blocks = (unsigned int)blocks;
+    return 0;
+}
+
+static int niyah_cuda_decode_state_matches_model(
+    const NiyahCudaDecodeState *decode_state,
+    const NiyahCudaModelState *model_state)
+{
+    const NiyahModelConfig *config;
+    size_t expected_values;
+    size_t per_layer;
+    size_t expected_workspace;
+    size_t term;
+    size_t dim;
+    size_t ffn;
+
+    if (decode_state == NULL ||
+        model_state == NULL ||
+        decode_state->device_keys == NULL ||
+        decode_state->device_values == NULL ||
+        decode_state->device_workspace == NULL ||
+        decode_state->device_logits == NULL ||
+        model_state->device_weights == NULL ||
+        !niyah_cuda_config_equal(
+            &decode_state->config,
+            &model_state->config)) {
+        return 0;
+    }
+
+    config = &model_state->config;
+    dim = (size_t)config->embedding_dim;
+    ffn = (size_t)config->ffn_hidden_dim;
+
+    if (decode_state->context_length !=
+            (size_t)config->context_length ||
+        decode_state->head_dim !=
+            model_state->layout.head_dim ||
+        decode_state->kv_dim !=
+            model_state->layout.kv_dim ||
+        decode_state->logits_capacity !=
+            (size_t)config->vocab_size ||
+        model_state->layout.total_floats !=
+            model_state->weight_count ||
+        decode_state->next_position >
+            decode_state->context_length) {
+        return 0;
+    }
+
+    if (!niyah_cuda_size_mul_ok(
+            decode_state->context_length,
+            decode_state->kv_dim,
+            &per_layer) ||
+        !niyah_cuda_size_mul_ok(
+            (size_t)config->n_layers,
+            per_layer,
+            &expected_values) ||
+        expected_values !=
+            decode_state->values_per_tensor) {
+        return 0;
+    }
+
+    if (!niyah_cuda_size_mul_ok(
+            5U, dim, &expected_workspace) ||
+        !niyah_cuda_size_mul_ok(
+            2U, decode_state->kv_dim, &term) ||
+        !niyah_cuda_size_add_ok(
+            expected_workspace,
+            term,
+            &expected_workspace) ||
+        !niyah_cuda_size_mul_ok(
+            2U, ffn, &term) ||
+        !niyah_cuda_size_add_ok(
+            expected_workspace,
+            term,
+            &expected_workspace) ||
+        !niyah_cuda_size_add_ok(
+            expected_workspace,
+            decode_state->context_length,
+            &expected_workspace)) {
+        return 0;
+    }
+
+    return expected_workspace ==
+        decode_state->workspace_floats;
+}
+
+static int niyah_cuda_layer_layout(
+    const NiyahCudaModelState *state,
+    uint32_t layer_index,
+    NiyahLayerLayout *layer)
+{
+    const NiyahModelConfig *config;
+    size_t base;
+    size_t delta;
+    size_t cursor;
+    size_t count;
+    size_t dim;
+    size_t kv_dim;
+    size_t ffn;
+    size_t expected_end;
+
+    if (state == NULL || layer == NULL ||
+        layer_index >= state->config.n_layers) {
+        return 1;
+    }
+
+    config = &state->config;
+    dim = (size_t)config->embedding_dim;
+    kv_dim = state->layout.kv_dim;
+    ffn = (size_t)config->ffn_hidden_dim;
+
+    if (!niyah_cuda_size_mul_ok(
+            (size_t)layer_index,
+            state->layout.layer_stride,
+            &delta) ||
+        !niyah_cuda_size_add_ok(
+            state->layout.layers,
+            delta,
+            &base)) {
+        return 1;
+    }
+
+    cursor = base;
+    layer->attn_norm = cursor;
+
+    if (!niyah_cuda_size_add_ok(cursor, dim, &cursor)) {
+        return 1;
+    }
+
+    layer->wq = cursor;
+    if (!niyah_cuda_size_mul_ok(dim, dim, &count) ||
+        !niyah_cuda_size_add_ok(cursor, count, &cursor)) {
+        return 1;
+    }
+
+    layer->wk = cursor;
+    if (!niyah_cuda_size_mul_ok(kv_dim, dim, &count) ||
+        !niyah_cuda_size_add_ok(cursor, count, &cursor)) {
+        return 1;
+    }
+
+    layer->wv = cursor;
+    if (!niyah_cuda_size_add_ok(cursor, count, &cursor)) {
+        return 1;
+    }
+
+    layer->wo = cursor;
+    if (!niyah_cuda_size_mul_ok(dim, dim, &count) ||
+        !niyah_cuda_size_add_ok(cursor, count, &cursor)) {
+        return 1;
+    }
+
+    layer->ffn_norm = cursor;
+    if (!niyah_cuda_size_add_ok(cursor, dim, &cursor)) {
+        return 1;
+    }
+
+    layer->w_gate = cursor;
+    if (!niyah_cuda_size_mul_ok(ffn, dim, &count) ||
+        !niyah_cuda_size_add_ok(cursor, count, &cursor)) {
+        return 1;
+    }
+
+    layer->w_up = cursor;
+    if (!niyah_cuda_size_add_ok(cursor, count, &cursor)) {
+        return 1;
+    }
+
+    layer->w_down = cursor;
+    if (!niyah_cuda_size_mul_ok(dim, ffn, &count) ||
+        !niyah_cuda_size_add_ok(cursor, count, &cursor) ||
+        !niyah_cuda_size_add_ok(
+            base,
+            state->layout.layer_stride,
+            &expected_end)) {
+        return 1;
+    }
+
+    return cursor == expected_end &&
+           cursor <= state->weight_count
+               ? 0
+               : 1;
+}
+
+static int niyah_cuda_rmsnorm_device(
+    const NiyahCudaModelState *model_state,
+    float *out,
+    const float *x,
+    size_t weight_offset,
+    size_t n)
+{
+    if (model_state == NULL ||
+        out == NULL ||
+        x == NULL ||
+        n == 0U ||
+        weight_offset > model_state->weight_count ||
+        n > model_state->weight_count - weight_offset) {
+        return 1;
+    }
+
+    niyah_cuda_rmsnorm_kernel<<<1U, 1U>>>(
+        out,
+        x,
+        (const float *)model_state->device_weights +
+            weight_offset,
+        n,
+        model_state->config.rms_norm_eps);
+
+    return niyah_cuda_sync_kernel();
+}
+
+static int niyah_cuda_rope_device(
+    float *vector,
+    size_t n_heads,
+    size_t head_dim,
+    size_t position)
+{
+    if (vector == NULL ||
+        n_heads == 0U ||
+        head_dim < 2U ||
+        (head_dim % 2U) != 0U) {
+        return 1;
+    }
+
+    niyah_cuda_rope_kernel<<<1U, 1U>>>(
+        vector,
+        n_heads,
+        head_dim,
+        position);
+
+    return niyah_cuda_sync_kernel();
+}
+
+static int niyah_cuda_attention_one_device(
+    float *out,
+    const float *q,
+    const NiyahCudaDecodeState *decode_state,
+    uint32_t layer_index,
+    size_t position,
+    float *scores)
+{
+    const size_t n_heads =
+        (size_t)decode_state->config.n_heads;
+    const size_t n_kv_heads =
+        (size_t)decode_state->config.n_kv_heads;
+    size_t layer_base;
+    size_t per_layer;
+
+    if (out == NULL ||
+        q == NULL ||
+        decode_state == NULL ||
+        scores == NULL ||
+        n_heads == 0U ||
+        n_kv_heads == 0U ||
+        (n_heads % n_kv_heads) != 0U ||
+        layer_index >= decode_state->config.n_layers ||
+        position >= decode_state->context_length ||
+        !niyah_cuda_size_mul_ok(
+            decode_state->context_length,
+            decode_state->kv_dim,
+            &per_layer) ||
+        !niyah_cuda_size_mul_ok(
+            (size_t)layer_index,
+            per_layer,
+            &layer_base)) {
+        return 1;
+    }
+
+    niyah_cuda_attention_one_kernel<<<1U, 1U>>>(
+        out,
+        q,
+        (const float *)decode_state->device_keys,
+        (const float *)decode_state->device_values,
+        scores,
+        layer_base,
+        position,
+        (size_t)decode_state->config.embedding_dim,
+        n_heads,
+        n_kv_heads,
+        decode_state->head_dim,
+        decode_state->kv_dim);
+
+    return niyah_cuda_sync_kernel();
+}
+
+static int niyah_cuda_add_device(
+    float *dst,
+    const float *src,
+    size_t n)
+{
+    const unsigned int threads = 128U;
+    unsigned int blocks;
+
+    if (dst == NULL || src == NULL || dst == src ||
+        niyah_cuda_blocks_for(
+            n, threads, &blocks) != 0) {
+        return 1;
+    }
+
+    niyah_cuda_add_kernel<<<blocks, threads>>>(
+        dst, src, n);
+
+    return niyah_cuda_sync_kernel();
+}
+
+static int niyah_cuda_silu_mul_device(
+    float *gate,
+    const float *up,
+    size_t n)
+{
+    const unsigned int threads = 128U;
+    unsigned int blocks;
+
+    if (gate == NULL || up == NULL || gate == up ||
+        niyah_cuda_blocks_for(
+            n, threads, &blocks) != 0) {
+        return 1;
+    }
+
+    niyah_cuda_silu_mul_kernel<<<blocks, threads>>>(
+        gate, up, n);
+
+    return niyah_cuda_sync_kernel();
+}
+
+extern "C" int niyah_cuda_decode_token(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaDecodeState *decode_state,
+    uint32_t token,
+    float *logits,
+    size_t logits_count)
+{
+    const NiyahModelConfig *config;
+    float *workspace;
+    float *hidden;
+    float *norm;
+    float *q;
+    float *k;
+    float *v;
+    float *attn;
+    float *proj;
+    float *gate;
+    float *up;
+    float *scores;
+    size_t dim;
+    size_t ffn;
+    size_t kv_dim;
+    size_t vocab;
+    size_t position;
+    size_t embedding_delta;
+    size_t embedding_offset;
+    size_t embedding_bytes;
+    size_t kv_bytes;
+    uint32_t layer_index;
+
+    if (!niyah_cuda_decode_state_matches_model(
+            decode_state, model_state) ||
+        logits == NULL) {
+        return 1;
+    }
+
+    config = &model_state->config;
+    dim = (size_t)config->embedding_dim;
+    ffn = (size_t)config->ffn_hidden_dim;
+    kv_dim = decode_state->kv_dim;
+    vocab = (size_t)config->vocab_size;
+    position = decode_state->next_position;
+
+    if ((size_t)token >= vocab ||
+        logits_count < vocab ||
+        position >= decode_state->context_length ||
+        !niyah_cuda_size_mul_ok(
+            (size_t)token, dim, &embedding_delta) ||
+        !niyah_cuda_size_add_ok(
+            model_state->layout.token_embedding,
+            embedding_delta,
+            &embedding_offset) ||
+        embedding_offset > model_state->weight_count ||
+        dim > model_state->weight_count - embedding_offset ||
+        !niyah_cuda_size_mul_ok(
+            dim, sizeof(float), &embedding_bytes) ||
+        !niyah_cuda_size_mul_ok(
+            kv_dim, sizeof(float), &kv_bytes)) {
+        return 1;
+    }
+
+    workspace =
+        (float *)decode_state->device_workspace;
+
+    hidden = workspace;
+    norm = hidden + dim;
+    q = norm + dim;
+    k = q + dim;
+    v = k + kv_dim;
+    attn = v + kv_dim;
+    proj = attn + dim;
+    gate = proj + dim;
+    up = gate + ffn;
+    scores = up + ffn;
+
+    if ((size_t)(scores - workspace) >
+            decode_state->workspace_floats ||
+        decode_state->context_length >
+            decode_state->workspace_floats -
+                (size_t)(scores - workspace)) {
+        return 1;
+    }
+
+    if (cudaMemcpy(
+            hidden,
+            (const float *)model_state->device_weights +
+                embedding_offset,
+            embedding_bytes,
+            cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return 1;
+    }
+
+    for (layer_index = 0U;
+         layer_index < config->n_layers;
+         ++layer_index) {
+        NiyahLayerLayout layer;
+        size_t per_layer;
+        size_t layer_base;
+        size_t position_delta;
+        size_t cache_offset;
+
+        if (niyah_cuda_layer_layout(
+                model_state,
+                layer_index,
+                &layer) != 0 ||
+            !niyah_cuda_size_mul_ok(
+                decode_state->context_length,
+                kv_dim,
+                &per_layer) ||
+            !niyah_cuda_size_mul_ok(
+                (size_t)layer_index,
+                per_layer,
+                &layer_base) ||
+            !niyah_cuda_size_mul_ok(
+                position,
+                kv_dim,
+                &position_delta) ||
+            !niyah_cuda_size_add_ok(
+                layer_base,
+                position_delta,
+                &cache_offset) ||
+            cache_offset >
+                decode_state->values_per_tensor ||
+            kv_dim >
+                decode_state->values_per_tensor -
+                    cache_offset) {
+            return 1;
+        }
+
+        if (niyah_cuda_rmsnorm_device(
+                model_state,
+                norm,
+                hidden,
+                layer.attn_norm,
+                dim) != 0) {
+            return 1;
+        }
+
+        if (niyah_cuda_model_state_matvec_device(
+                model_state,
+                layer.wq,
+                norm,
+                q,
+                dim,
+                dim) != 0 ||
+            niyah_cuda_model_state_matvec_device(
+                model_state,
+                layer.wk,
+                norm,
+                k,
+                kv_dim,
+                dim) != 0 ||
+            niyah_cuda_model_state_matvec_device(
+                model_state,
+                layer.wv,
+                norm,
+                v,
+                kv_dim,
+                dim) != 0) {
+            return 1;
+        }
+
+        if (niyah_cuda_rope_device(
+                q,
+                (size_t)config->n_heads,
+                decode_state->head_dim,
+                position) != 0 ||
+            niyah_cuda_rope_device(
+                k,
+                (size_t)config->n_kv_heads,
+                decode_state->head_dim,
+                position) != 0) {
+            return 1;
+        }
+
+        if (cudaMemcpy(
+                (float *)decode_state->device_keys +
+                    cache_offset,
+                k,
+                kv_bytes,
+                cudaMemcpyDeviceToDevice) != cudaSuccess ||
+            cudaMemcpy(
+                (float *)decode_state->device_values +
+                    cache_offset,
+                v,
+                kv_bytes,
+                cudaMemcpyDeviceToDevice) != cudaSuccess) {
+            return 1;
+        }
+
+        if (niyah_cuda_attention_one_device(
+                attn,
+                q,
+                decode_state,
+                layer_index,
+                position,
+                scores) != 0) {
+            return 1;
+        }
+
+        if (niyah_cuda_model_state_matvec_device(
+                model_state,
+                layer.wo,
+                attn,
+                proj,
+                dim,
+                dim) != 0 ||
+            niyah_cuda_add_device(
+                hidden,
+                proj,
+                dim) != 0) {
+            return 1;
+        }
+
+        if (niyah_cuda_rmsnorm_device(
+                model_state,
+                norm,
+                hidden,
+                layer.ffn_norm,
+                dim) != 0) {
+            return 1;
+        }
+
+        if (niyah_cuda_model_state_matvec_device(
+                model_state,
+                layer.w_gate,
+                norm,
+                gate,
+                ffn,
+                dim) != 0 ||
+            niyah_cuda_model_state_matvec_device(
+                model_state,
+                layer.w_up,
+                norm,
+                up,
+                ffn,
+                dim) != 0 ||
+            niyah_cuda_silu_mul_device(
+                gate,
+                up,
+                ffn) != 0 ||
+            niyah_cuda_model_state_matvec_device(
+                model_state,
+                layer.w_down,
+                gate,
+                proj,
+                dim,
+                ffn) != 0 ||
+            niyah_cuda_add_device(
+                hidden,
+                proj,
+                dim) != 0) {
+            return 1;
+        }
+    }
+
+    if (niyah_cuda_rmsnorm_device(
+            model_state,
+            norm,
+            hidden,
+            model_state->layout.final_norm,
+            dim) != 0 ||
+        niyah_cuda_model_state_matvec_device(
+            model_state,
+            model_state->layout.lm_head,
+            norm,
+            decode_state->device_logits,
+            vocab,
+            dim) != 0) {
+        return 1;
+    }
+
+    if (cudaMemcpy(
+            logits,
+            decode_state->device_logits,
+            vocab * sizeof(float),
+            cudaMemcpyDeviceToHost) != cudaSuccess) {
+        return 1;
+    }
+
+    decode_state->next_position = position + 1U;
+    return 0;
 }

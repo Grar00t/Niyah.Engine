@@ -207,6 +207,33 @@ if(NIYAH_BUILD_TESTS)
             NAME niyah_cuda_device_matvec_test
             COMMAND niyah_cuda_device_matvec_test
         )
+
+        add_executable(niyah_cuda_decode_token_test
+            tests/test_cuda_decode_token.c
+        )
+        target_include_directories(niyah_cuda_decode_token_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_decode_token_test
+            PRIVATE
+                niyah
+                niyah_cuda_backend
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_decode_token_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_decode_token_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_decode_token_test
+            COMMAND niyah_cuda_decode_token_test
+        )
     endif()
 
     add_executable(niyah_model_test tests/test_model.c)
