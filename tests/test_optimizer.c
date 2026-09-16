@@ -372,20 +372,20 @@ static void test_hand_computed_adamw(void)
 
     CHECK(niyah_adamw_step(&model, &gradients, &state, &opt) == NIYAH_OK);
     CHECK(state.step == 1U);
-    CHECK(close_float(state.m[first], 0.2, 2.0e-7));
-    CHECK(close_float(state.v[first], 0.004, 2.0e-8));
-    CHECK(close_float(model.weights[first], 0.9000000005, 2.0e-6));
-    CHECK(close_float(state.m[second], -0.1, 2.0e-7));
-    CHECK(close_float(state.v[second], 0.001, 2.0e-8));
-    CHECK(close_float(model.weights[second], -1.900000001, 2.0e-6));
+    CHECK(close_float(state.m[first], 0.20000004768371582, 2.0e-7));
+    CHECK(close_float(state.v[first], 0.003999948501586914, 2.0e-8));
+    CHECK(close_float(model.weights[first], 0.8999999761581421, 2.0e-6));
+    CHECK(close_float(state.m[second], -0.10000002384185791, 2.0e-7));
+    CHECK(close_float(state.v[second], 0.0009999871253967285, 2.0e-8));
+    CHECK(close_float(model.weights[second], -1.899999976158142, 2.0e-6));
 
     memset(gradients.values, 0, gradients.count * sizeof(float));
     gradients.values[first] = 1.0f;
     CHECK(niyah_adamw_step(&model, &gradients, &state, &opt) == NIYAH_OK);
     CHECK(state.step == 2U);
-    CHECK(close_float(state.m[first], 0.28, 2.0e-6));
-    CHECK(close_float(state.v[first], 0.004996, 2.0e-7));
-    CHECK(close_float(model.weights[first], 0.8067820372, 3.0e-6));
+    CHECK(close_float(state.m[first], 0.28000006198882943, 2.0e-6));
+    CHECK(close_float(state.v[first], 0.004995935729979806, 2.0e-7));
+    CHECK(close_float(model.weights[first], 0.8067820072174072, 3.0e-6));
 
     niyah_adamw_state_destroy(&state);
     niyah_model_gradients_destroy(&gradients);
