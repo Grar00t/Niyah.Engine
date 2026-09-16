@@ -51,6 +51,7 @@ add_library(niyah STATIC
     src/niyah_train.c
     src/niyah_backward.c
     src/niyah_optimizer.c
+    src/niyah_checkpoint.c
 )
 
 target_include_directories(niyah
@@ -98,6 +99,9 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_optimizer_test tests/test_optimizer.c)
     target_link_libraries(niyah_optimizer_test PRIVATE niyah)
 
+    add_executable(niyah_checkpoint_test tests/test_checkpoint.c)
+    target_link_libraries(niyah_checkpoint_test PRIVATE niyah)
+
     if(MSVC)
         target_compile_options(niyah_model_test PRIVATE /W4 /WX)
         target_compile_options(niyah_tokenizer_test PRIVATE /W4 /WX)
@@ -108,6 +112,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_backward_test PRIVATE /W4 /WX)
         target_compile_options(niyah_text_pipeline_test PRIVATE /W4 /WX)
         target_compile_options(niyah_optimizer_test PRIVATE /W4 /WX)
+        target_compile_options(niyah_checkpoint_test PRIVATE /W4 /WX)
     else()
         target_compile_options(niyah_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_tokenizer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -118,6 +123,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_backward_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_text_pipeline_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_optimizer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(niyah_checkpoint_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
 
     add_test(NAME niyah_model_test COMMAND niyah_model_test)
@@ -129,4 +135,5 @@ if(NIYAH_BUILD_TESTS)
     add_test(NAME niyah_backward_test COMMAND niyah_backward_test)
     add_test(NAME niyah_text_pipeline_test COMMAND niyah_text_pipeline_test)
     add_test(NAME niyah_optimizer_test COMMAND niyah_optimizer_test)
+    add_test(NAME niyah_checkpoint_test COMMAND niyah_checkpoint_test)
 endif()

@@ -93,7 +93,7 @@ static NiyahStatus niyah_adamw_validate_model(const NiyahModel *model,
     return NIYAH_OK;
 }
 
-static NiyahStatus niyah_adamw_validate_config(const NiyahAdamWConfig *config)
+NiyahStatus niyah_adamw_config_validate(const NiyahAdamWConfig *config)
 {
     if (config == NULL) {
         return NIYAH_ERR_INVALID_ARGUMENT;
@@ -549,7 +549,7 @@ NiyahStatus niyah_adamw_step(NiyahModel *model,
         !niyah_layout_equal(&state->model_layout, &canonical)) {
         return NIYAH_ERR_INVALID_CONFIG;
     }
-    status = niyah_adamw_validate_config(config);
+    status = niyah_adamw_config_validate(config);
     if (status != NIYAH_OK) {
         return status;
     }

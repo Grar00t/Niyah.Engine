@@ -34,6 +34,7 @@ typedef struct NiyahAdamWState {
     NiyahModelLayout model_layout;
 } NiyahAdamWState;
 
+NiyahStatus niyah_adamw_config_validate(const NiyahAdamWConfig *config);
 NiyahStatus niyah_adamw_state_create(NiyahAdamWState *state,
                                      const NiyahModel *model);
 void niyah_adamw_state_destroy(NiyahAdamWState *state);

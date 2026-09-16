@@ -28,7 +28,7 @@ lm_head           [vocab, dim]   # omitted as separate storage when tied
 
 `head_dim = dim / n_heads` and `kv_dim = head_dim * n_kv_heads`.
 
-This ordering is the contract for full forward, incremental decode, backward gradients, AdamW updates, and future checkpoint work.
+This ordering is the contract for full forward, incremental decode, backward gradients, AdamW updates, and checkpoint persistence.
 
 ## Model invariants
 
@@ -86,6 +86,9 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 - explicit CPU backward gradients over the canonical model weights;
 - robust global gradient clipping;
 - native reference AdamW over the canonical model weights;
+- versioned checkpoint save/load for canonical model weights and AdamW `m`, `v`, step, and hyperparameters;
+- explicit little-endian checkpoint wire format with streaming CRC-32 corruption detection;
+- two-pass checkpoint load with structural validation before reconstructed state is committed to caller outputs;
 - optimizer tests covering arithmetic, decay policy, state validation, failure atomicity, and tied/untied storage;
 - deterministic tiny backward -> clipping -> AdamW training-chain coverage for tied and untied models;
 - tokenizer -> realized vocabulary -> model -> incremental decode -> generation -> tokenizer decode integration coverage;
@@ -94,8 +97,6 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 
 ## Not implemented yet
 
-- model checkpoint save/load;
-- optimizer checkpoint persistence/resume;
 - tokenizer persistence or stable tokenizer identity binding;
 - dataset preprocessing and binary sharding;
 - production training executable/loop;
@@ -122,11 +123,11 @@ The tiny deterministic training-chain tests prove only that the currently implem
 - Full training currently materializes `token_count * vocab_size` logits and corresponding `dlogits`.
 - Transformer mathematics is duplicated across full forward, incremental decode, and the cached forward used by backward. Parity tests reduce drift risk but do not remove this duplication.
 
-These are later engineering targets. P6-A does not refactor the three Transformer execution paths.
+These are later engineering targets. Checkpoint persistence does not refactor the three Transformer execution paths.
 
 ## Architectural boundary
 
-The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, and the reference AdamW optimizer. Checkpoint, dataset, training-loop, evaluation, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
+The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, and versioned checkpoint persistence for canonical model + optimizer state. Dataset, training-loop, evaluation, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
 
 ## Out of core
 
