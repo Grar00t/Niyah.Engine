@@ -425,8 +425,61 @@ static void test_accumulated_step_rolls_back_whole_group(void)
     niyah_model_destroy(&model);
 }
 
+static void test_training_samples_from_shard(void)
+{
+    static uint32_t tokens[] = {
+        NIYAH_TOKEN_BOS, 1U, 2U, 3U, NIYAH_TOKEN_EOS
+    };
+    NiyahDatasetShard shard;
+    NiyahTrainingSample samples[2];
+    NiyahTrainingSample sentinel[1];
+    size_t count = 999U;
+
+    memset(&shard, 0, sizeof(shard));
+    memset(samples, 0, sizeof(samples));
+    memset(sentinel, 0, sizeof(sentinel));
+
+    shard.tokens = tokens;
+    shard.token_count = sizeof(tokens) / sizeof(tokens[0]);
+    shard.sequence_length = 2U;
+    shard.sample_count = 2U;
+
+    CHECK(niyah_training_samples_from_shard(
+              &shard, NULL, 0U, &count) == NIYAH_OK);
+    CHECK(count == 2U);
+
+    count = 999U;
+    CHECK(niyah_training_samples_from_shard(
+              &shard, sentinel, 1U, &count) ==
+          NIYAH_ERR_BUFFER_TOO_SMALL);
+    CHECK(count == 2U);
+    CHECK(sentinel[0].tokens == NULL);
+    CHECK(sentinel[0].targets == NULL);
+    CHECK(sentinel[0].token_count == 0U);
+
+    CHECK(niyah_training_samples_from_shard(
+              &shard, samples, 2U, &count) == NIYAH_OK);
+    CHECK(count == 2U);
+    CHECK(samples[0].tokens == &tokens[0]);
+    CHECK(samples[0].targets == &tokens[1]);
+    CHECK(samples[0].token_count == 2U);
+    CHECK(samples[1].tokens == &tokens[2]);
+    CHECK(samples[1].targets == &tokens[3]);
+    CHECK(samples[1].token_count == 2U);
+
+    CHECK(niyah_training_samples_from_shard(
+              &shard, NULL, 1U, &count) ==
+          NIYAH_ERR_INVALID_ARGUMENT);
+
+    shard.sample_count = 0U;
+    CHECK(niyah_training_samples_from_shard(
+              &shard, NULL, 0U, &count) ==
+          NIYAH_ERR_INVALID_CONFIG);
+}
+
 int main(void)
 {
+    test_training_samples_from_shard();
     test_deterministic_run();
     test_cursor_rollback_on_backward_failure();
     test_loss_decreases();

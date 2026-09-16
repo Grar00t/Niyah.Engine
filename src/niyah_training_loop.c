@@ -4,6 +4,54 @@
 #include <math.h>
 #include <stdlib.h>
 
+NiyahStatus niyah_training_samples_from_shard(
+    const NiyahDatasetShard *shard,
+    NiyahTrainingSample *samples,
+    size_t sample_capacity,
+    size_t *out_sample_count)
+{
+    const uint32_t *tokens = NULL;
+    const uint32_t *targets = NULL;
+    size_t token_count = 0U;
+    size_t i;
+    NiyahStatus status;
+
+    if (shard == NULL || out_sample_count == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    if (samples == NULL && sample_capacity != 0U)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    if (shard->sample_count == 0U)
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    status = niyah_dataset_shard_sample(
+        shard, 0U, &tokens, &targets, &token_count);
+    if (status != NIYAH_OK)
+        return status;
+
+    *out_sample_count = shard->sample_count;
+
+    if (samples == NULL)
+        return NIYAH_OK;
+    if (sample_capacity < shard->sample_count)
+        return NIYAH_ERR_BUFFER_TOO_SMALL;
+
+    samples[0U].tokens = tokens;
+    samples[0U].targets = targets;
+    samples[0U].token_count = token_count;
+
+    for (i = 1U; i < shard->sample_count; ++i) {
+        status = niyah_dataset_shard_sample(
+            shard, i, &tokens, &targets, &token_count);
+        if (status != NIYAH_OK)
+            return status;
+        samples[i].tokens = tokens;
+        samples[i].targets = targets;
+        samples[i].token_count = token_count;
+    }
+
+    return NIYAH_OK;
+}
+
 static NiyahStatus validate_samples(const NiyahModel *model,
                                     const NiyahTrainingSample *samples,
                                     size_t sample_count,

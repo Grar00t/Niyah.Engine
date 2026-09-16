@@ -17,6 +17,18 @@ typedef struct NiyahTrainingSample {
     size_t token_count;
 } NiyahTrainingSample;
 
+/* Build zero-copy training sample descriptors over one loaded dataset shard.
+ *
+ * Query mode: samples == NULL and sample_capacity == 0 returns the required
+ * descriptor count in out_sample_count. The returned descriptors borrow token
+ * storage from shard; shard must outlive their use.
+ */
+NiyahStatus niyah_training_samples_from_shard(
+    const NiyahDatasetShard *shard,
+    NiyahTrainingSample *samples,
+    size_t sample_capacity,
+    size_t *out_sample_count);
+
 NiyahStatus niyah_training_step(
     NiyahModel *model,
     const NiyahTrainingSample *samples,
