@@ -35,7 +35,8 @@ NiyahStatus niyah_rmsnorm(float *out,
     double sum_sq = 0.0;
     float inv_rms;
 
-    if (out == NULL || x == NULL || weight == NULL || n == 0U || eps <= 0.0f) {
+    if (out == NULL || x == NULL || weight == NULL || n == 0U ||
+        !isfinite(eps) || eps <= 0.0f) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
 

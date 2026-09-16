@@ -1,5 +1,6 @@
 #include "niyah/niyah.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -49,6 +50,7 @@ NiyahStatus niyah_model_config_validate(const NiyahModelConfig *config)
         config->n_heads == 0U ||
         config->n_kv_heads == 0U ||
         config->ffn_hidden_dim == 0U ||
+        !isfinite(config->rms_norm_eps) ||
         config->rms_norm_eps <= 0.0f) {
         return NIYAH_ERR_INVALID_CONFIG;
     }

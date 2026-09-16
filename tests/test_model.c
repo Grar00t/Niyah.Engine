@@ -91,6 +91,22 @@ static int test_invalid_configs(void)
     CHECK(niyah_model_config_validate(&config) == NIYAH_ERR_INVALID_CONFIG);
 
     config = tiny_config(1);
+    config.rms_norm_eps = -1.0e-5f;
+    CHECK(niyah_model_config_validate(&config) == NIYAH_ERR_INVALID_CONFIG);
+
+    config = tiny_config(1);
+    config.rms_norm_eps = NAN;
+    CHECK(niyah_model_config_validate(&config) == NIYAH_ERR_INVALID_CONFIG);
+    CHECK(niyah_model_create(&model, &config) == NIYAH_ERR_INVALID_CONFIG);
+    CHECK(model.weights == NULL);
+
+    config = tiny_config(1);
+    config.rms_norm_eps = INFINITY;
+    CHECK(niyah_model_config_validate(&config) == NIYAH_ERR_INVALID_CONFIG);
+    CHECK(niyah_model_create(&model, &config) == NIYAH_ERR_INVALID_CONFIG);
+    CHECK(model.weights == NULL);
+
+    config = tiny_config(1);
     config.embedding_dim = 12U;
     config.n_heads = 4U;
     config.n_kv_heads = 2U;
@@ -153,6 +169,13 @@ static int test_math(void)
     CHECK(niyah_rmsnorm(norm_out, norm_x, norm_w, 2U, eps) == NIYAH_OK);
     CHECK(fabsf(norm_out[0] - 3.0f * inv) < 1.0e-6f);
     CHECK(fabsf(norm_out[1] - 4.0f * inv) < 1.0e-6f);
+
+    CHECK(niyah_rmsnorm(norm_out, norm_x, norm_w, 2U, -1.0e-5f) ==
+          NIYAH_ERR_INVALID_ARGUMENT);
+    CHECK(niyah_rmsnorm(norm_out, norm_x, norm_w, 2U, NAN) ==
+          NIYAH_ERR_INVALID_ARGUMENT);
+    CHECK(niyah_rmsnorm(norm_out, norm_x, norm_w, 2U, INFINITY) ==
+          NIYAH_ERR_INVALID_ARGUMENT);
     return 0;
 }
 
