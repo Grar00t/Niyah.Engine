@@ -637,9 +637,10 @@ __global__ static void niyah_cuda_rmsnorm_kernel(
     size_t n,
     float eps)
 {
-    if (blockIdx.x == 0U && threadIdx.x == 0U) {
+    __shared__ float shared_inv_rms;
+
+    if (threadIdx.x == 0U) {
         double sum_sq = 0.0;
-        float inv_rms;
         size_t i;
 
         for (i = 0U; i < n; ++i) {
@@ -647,11 +648,20 @@ __global__ static void niyah_cuda_rmsnorm_kernel(
             sum_sq += v * v;
         }
 
-        inv_rms =
+        shared_inv_rms =
             1.0f / sqrtf((float)(sum_sq / (double)n) + eps);
+    }
 
-        for (i = 0U; i < n; ++i) {
-            out[i] = x[i] * inv_rms * weight[i];
+    __syncthreads();
+
+    {
+        size_t i;
+
+        for (i = (size_t)threadIdx.x;
+             i < n;
+             i += (size_t)blockDim.x) {
+            out[i] =
+                x[i] * shared_inv_rms * weight[i];
         }
     }
 }
@@ -1022,13 +1032,17 @@ static int niyah_cuda_rmsnorm_device(
         return 1;
     }
 
-    niyah_cuda_rmsnorm_kernel<<<1U, 1U>>>(
-        out,
-        x,
-        (const float *)model_state->device_weights +
-            weight_offset,
-        n,
-        model_state->config.rms_norm_eps);
+    {
+        const unsigned int threads = 128U;
+
+        niyah_cuda_rmsnorm_kernel<<<1U, threads>>>(
+            out,
+            x,
+            (const float *)model_state->device_weights +
+                weight_offset,
+            n,
+            model_state->config.rms_norm_eps);
+    }
 
     return niyah_cuda_check_launch();
 }
