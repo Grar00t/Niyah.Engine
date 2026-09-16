@@ -137,6 +137,74 @@ static void test_backward_and_finite_difference(void)
     niyah_model_destroy(&model);
 }
 
+static void fill_gradient_sentinel(NiyahModelGradients *gradients)
+{
+    size_t i;
+    for (i = 0U; i < gradients->count; ++i) {
+        gradients->values[i] = 0.25f + (float)i * 1.0e-4f;
+    }
+}
+
+static void test_rejected_backward_preserves_gradients(void)
+{
+    const uint32_t tokens[3] = {1U, 2U, 3U};
+    const uint32_t invalid_tokens[3] = {1U, 8U, 3U};
+    const uint32_t targets[3] = {2U, 3U, 4U};
+    const uint32_t invalid_targets[3] = {2U, 8U, 4U};
+    NiyahModelConfig config = test_config(0);
+    NiyahModel model;
+    NiyahModelGradients gradients;
+    size_t ws_count = 0U;
+    size_t gradient_bytes;
+    float *ws = NULL;
+    float *snapshot = NULL;
+    float loss = 0.0f;
+
+    memset(&model, 0, sizeof(model));
+    memset(&gradients, 0, sizeof(gradients));
+
+    CHECK(niyah_model_create(&model, &config) == NIYAH_OK);
+    CHECK(niyah_model_reset_parameters(&model, UINT64_C(404)) == NIYAH_OK);
+    CHECK(niyah_model_gradients_create(&gradients, &model) == NIYAH_OK);
+    CHECK(niyah_train_backward_workspace_floats(&config, 3U, &ws_count) == NIYAH_OK);
+
+    gradient_bytes = gradients.count * sizeof(float);
+    ws = (float *)calloc(ws_count, sizeof(float));
+    snapshot = (float *)malloc(gradient_bytes);
+    CHECK(ws != NULL);
+    CHECK(snapshot != NULL);
+    if (ws == NULL || snapshot == NULL) {
+        free(snapshot);
+        free(ws);
+        niyah_model_gradients_destroy(&gradients);
+        niyah_model_destroy(&model);
+        return;
+    }
+
+    fill_gradient_sentinel(&gradients);
+    memcpy(snapshot, gradients.values, gradient_bytes);
+    CHECK(niyah_train_backward(&model, invalid_tokens, targets, 3U, &loss,
+                               &gradients, ws, ws_count) == NIYAH_ERR_INVALID_ARGUMENT);
+    CHECK(memcmp(snapshot, gradients.values, gradient_bytes) == 0);
+
+    fill_gradient_sentinel(&gradients);
+    memcpy(snapshot, gradients.values, gradient_bytes);
+    CHECK(niyah_train_backward(&model, tokens, invalid_targets, 3U, &loss,
+                               &gradients, ws, ws_count) == NIYAH_ERR_INVALID_ARGUMENT);
+    CHECK(memcmp(snapshot, gradients.values, gradient_bytes) == 0);
+
+    fill_gradient_sentinel(&gradients);
+    memcpy(snapshot, gradients.values, gradient_bytes);
+    CHECK(niyah_train_backward(&model, tokens, targets, 3U, &loss,
+                               &gradients, ws, ws_count - 1U) == NIYAH_ERR_BUFFER_TOO_SMALL);
+    CHECK(memcmp(snapshot, gradients.values, gradient_bytes) == 0);
+
+    free(snapshot);
+    free(ws);
+    niyah_model_gradients_destroy(&gradients);
+    niyah_model_destroy(&model);
+}
+
 static void test_tied_embedding_accumulation(void)
 {
     const uint32_t tokens[3] = {1U, 2U, 3U};
@@ -241,6 +309,7 @@ static void test_gradient_step_decreases_loss(void)
 int main(void)
 {
     test_backward_and_finite_difference();
+    test_rejected_backward_preserves_gradients();
     test_tied_embedding_accumulation();
     test_gradient_step_decreases_loss();
 

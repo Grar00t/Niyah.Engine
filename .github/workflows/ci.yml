@@ -5,6 +5,9 @@ on:
     branches: [ main, "bootstrap/**" ]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     strategy:
@@ -14,7 +17,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Configure
         run: cmake -S . -B build -DNIYAH_BUILD_TESTS=ON
@@ -24,3 +27,21 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configure
+        run: cmake -S . -B build-sanitize -DNIYAH_BUILD_TESTS=ON -DNIYAH_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build-sanitize --parallel 2
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build-sanitize --output-on-failure

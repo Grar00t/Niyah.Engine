@@ -6,6 +6,39 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 option(NIYAH_BUILD_TESTS "Build Niyah.Engine tests" ON)
+option(NIYAH_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+if(NIYAH_ENABLE_SANITIZERS)
+    if(MSVC)
+        message(FATAL_ERROR "NIYAH_ENABLE_SANITIZERS is not supported for MSVC in this CI configuration")
+    endif()
+
+    include(CheckCCompilerFlag)
+    include(CheckCSourceCompiles)
+
+    set(_NIYAH_SAVED_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
+    set(_NIYAH_SAVED_REQUIRED_LINK_OPTIONS "${CMAKE_REQUIRED_LINK_OPTIONS}")
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -fsanitize=address,undefined")
+    list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=address,undefined")
+    check_c_source_compiles("int main(void) { return 0; }"
+                            NIYAH_HAS_ADDRESS_UNDEFINED_SANITIZERS)
+    set(CMAKE_REQUIRED_FLAGS "${_NIYAH_SAVED_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_LINK_OPTIONS "${_NIYAH_SAVED_REQUIRED_LINK_OPTIONS}")
+    unset(_NIYAH_SAVED_REQUIRED_FLAGS)
+    unset(_NIYAH_SAVED_REQUIRED_LINK_OPTIONS)
+
+    check_c_compiler_flag("-fno-omit-frame-pointer" NIYAH_HAS_FRAME_POINTER_FLAG)
+
+    if(NOT NIYAH_HAS_ADDRESS_UNDEFINED_SANITIZERS)
+        message(FATAL_ERROR "AddressSanitizer and UndefinedBehaviorSanitizer could not compile and link with the active C compiler")
+    endif()
+    if(NOT NIYAH_HAS_FRAME_POINTER_FLAG)
+        message(FATAL_ERROR "The active C compiler does not support -fno-omit-frame-pointer")
+    endif()
+
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
 
 add_library(niyah STATIC
     src/niyah_model.c
@@ -58,6 +91,9 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_backward_test tests/test_backward.c)
     target_link_libraries(niyah_backward_test PRIVATE niyah)
 
+    add_executable(niyah_text_pipeline_test tests/test_text_pipeline.c)
+    target_link_libraries(niyah_text_pipeline_test PRIVATE niyah)
+
     if(MSVC)
         target_compile_options(niyah_model_test PRIVATE /W4 /WX)
         target_compile_options(niyah_tokenizer_test PRIVATE /W4 /WX)
@@ -66,6 +102,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_generation_test PRIVATE /W4 /WX)
         target_compile_options(niyah_train_test PRIVATE /W4 /WX)
         target_compile_options(niyah_backward_test PRIVATE /W4 /WX)
+        target_compile_options(niyah_text_pipeline_test PRIVATE /W4 /WX)
     else()
         target_compile_options(niyah_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_tokenizer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -74,6 +111,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_generation_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_train_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_backward_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(niyah_text_pipeline_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
 
     add_test(NAME niyah_model_test COMMAND niyah_model_test)
@@ -83,4 +121,5 @@ if(NIYAH_BUILD_TESTS)
     add_test(NAME niyah_generation_test COMMAND niyah_generation_test)
     add_test(NAME niyah_train_test COMMAND niyah_train_test)
     add_test(NAME niyah_backward_test COMMAND niyah_backward_test)
+    add_test(NAME niyah_text_pipeline_test COMMAND niyah_text_pipeline_test)
 endif()

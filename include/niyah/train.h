@@ -43,9 +43,11 @@ NiyahStatus niyah_train_loss(const NiyahModel *model,
                              size_t workspace_count);
 
 /* Reference CPU backward over the exact canonical NiyahModel layout.
- * Workspace is caller-owned and sized in floats; gradients are zeroed before
- * each successful backward attempt. Tied embeddings naturally accumulate LM
- * head and input-embedding contributions into the same canonical weight span.
+ * Workspace is caller-owned and sized in floats. Rejected preflight/input
+ * validation leaves caller-visible gradients unchanged; gradients are zeroed
+ * only after cached forward and objective validation succeed. Tied embeddings
+ * naturally accumulate LM-head and input-embedding contributions into the same
+ * canonical weight span.
  */
 NiyahStatus niyah_train_backward_workspace_floats(const NiyahModelConfig *config,
                                                   size_t token_count,
