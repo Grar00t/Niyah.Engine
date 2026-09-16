@@ -50,6 +50,7 @@ add_library(niyah STATIC
     src/niyah_sampler.c
     src/niyah_generate.c
     src/niyah_train.c
+    src/niyah_eval.c
     src/niyah_backward.c
     src/niyah_training_loop.c
     src/niyah_optimizer.c
@@ -95,6 +96,9 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_train_test tests/test_train.c)
     target_link_libraries(niyah_train_test PRIVATE niyah)
 
+    add_executable(niyah_eval_test tests/test_eval.c)
+    target_link_libraries(niyah_eval_test PRIVATE niyah)
+
     add_executable(niyah_training_loop_test tests/test_training_loop.c)
     target_link_libraries(niyah_training_loop_test PRIVATE niyah)
 
@@ -118,6 +122,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_decode_test PRIVATE /W4 /WX)
         target_compile_options(niyah_generation_test PRIVATE /W4 /WX)
         target_compile_options(niyah_train_test PRIVATE /W4 /WX)
+        target_compile_options(niyah_eval_test PRIVATE /W4 /WX)
         target_compile_options(niyah_training_loop_test PRIVATE /W4 /WX)
         target_compile_options(niyah_backward_test PRIVATE /W4 /WX)
         target_compile_options(niyah_text_pipeline_test PRIVATE /W4 /WX)
@@ -131,6 +136,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_decode_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_generation_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_train_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(niyah_eval_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_training_loop_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_backward_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_text_pipeline_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -145,6 +151,7 @@ if(NIYAH_BUILD_TESTS)
     add_test(NAME niyah_decode_test COMMAND niyah_decode_test)
     add_test(NAME niyah_generation_test COMMAND niyah_generation_test)
     add_test(NAME niyah_train_test COMMAND niyah_train_test)
+    add_test(NAME niyah_eval_test COMMAND niyah_eval_test)
     add_test(NAME niyah_training_loop_test COMMAND niyah_training_loop_test)
     add_test(NAME niyah_backward_test COMMAND niyah_backward_test)
     add_test(NAME niyah_text_pipeline_test COMMAND niyah_text_pipeline_test)
