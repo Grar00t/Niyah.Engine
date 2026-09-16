@@ -65,7 +65,7 @@ Implemented:
 
 Planned:
 
-8. Deterministic dataset/training lifecycle: deterministic cursor/order persistence is implemented; production preprocessing/sharding and the training loop remain.
+8. Deterministic dataset/training lifecycle: cursor/order persistence and the deterministic single-sample reference training loop are implemented; production preprocessing/sharding, a training executable, and true mini-batches remain.
 9. Held-out validation/perplexity.
 10. Optional CUDA kernels and residency.
 
@@ -75,4 +75,4 @@ The current implementation is the native CPU reference path through explicit bac
 
 Tokenizer persistence V1 saves and loads tokenizer state with a stable SHA-256 identity. Checkpoint V2 can bind model and AdamW state to that tokenizer identity while Checkpoint V1 remains supported. Dataset cursor state is persisted separately by the dataset lifecycle API; checkpoint persistence does not yet include that cursor state, scheduler state, gradient accumulation state, mixed-precision/CUDA state, or other training-path RNG state.
 
-Production dataset preprocessing/sharding, a production training executable/loop, true mini-batches, gradient accumulation, held-out validation/perplexity, mixed precision, CUDA, instruction tuning, and conversational tuning are not implemented. Real-corpus convergence, Arabic model capability, and English model capability have not been demonstrated.
+Production dataset preprocessing/sharding, a production training executable, true mini-batches, gradient accumulation, held-out validation/perplexity, mixed precision, CUDA, instruction tuning, and conversational tuning are not implemented. Real-corpus convergence, Arabic model capability, and English model capability have not been demonstrated.
