@@ -1,6 +1,6 @@
 # Niyah.Engine
 
-Niyah.Engine is a native local language model implementation built from scratch in C11, with an optional CUDA backend.
+Niyah.Engine is a native local language model implementation built from scratch in C11, with optional CUDA acceleration planned after the CPU reference path and training lifecycle are established.
 
 ## North star
 
@@ -30,17 +30,18 @@ token ids
   -> cross entropy
   -> backward
   -> gradients
-  -> AdamW
-  -> same weights updated
-  -> checkpoint / resume
+  -> [planned] AdamW
+  -> [planned] same weights updated
+  -> [planned] checkpoint / resume
 ```
 
 ## Core rules
 
 - Native C11 implementation.
-- Optional CUDA acceleration; CPU remains a first-class backend.
+- CPU FP32 is the current reference path; optional CUDA acceleration is planned later.
 - One canonical `NiyahModel` layout for training and inference.
-- Deterministic tests for math, tokenizer, forward, gradients, optimizer, checkpointing, and generation.
+- Deterministic tests currently cover model math, tokenizer behavior, forward/decode parity, gradients, generation, and the tokenizer-to-model text pipeline.
+- Optimizer and checkpoint tests will be added with those implementations; they do not exist yet.
 - No hidden telemetry.
 - No hosted-model API dependency.
 - No external LLM runtime or model dependency.
@@ -51,15 +52,20 @@ PostgreSQL may be used later only as an optional external service for metadata o
 
 ## Initial implementation order
 
+Implemented:
+
 1. Canonical model/config and tensor layout.
 2. Tokenizer runtime + tokenizer training.
 3. RMSNorm, RoPE, attention/GQA, SwiGLU, residual path.
 4. KV cache and autoregressive generation.
 5. Cross-entropy and explicit backward gradients on the canonical weights.
-6. AdamW and deterministic checkpoint/resume.
+
+Planned:
+
+6. AdamW, gradient clipping, and deterministic checkpoint/resume.
 7. Evaluation/perplexity.
 8. Optional CUDA kernels and residency.
 
 ## Status
 
-Fresh rebuild. The previous multi-component repository was intentionally not restored as the architecture baseline.
+The current implementation is the native CPU reference path through explicit backward gradients. AdamW, checkpoint/resume, tokenizer persistence, production dataset/training tooling, held-out evaluation, mixed precision, and CUDA are not implemented yet.
