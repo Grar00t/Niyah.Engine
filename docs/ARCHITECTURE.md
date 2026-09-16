@@ -78,6 +78,7 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 - deterministic dataset sample ordering with resumable cursor persistence;
 - deterministic single-sample reference training loop over dataset cursor, backward gradients, and AdamW;
 - deterministic sequential per-sample gradient accumulation with one averaged AdamW update per accumulated group;
+- read-only held-out evaluation with token-weighted mean cross-entropy and perplexity;
 - RMSNorm;
 - RoPE;
 - causal grouped-query attention;
@@ -105,7 +106,6 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 - dataset preprocessing and binary sharding;
 - production training executable;
 - true tensor mini-batch training;
-- held-out validation loss/perplexity tooling;
 - mixed precision;
 - CUDA backend;
 - instruction-tuning pipeline;
@@ -130,7 +130,7 @@ These are later engineering targets. Checkpoint persistence does not refactor th
 
 ## Architectural boundary
 
-The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, versioned checkpoint persistence, and deterministic dataset cursor sequencing/persistence. Production dataset preprocessing/sharding, a production training executable, true tensor mini-batching, evaluation, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
+The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, versioned checkpoint persistence, and deterministic dataset cursor sequencing/persistence. Production dataset preprocessing/sharding, a production training executable, true tensor mini-batching, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
 
 ## Out of core
 
