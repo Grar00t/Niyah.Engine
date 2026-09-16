@@ -65,7 +65,7 @@ Implemented:
 
 Planned:
 
-8. Tokenizer persistence/identity binding and deterministic dataset/training lifecycle.
+8. Deterministic dataset/training lifecycle: deterministic cursor/order persistence is implemented; production preprocessing/sharding and the training loop remain.
 9. Held-out validation/perplexity.
 10. Optional CUDA kernels and residency.
 
@@ -73,6 +73,6 @@ Planned:
 
 The current implementation is the native CPU reference path through explicit backward gradients, robust global gradient clipping, AdamW updates to the same canonical FP32 model weights, and versioned persistence of the canonical model plus AdamW training state.
 
-Checkpoint V1 persists model configuration and weights together with AdamW moments, step, and optimizer hyperparameters. It does not yet persist tokenizer identity/state, dataset position/order, scheduler state, gradient accumulation state, mixed-precision/CUDA state, or any training-path RNG state that does not currently exist.
+Tokenizer persistence V1 saves and loads tokenizer state with a stable SHA-256 identity. Checkpoint V2 can bind model and AdamW state to that tokenizer identity while Checkpoint V1 remains supported. Dataset cursor state is persisted separately by the dataset lifecycle API; checkpoint persistence does not yet include that cursor state, scheduler state, gradient accumulation state, mixed-precision/CUDA state, or other training-path RNG state.
 
-Tokenizer persistence, production dataset preprocessing/sharding, a production training executable/loop, true mini-batches, gradient accumulation, held-out validation/perplexity, mixed precision, CUDA, instruction tuning, and conversational tuning are not implemented. Real-corpus convergence, Arabic model capability, and English model capability have not been demonstrated.
+Production dataset preprocessing/sharding, a production training executable/loop, true mini-batches, gradient accumulation, held-out validation/perplexity, mixed precision, CUDA, instruction tuning, and conversational tuning are not implemented. Real-corpus convergence, Arabic model capability, and English model capability have not been demonstrated.
