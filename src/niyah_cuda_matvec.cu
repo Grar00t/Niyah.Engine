@@ -658,33 +658,33 @@ __global__ static void niyah_cuda_rmsnorm_kernel(
 
 __global__ static void niyah_cuda_rope_kernel(
     float *vector,
-    size_t n_heads,
+    size_t total_pairs,
     size_t head_dim,
     size_t position)
 {
-    if (blockIdx.x == 0U && threadIdx.x == 0U) {
+    const size_t pair =
+        (size_t)blockIdx.x * (size_t)blockDim.x +
+        (size_t)threadIdx.x;
+
+    if (pair < total_pairs) {
+        const size_t pairs_per_head = head_dim / 2U;
+        const size_t head = pair / pairs_per_head;
+        const size_t pair_in_head = pair % pairs_per_head;
+        const size_t i = pair_in_head * 2U;
+        float *head_vector = vector + head * head_dim;
         const float pos = (float)position;
-        size_t head;
+        const float exponent =
+            -((float)i / (float)head_dim);
+        const float inv_freq =
+            powf(10000.0f, exponent);
+        const float angle = pos * inv_freq;
+        const float c = cosf(angle);
+        const float sn = sinf(angle);
+        const float x0 = head_vector[i];
+        const float x1 = head_vector[i + 1U];
 
-        for (head = 0U; head < n_heads; ++head) {
-            float *head_vector = vector + head * head_dim;
-            size_t i;
-
-            for (i = 0U; i + 1U < head_dim; i += 2U) {
-                const float exponent =
-                    -((float)i / (float)head_dim);
-                const float inv_freq =
-                    powf(10000.0f, exponent);
-                const float angle = pos * inv_freq;
-                const float c = cosf(angle);
-                const float sn = sinf(angle);
-                const float x0 = head_vector[i];
-                const float x1 = head_vector[i + 1U];
-
-                head_vector[i] = x0 * c - x1 * sn;
-                head_vector[i + 1U] = x0 * sn + x1 * c;
-            }
-        }
+        head_vector[i] = x0 * c - x1 * sn;
+        head_vector[i + 1U] = x0 * sn + x1 * c;
     }
 }
 
@@ -1039,6 +1039,11 @@ static int niyah_cuda_rope_device(
     size_t head_dim,
     size_t position)
 {
+    const unsigned int threads = 128U;
+    size_t pairs_per_head;
+    size_t total_pairs;
+    unsigned int blocks;
+
     if (vector == NULL ||
         n_heads == 0U ||
         head_dim < 2U ||
@@ -1046,9 +1051,22 @@ static int niyah_cuda_rope_device(
         return 1;
     }
 
-    niyah_cuda_rope_kernel<<<1U, 1U>>>(
+    pairs_per_head = head_dim / 2U;
+
+    if (!niyah_cuda_size_mul_ok(
+            n_heads,
+            pairs_per_head,
+            &total_pairs) ||
+        niyah_cuda_blocks_for(
+            total_pairs,
+            threads,
+            &blocks) != 0) {
+        return 1;
+    }
+
+    niyah_cuda_rope_kernel<<<blocks, threads>>>(
         vector,
-        n_heads,
+        total_pairs,
         head_dim,
         position);
 
