@@ -67,6 +67,13 @@ int niyah_cuda_decode_state_create(
 int niyah_cuda_decode_state_reset(NiyahCudaDecodeState *state);
 void niyah_cuda_decode_state_destroy(NiyahCudaDecodeState *state);
 
+int niyah_cuda_decode_token(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaDecodeState *decode_state,
+    uint32_t token,
+    float *logits,
+    size_t logits_count);
+
 #ifdef __cplusplus
 }
 #endif
