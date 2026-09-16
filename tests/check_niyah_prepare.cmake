@@ -1,0 +1,130 @@
+if(NOT DEFINED NIYAH_CLI)
+    message(FATAL_ERROR "NIYAH_CLI is required")
+endif()
+if(NOT DEFINED NIYAH_TRAIN)
+    message(FATAL_ERROR "NIYAH_TRAIN is required")
+endif()
+if(NOT DEFINED WORK_DIR)
+    message(FATAL_ERROR "WORK_DIR is required")
+endif()
+
+set(CORPUS "${WORK_DIR}/p8c_corpus.txt")
+set(TOK_A "${WORK_DIR}/p8c_a.tok")
+set(SHARD_A "${WORK_DIR}/p8c_a.srd")
+set(TOK_B "${WORK_DIR}/p8c_b.tok")
+set(SHARD_B "${WORK_DIR}/p8c_b.srd")
+set(CKPT "${WORK_DIR}/p8c_train.ckpt")
+set(CURSOR "${WORK_DIR}/p8c_train.cursor")
+
+file(REMOVE
+    "${CORPUS}"
+    "${TOK_A}"
+    "${SHARD_A}"
+    "${TOK_B}"
+    "${SHARD_B}"
+    "${CKPT}"
+    "${CURSOR}")
+
+file(WRITE "${CORPUS}"
+    "hello world hello world\n"
+    "native corpus training path\n"
+    "hello assistant hello user\n"
+    "deterministic tokenizer shard\n")
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" prepare
+        --corpus "${CORPUS}"
+        --tokenizer-out "${TOK_A}"
+        --shard-out "${SHARD_A}"
+        --target-vocab 270
+        --min-pair-frequency 2
+        --sequence-length 4
+    RESULT_VARIABLE prepare_a_result
+    OUTPUT_VARIABLE prepare_a_output
+    ERROR_VARIABLE prepare_a_error)
+
+if(NOT prepare_a_result EQUAL 0)
+    message(FATAL_ERROR
+        "prepare A failed: ${prepare_a_result}\n"
+        "stdout=${prepare_a_output}\n"
+        "stderr=${prepare_a_error}")
+endif()
+
+if(NOT prepare_a_output MATCHES "P8C_PREPARE=PASS")
+    message(FATAL_ERROR "prepare A marker missing: ${prepare_a_output}")
+endif()
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" prepare
+        --corpus "${CORPUS}"
+        --tokenizer-out "${TOK_B}"
+        --shard-out "${SHARD_B}"
+        --target-vocab 270
+        --min-pair-frequency 2
+        --sequence-length 4
+    RESULT_VARIABLE prepare_b_result
+    OUTPUT_VARIABLE prepare_b_output
+    ERROR_VARIABLE prepare_b_error)
+
+if(NOT prepare_b_result EQUAL 0)
+    message(FATAL_ERROR
+        "prepare B failed: ${prepare_b_result}\n"
+        "stdout=${prepare_b_output}\n"
+        "stderr=${prepare_b_error}")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files "${TOK_A}" "${TOK_B}"
+    RESULT_VARIABLE tokenizer_compare_result)
+if(NOT tokenizer_compare_result EQUAL 0)
+    message(FATAL_ERROR "tokenizer output is not deterministic")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files "${SHARD_A}" "${SHARD_B}"
+    RESULT_VARIABLE shard_compare_result)
+if(NOT shard_compare_result EQUAL 0)
+    message(FATAL_ERROR "shard output is not deterministic")
+endif()
+
+execute_process(
+    COMMAND "${NIYAH_TRAIN}" new
+        --tokenizer "${TOK_A}"
+        --shard "${SHARD_A}"
+        --checkpoint-out "${CKPT}"
+        --cursor-out "${CURSOR}"
+        --updates 1
+        --batch-size 1
+        --accumulation-steps 1
+        --model-seed 42
+        --data-seed 7
+        --context-length 4
+        --embedding-dim 8
+        --layers 1
+        --heads 2
+        --kv-heads 1
+        --ffn-hidden-dim 16
+        --rms-norm-eps 0.00001
+        --tie-word-embeddings 1
+        --learning-rate 0.001
+        --beta1 0.9
+        --beta2 0.999
+        --epsilon 0.00000001
+        --weight-decay 0
+        --max-grad-norm 1
+    RESULT_VARIABLE train_result
+    OUTPUT_VARIABLE train_output
+    ERROR_VARIABLE train_error)
+
+if(NOT train_result EQUAL 0)
+    message(FATAL_ERROR
+        "prepared artifacts were rejected by niyah-train: ${train_result}\n"
+        "stdout=${train_output}\n"
+        "stderr=${train_error}")
+endif()
+
+if(NOT EXISTS "${CKPT}" OR NOT EXISTS "${CURSOR}")
+    message(FATAL_ERROR "training outputs missing")
+endif()
+
+message("P8C_NATIVE_CORPUS_PREPARE=PASS")
