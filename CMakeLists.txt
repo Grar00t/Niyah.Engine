@@ -44,6 +44,7 @@ add_library(niyah STATIC
     src/niyah_model.c
     src/niyah_math.c
     src/niyah_tokenizer.c
+    src/niyah_dataset.c
     src/niyah_transformer.c
     src/niyah_decode.c
     src/niyah_sampler.c
@@ -78,6 +79,9 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_tokenizer_test tests/test_tokenizer.c)
     target_link_libraries(niyah_tokenizer_test PRIVATE niyah)
 
+    add_executable(niyah_dataset_test tests/test_dataset.c)
+    target_link_libraries(niyah_dataset_test PRIVATE niyah)
+
     add_executable(niyah_transformer_test tests/test_transformer.c)
     target_link_libraries(niyah_transformer_test PRIVATE niyah)
 
@@ -105,6 +109,7 @@ if(NIYAH_BUILD_TESTS)
     if(MSVC)
         target_compile_options(niyah_model_test PRIVATE /W4 /WX)
         target_compile_options(niyah_tokenizer_test PRIVATE /W4 /WX)
+        target_compile_options(niyah_dataset_test PRIVATE /W4 /WX)
         target_compile_options(niyah_transformer_test PRIVATE /W4 /WX)
         target_compile_options(niyah_decode_test PRIVATE /W4 /WX)
         target_compile_options(niyah_generation_test PRIVATE /W4 /WX)
@@ -116,6 +121,7 @@ if(NIYAH_BUILD_TESTS)
     else()
         target_compile_options(niyah_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_tokenizer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(niyah_dataset_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_transformer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_decode_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_generation_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -128,6 +134,7 @@ if(NIYAH_BUILD_TESTS)
 
     add_test(NAME niyah_model_test COMMAND niyah_model_test)
     add_test(NAME niyah_tokenizer_test COMMAND niyah_tokenizer_test)
+    add_test(NAME niyah_dataset_test COMMAND niyah_dataset_test)
     add_test(NAME niyah_transformer_test COMMAND niyah_transformer_test)
     add_test(NAME niyah_decode_test COMMAND niyah_decode_test)
     add_test(NAME niyah_generation_test COMMAND niyah_generation_test)
