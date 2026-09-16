@@ -11,11 +11,15 @@
 extern "C" {
 #endif
 
+#define NIYAH_DATASET_IDENTITY_SHA256_SIZE 32U
+
 typedef struct NiyahDatasetCursor {
     size_t sample_count;
     size_t position;
     uint64_t seed;
     uint64_t epoch;
+    uint8_t dataset_identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE];
+    int has_dataset_identity;
     size_t *order;
 } NiyahDatasetCursor;
 
@@ -33,6 +37,13 @@ NiyahStatus niyah_dataset_cursor_next(NiyahDatasetCursor *cursor,
 NiyahStatus niyah_dataset_cursor_seek(NiyahDatasetCursor *cursor,
                                       uint64_t epoch,
                                       size_t position);
+
+/* Bind sequencing state to an exact dataset content identity. Bound cursors
+ * persist as NIYAHDST V2; unbound cursors retain V1 persistence.
+ */
+NiyahStatus niyah_dataset_cursor_bind_identity(
+    NiyahDatasetCursor *cursor,
+    const uint8_t identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE]);
 
 NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
                                       const char *path);

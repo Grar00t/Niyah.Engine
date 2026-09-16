@@ -336,6 +336,7 @@ int main(int argc, char **argv)
     size_t sample_count = 0U;
     size_t sample_bytes = 0U;
     size_t vocab_size;
+    uint8_t dataset_identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE];
     float mean_loss = 0.0f;
     NiyahStatus status;
     int parsed;
@@ -364,6 +365,13 @@ int main(int argc, char **argv)
     status = niyah_dataset_shard_load(options.shard_path, tokenizer, &shard);
     if (status != NIYAH_OK) {
         exit_code = fail_status("shard_load", status);
+        goto cleanup;
+    }
+
+    status = niyah_dataset_shard_identity_sha256(
+        &shard, dataset_identity);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("dataset_identity", status);
         goto cleanup;
     }
 
@@ -429,6 +437,12 @@ int main(int argc, char **argv)
             exit_code = fail_status("cursor_create", status);
             goto cleanup;
         }
+        status = niyah_dataset_cursor_bind_identity(
+            &cursor, dataset_identity);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("cursor_bind", status);
+            goto cleanup;
+        }
     } else {
         status = niyah_checkpoint_load_with_tokenizer(
             options.checkpoint_in, tokenizer,
@@ -443,6 +457,9 @@ int main(int argc, char **argv)
             goto cleanup;
         }
         if (cursor.sample_count != sample_count ||
+            cursor.has_dataset_identity == 0 ||
+            memcmp(cursor.dataset_identity, dataset_identity,
+                   NIYAH_DATASET_IDENTITY_SHA256_SIZE) != 0 ||
             !validate_sample_context(samples, sample_count,
                                      model.config.context_length)) {
             exit_code = fail_status("resume_compatibility",

@@ -5,10 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-_Static_assert(CHAR_BIT == 8, "dataset cursor v1 requires 8-bit bytes");
+_Static_assert(CHAR_BIT == 8, "dataset cursor persistence requires 8-bit bytes");
 
-#define NIYAH_DATASET_CURSOR_VERSION UINT32_C(1)
-#define NIYAH_DATASET_CURSOR_FLAGS UINT32_C(0)
+#define NIYAH_DATASET_CURSOR_VERSION_V1 UINT32_C(1)
+#define NIYAH_DATASET_CURSOR_VERSION_V2 UINT32_C(2)
+#define NIYAH_DATASET_CURSOR_FLAGS_V1 UINT32_C(0)
+#define NIYAH_DATASET_CURSOR_FLAG_DATASET_IDENTITY UINT32_C(1)
 #define NIYAH_DATASET_CURSOR_CHECKSUM_CRC32 UINT32_C(1)
 
 static const unsigned char NIYAH_DATASET_CURSOR_MAGIC[8] = {
@@ -81,7 +83,9 @@ static NiyahStatus validate_cursor(const NiyahDatasetCursor *cursor)
 {
     if (cursor == NULL) return NIYAH_ERR_INVALID_ARGUMENT;
     if (cursor->sample_count == 0U || cursor->order == NULL ||
-        cursor->position > cursor->sample_count)
+        cursor->position > cursor->sample_count ||
+        (cursor->has_dataset_identity != 0 &&
+         cursor->has_dataset_identity != 1))
         return NIYAH_ERR_INVALID_CONFIG;
     return NIYAH_OK;
 }
@@ -104,6 +108,8 @@ NiyahStatus niyah_dataset_cursor_init(NiyahDatasetCursor *cursor,
     cursor->position = 0U;
     cursor->seed = seed;
     cursor->epoch = UINT64_C(0);
+    memset(cursor->dataset_identity, 0, sizeof(cursor->dataset_identity));
+    cursor->has_dataset_identity = 0;
 
     status = build_order(cursor);
     if (status != NIYAH_OK) {
@@ -222,11 +228,29 @@ NiyahStatus niyah_dataset_cursor_seek(NiyahDatasetCursor *cursor,
     return NIYAH_OK;
 }
 
+NiyahStatus niyah_dataset_cursor_bind_identity(
+    NiyahDatasetCursor *cursor,
+    const uint8_t identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE])
+{
+    NiyahStatus status;
+
+    if (identity == NULL) return NIYAH_ERR_INVALID_ARGUMENT;
+    status = validate_cursor(cursor);
+    if (status != NIYAH_OK) return status;
+
+    memcpy(cursor->dataset_identity, identity, sizeof(cursor->dataset_identity));
+    cursor->has_dataset_identity = 1;
+    return NIYAH_OK;
+}
+
 NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
                                       const char *path)
 {
     FILE *file;
-    unsigned char header[48], footer[8];
+    unsigned char header[80], footer[8];
+    size_t header_size;
+    uint32_t version;
+    uint32_t flags;
     NiyahDatasetCrc32 crc;
     NiyahStatus status;
     int close_result;
@@ -234,24 +258,40 @@ NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
     if (path == NULL || path[0] == '\0') return NIYAH_ERR_INVALID_ARGUMENT;
     status = validate_cursor(cursor);
     if (status != NIYAH_OK) return status;
+    if (cursor->sample_count > (size_t)UINT64_MAX ||
+        cursor->position > (size_t)UINT64_MAX)
+        return NIYAH_ERR_OVERFLOW;
+
+    if (cursor->has_dataset_identity != 0) {
+        version = NIYAH_DATASET_CURSOR_VERSION_V2;
+        flags = NIYAH_DATASET_CURSOR_FLAG_DATASET_IDENTITY;
+        header_size = sizeof(header);
+    } else {
+        version = NIYAH_DATASET_CURSOR_VERSION_V1;
+        flags = NIYAH_DATASET_CURSOR_FLAGS_V1;
+        header_size = 48U;
+    }
 
     memcpy(header, NIYAH_DATASET_CURSOR_MAGIC, 8U);
-    store_u32_le(header+8U, NIYAH_DATASET_CURSOR_VERSION);
-    store_u32_le(header+12U, NIYAH_DATASET_CURSOR_FLAGS);
+    store_u32_le(header+8U, version);
+    store_u32_le(header+12U, flags);
     store_u64_le(header+16U, (uint64_t)cursor->sample_count);
     store_u64_le(header+24U, cursor->seed);
     store_u64_le(header+32U, cursor->epoch);
     store_u64_le(header+40U, (uint64_t)cursor->position);
+    if (version == NIYAH_DATASET_CURSOR_VERSION_V2)
+        memcpy(header+48U, cursor->dataset_identity,
+               NIYAH_DATASET_IDENTITY_SHA256_SIZE);
 
     crc_init(&crc);
-    crc_update(&crc, header, sizeof(header));
+    crc_update(&crc, header, header_size);
     store_u32_le(footer, NIYAH_DATASET_CURSOR_CHECKSUM_CRC32);
     store_u32_le(footer+4U, crc_final(&crc));
 
     file = niyah_dataset_fopen(path, "wb");
     if (file == NULL) return NIYAH_ERR_IO;
 
-    status = fwrite(header,1U,sizeof(header),file)==sizeof(header) ? NIYAH_OK : NIYAH_ERR_IO;
+    status = fwrite(header,1U,header_size,file)==header_size ? NIYAH_OK : NIYAH_ERR_IO;
     if (status == NIYAH_OK)
         status = fwrite(footer,1U,sizeof(footer),file)==sizeof(footer) ? NIYAH_OK : NIYAH_ERR_IO;
     if (status == NIYAH_OK && fflush(file) != 0) status = NIYAH_ERR_IO;
@@ -266,7 +306,8 @@ NiyahStatus niyah_dataset_cursor_load(const char *path,
                                       NiyahDatasetCursor *out_cursor)
 {
     FILE *file;
-    unsigned char header[48], footer[8], extra;
+    unsigned char header[80], footer[8], extra;
+    size_t header_size;
     NiyahDatasetCrc32 crc;
     NiyahDatasetCursor temp;
     uint64_t count64, pos64;
@@ -282,7 +323,7 @@ NiyahStatus niyah_dataset_cursor_load(const char *path,
     file=niyah_dataset_fopen(path,"rb");
     if (file==NULL) return NIYAH_ERR_IO;
 
-    if (fread(header,1U,sizeof(header),file)!=sizeof(header)) {
+    if (fread(header,1U,48U,file)!=48U) {
         status=ferror(file)?NIYAH_ERR_IO:NIYAH_ERR_CORRUPT_DATA; goto done;
     }
 
@@ -295,11 +336,25 @@ NiyahStatus niyah_dataset_cursor_load(const char *path,
     count64=load_u64_le(header+16U);
     pos64=load_u64_le(header+40U);
 
-    if (version!=NIYAH_DATASET_CURSOR_VERSION) {
+    if (version == NIYAH_DATASET_CURSOR_VERSION_V1) {
+        if (flags != NIYAH_DATASET_CURSOR_FLAGS_V1) {
+            status=NIYAH_ERR_CORRUPT_DATA; goto done;
+        }
+        header_size=48U;
+    } else if (version == NIYAH_DATASET_CURSOR_VERSION_V2) {
+        if (flags != NIYAH_DATASET_CURSOR_FLAG_DATASET_IDENTITY) {
+            status=NIYAH_ERR_CORRUPT_DATA; goto done;
+        }
+        if (fread(header+48U,1U,NIYAH_DATASET_IDENTITY_SHA256_SIZE,file) !=
+            NIYAH_DATASET_IDENTITY_SHA256_SIZE) {
+            status=ferror(file)?NIYAH_ERR_IO:NIYAH_ERR_CORRUPT_DATA; goto done;
+        }
+        header_size=80U;
+    } else {
         status=NIYAH_ERR_UNSUPPORTED_VERSION; goto done;
     }
-    if (flags!=NIYAH_DATASET_CURSOR_FLAGS ||
-        count64==UINT64_C(0) ||
+
+    if (count64==UINT64_C(0) ||
         count64>(uint64_t)SIZE_MAX ||
         pos64>count64 ||
         pos64>(uint64_t)SIZE_MAX) {
@@ -311,7 +366,7 @@ NiyahStatus niyah_dataset_cursor_load(const char *path,
     }
 
     crc_init(&crc);
-    crc_update(&crc,header,sizeof(header));
+    crc_update(&crc,header,header_size);
     if (load_u32_le(footer)!=NIYAH_DATASET_CURSOR_CHECKSUM_CRC32 ||
         load_u32_le(footer+4U)!=crc_final(&crc)) {
         status=NIYAH_ERR_CORRUPT_DATA; goto done;
@@ -327,6 +382,11 @@ NiyahStatus niyah_dataset_cursor_load(const char *path,
 
     temp.epoch=load_u64_le(header+32U);
     temp.position=(size_t)pos64;
+    if (version == NIYAH_DATASET_CURSOR_VERSION_V2) {
+        memcpy(temp.dataset_identity,header+48U,
+               NIYAH_DATASET_IDENTITY_SHA256_SIZE);
+        temp.has_dataset_identity=1;
+    }
     status=build_order(&temp);
 
 done:
