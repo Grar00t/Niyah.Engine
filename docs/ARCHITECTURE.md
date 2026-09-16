@@ -8,7 +8,7 @@ There is no second "mini" model family and no external model runtime behind gene
 
 ## Canonical weight order
 
-All parameters live in one contiguous FP32 array during P0:
+All model parameters live in one contiguous FP32 array:
 
 ```text
 token_embedding [vocab, dim]
@@ -28,18 +28,18 @@ lm_head           [vocab, dim]   # omitted as separate storage when tied
 
 `head_dim = dim / n_heads` and `kv_dim = head_dim * n_kv_heads`.
 
-This ordering is the contract for both future forward/backward training code and autoregressive inference.
+This ordering is the contract for full forward, incremental decode, backward gradients, and future optimizer/checkpoint work.
 
-## P0 invariants
+## Model invariants
 
-- Configuration validation rejects invalid head/GQA dimensions.
+- Configuration validation rejects invalid head/GQA dimensions, including RoPE head dimensions smaller than 2 or not divisible by 2.
 - Weight-size arithmetic is overflow-checked.
 - Tied embeddings make the LM head reference the embedding offset rather than allocating duplicate parameters.
 - Untied embeddings allocate a real independent LM head.
 - Parameter initialization is deterministic for a fixed seed.
-- CPU math primitives are the reference implementation.
+- CPU FP32 math is the current reference implementation.
 
-## P1 tokenizer contract
+## Tokenizer contract
 
 The tokenizer is implemented inside Niyah.Engine; it is not delegated to an external model or tokenizer runtime.
 
@@ -47,26 +47,61 @@ The tokenizer is implemented inside Niyah.Engine; it is not delegated to an exte
 - `256` is BOS and `257` is EOS.
 - Learned tokens begin at `258`.
 - Training is deterministic byte-level BPE with explicit merge order and deterministic tie-breaking.
-- Runtime encoding starts from bytes and applies the learned merge rules in training order.
-- Decoding reconstructs the original bytes exactly while ignoring BOS/EOS control tokens.
-- Arabic and English round-trip correctness is part of the native test suite.
+- `target_vocab_size` is an upper training target; model configuration for a trained tokenizer uses the realized tokenizer vocabulary size.
+- Runtime encoding starts from bytes and applies learned merge rules in training order.
+- Decoding reconstructs original bytes exactly while ignoring BOS/EOS control tokens.
+- Arabic and English round-trip behavior is covered by native tests.
+- Generic generation remains tokenizer-independent; EOS is an explicit caller-provided token ID.
 
-## Build order
+## Implemented now
 
-Completed:
+- canonical contiguous FP32 `NiyahModel` weights;
+- deterministic native parameter initialization;
+- native byte-level BPE tokenizer and tokenizer training;
+- RMSNorm;
+- RoPE;
+- causal grouped-query attention;
+- SwiGLU feed-forward path;
+- full-sequence Transformer forward;
+- KV cache;
+- incremental single-token decode;
+- deterministic greedy/seeded sampler;
+- autoregressive generation;
+- cross-entropy objective;
+- explicit CPU backward gradients over the canonical model weights;
+- tokenizer -> realized vocabulary -> model -> incremental decode -> generation -> tokenizer decode integration coverage;
+- Ubuntu and Windows Release CI;
+- Ubuntu Debug AddressSanitizer + UndefinedBehaviorSanitizer CI.
 
-1. canonical model layout and reference math;
-2. tokenizer runtime and deterministic byte-level BPE trainer.
+## Not implemented yet
 
-Next:
+- AdamW optimizer;
+- gradient clipping;
+- model checkpoint save/load;
+- optimizer checkpoint state;
+- tokenizer persistence;
+- dataset preprocessing and binary sharding;
+- production training executable/loop;
+- gradient accumulation;
+- true mini-batch training;
+- held-out validation loss/perplexity tooling;
+- mixed precision;
+- CUDA backend;
+- instruction-tuning pipeline;
+- conversational-tuning pipeline.
 
-3. RoPE, attention/GQA, SwiGLU and Transformer forward;
-4. KV cache and autoregressive generation;
-5. cross-entropy and explicit backward gradients over this exact layout;
-6. AdamW, gradient clipping and checkpoint/resume;
-7. held-out loss/perplexity;
-8. optional CUDA acceleration without changing model semantics.
+## Current scaling risks
+
+- Tokenizer BPE training processes the corpus in memory and repeatedly rebuilds/sorts pair arrays.
+- Full training currently materializes `token_count * vocab_size` logits and corresponding `dlogits`.
+- Transformer mathematics is duplicated across full forward, incremental decode, and the cached forward used by backward. Parity tests reduce drift risk but do not remove this duplication.
+
+These are later engineering targets. P5.1 does not refactor the three Transformer execution paths.
+
+## Architectural boundary
+
+The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, and training primitives. Optimizer/checkpoint/dataset/evaluation work belongs in later trainer-facing code. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
 
 ## Out of core
 
-RAG, evidence systems, graph reasoning, PostgreSQL, document services and external LLM APIs are not part of the model core. They must not become dependencies of build, training, checkpoint loading, or generation.
+RAG, evidence systems, graph reasoning, PostgreSQL, document services, hosted model APIs, external LLM runtimes, and agent frameworks are not model-core dependencies. Niyah.Core must remain buildable and usable without those systems.
