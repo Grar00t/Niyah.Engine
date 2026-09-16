@@ -38,6 +38,27 @@ int niyah_cuda_model_state_matvec(NiyahCudaModelState *state,
                                   size_t rows,
                                   size_t cols);
 
+typedef struct NiyahCudaDecodeState {
+    void *device_keys;
+    void *device_values;
+    void *device_workspace;
+    void *device_logits;
+    size_t context_length;
+    size_t head_dim;
+    size_t kv_dim;
+    size_t values_per_tensor;
+    size_t workspace_floats;
+    size_t logits_capacity;
+    size_t next_position;
+    NiyahModelConfig config;
+} NiyahCudaDecodeState;
+
+int niyah_cuda_decode_state_create(
+    NiyahCudaDecodeState *state,
+    const NiyahCudaModelState *model_state);
+int niyah_cuda_decode_state_reset(NiyahCudaDecodeState *state);
+void niyah_cuda_decode_state_destroy(NiyahCudaDecodeState *state);
+
 #ifdef __cplusplus
 }
 #endif

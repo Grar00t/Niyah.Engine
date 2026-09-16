@@ -154,6 +154,32 @@ if(NIYAH_BUILD_TESTS)
         endif()
 
         add_test(NAME niyah_cuda_model_test COMMAND niyah_cuda_model_test)
+
+        add_executable(niyah_cuda_decode_state_test
+            tests/test_cuda_decode_state.c
+        )
+        target_include_directories(niyah_cuda_decode_state_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_decode_state_test
+            PRIVATE
+                niyah
+                niyah_cuda_backend
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_decode_state_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_decode_state_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_decode_state_test
+            COMMAND niyah_cuda_decode_state_test
+        )
     endif()
 
     add_executable(niyah_model_test tests/test_model.c)

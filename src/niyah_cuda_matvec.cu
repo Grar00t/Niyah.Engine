@@ -347,3 +347,201 @@ extern "C" int niyah_cuda_model_state_matvec(
                        cudaMemcpyDeviceToHost);
     return error == cudaSuccess ? 0 : 1;
 }
+
+static int niyah_cuda_size_add_ok(size_t a, size_t b, size_t *out)
+{
+    if (out == NULL || a > ((size_t)-1) - b) {
+        return 0;
+    }
+
+    *out = a + b;
+    return 1;
+}
+
+static int niyah_cuda_size_mul_ok(size_t a, size_t b, size_t *out)
+{
+    if (out == NULL || (a != 0U && b > ((size_t)-1) / a)) {
+        return 0;
+    }
+
+    *out = a * b;
+    return 1;
+}
+
+extern "C" void niyah_cuda_decode_state_destroy(
+    NiyahCudaDecodeState *state)
+{
+    if (state == NULL) {
+        return;
+    }
+
+    if (state->device_logits != NULL) {
+        (void)cudaFree(state->device_logits);
+    }
+    if (state->device_workspace != NULL) {
+        (void)cudaFree(state->device_workspace);
+    }
+    if (state->device_values != NULL) {
+        (void)cudaFree(state->device_values);
+    }
+    if (state->device_keys != NULL) {
+        (void)cudaFree(state->device_keys);
+    }
+
+    memset(state, 0, sizeof(*state));
+}
+
+extern "C" int niyah_cuda_decode_state_reset(
+    NiyahCudaDecodeState *state)
+{
+    size_t kv_bytes;
+    size_t workspace_bytes;
+    size_t logits_bytes;
+
+    if (state == NULL ||
+        state->device_keys == NULL ||
+        state->device_values == NULL ||
+        state->device_workspace == NULL ||
+        state->device_logits == NULL ||
+        state->values_per_tensor == 0U ||
+        state->workspace_floats == 0U ||
+        state->logits_capacity == 0U ||
+        !niyah_cuda_size_mul_ok(
+            state->values_per_tensor, sizeof(float), &kv_bytes) ||
+        !niyah_cuda_size_mul_ok(
+            state->workspace_floats, sizeof(float), &workspace_bytes) ||
+        !niyah_cuda_size_mul_ok(
+            state->logits_capacity, sizeof(float), &logits_bytes)) {
+        return 1;
+    }
+
+    if (cudaMemset(state->device_keys, 0, kv_bytes) != cudaSuccess ||
+        cudaMemset(state->device_values, 0, kv_bytes) != cudaSuccess ||
+        cudaMemset(state->device_workspace, 0, workspace_bytes) != cudaSuccess ||
+        cudaMemset(state->device_logits, 0, logits_bytes) != cudaSuccess) {
+        return 1;
+    }
+
+    state->next_position = 0U;
+    return 0;
+}
+
+extern "C" int niyah_cuda_decode_state_create(
+    NiyahCudaDecodeState *state,
+    const NiyahCudaModelState *model_state)
+{
+    const NiyahModelConfig *config;
+    size_t dim;
+    size_t ffn;
+    size_t head_dim;
+    size_t kv_dim;
+    size_t per_layer;
+    size_t values_per_tensor;
+    size_t workspace_floats;
+    size_t term;
+    size_t kv_bytes;
+    size_t workspace_bytes;
+    size_t logits_bytes;
+
+    if (state == NULL || model_state == NULL ||
+        model_state->device_weights == NULL ||
+        model_state->weight_count == 0U) {
+        return 1;
+    }
+
+    memset(state, 0, sizeof(*state));
+    config = &model_state->config;
+
+    if (config->vocab_size < 2U ||
+        config->context_length == 0U ||
+        config->embedding_dim == 0U ||
+        config->n_layers == 0U ||
+        config->n_heads == 0U ||
+        config->n_kv_heads == 0U ||
+        config->ffn_hidden_dim == 0U ||
+        (config->embedding_dim % config->n_heads) != 0U ||
+        (config->n_heads % config->n_kv_heads) != 0U) {
+        return 1;
+    }
+
+    dim = (size_t)config->embedding_dim;
+    ffn = (size_t)config->ffn_hidden_dim;
+    head_dim = dim / (size_t)config->n_heads;
+
+    if (head_dim < 2U || (head_dim % 2U) != 0U ||
+        !niyah_cuda_size_mul_ok(
+            head_dim, (size_t)config->n_kv_heads, &kv_dim) ||
+        kv_dim != model_state->layout.kv_dim ||
+        model_state->layout.total_floats != model_state->weight_count) {
+        return 1;
+    }
+
+    if (!niyah_cuda_size_mul_ok(
+            (size_t)config->context_length, kv_dim, &per_layer) ||
+        !niyah_cuda_size_mul_ok(
+            (size_t)config->n_layers,
+            per_layer,
+            &values_per_tensor)) {
+        return 1;
+    }
+
+    /*
+     * Matches niyah_decode_workspace_floats():
+     * 5*dim + 2*kv_dim + 2*ffn + context_length.
+     */
+    if (!niyah_cuda_size_mul_ok(5U, dim, &workspace_floats) ||
+        !niyah_cuda_size_mul_ok(2U, kv_dim, &term) ||
+        !niyah_cuda_size_add_ok(
+            workspace_floats, term, &workspace_floats) ||
+        !niyah_cuda_size_mul_ok(2U, ffn, &term) ||
+        !niyah_cuda_size_add_ok(
+            workspace_floats, term, &workspace_floats) ||
+        !niyah_cuda_size_add_ok(
+            workspace_floats,
+            (size_t)config->context_length,
+            &workspace_floats)) {
+        return 1;
+    }
+
+    if (!niyah_cuda_size_mul_ok(
+            values_per_tensor, sizeof(float), &kv_bytes) ||
+        !niyah_cuda_size_mul_ok(
+            workspace_floats, sizeof(float), &workspace_bytes) ||
+        !niyah_cuda_size_mul_ok(
+            (size_t)config->vocab_size,
+            sizeof(float),
+            &logits_bytes)) {
+        return 1;
+    }
+
+    if (cudaMalloc(&state->device_keys, kv_bytes) != cudaSuccess) {
+        goto fail;
+    }
+    if (cudaMalloc(&state->device_values, kv_bytes) != cudaSuccess) {
+        goto fail;
+    }
+    if (cudaMalloc(&state->device_workspace, workspace_bytes) != cudaSuccess) {
+        goto fail;
+    }
+    if (cudaMalloc(&state->device_logits, logits_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    state->context_length = (size_t)config->context_length;
+    state->head_dim = head_dim;
+    state->kv_dim = kv_dim;
+    state->values_per_tensor = values_per_tensor;
+    state->workspace_floats = workspace_floats;
+    state->logits_capacity = (size_t)config->vocab_size;
+    state->config = *config;
+
+    if (niyah_cuda_decode_state_reset(state) != 0) {
+        goto fail;
+    }
+
+    return 0;
+
+fail:
+    niyah_cuda_decode_state_destroy(state);
+    return 1;
+}
