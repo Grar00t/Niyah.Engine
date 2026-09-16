@@ -130,6 +130,67 @@ static void test_bound_resume_v2(void)
     (void)remove(p);
 }
 
+static void test_checkpoint_bound_resume_v3(void)
+{
+    const char *path = "niyah_dataset_cursor_v3_test.bin";
+    NiyahDatasetCursor cursor;
+    NiyahDatasetCursor loaded;
+    uint8_t dataset_identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE];
+    uint8_t checkpoint_identity[NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE];
+    unsigned char bytes[120];
+    FILE *file;
+    size_t i;
+
+    memset(&cursor, 0, sizeof(cursor));
+    memset(&loaded, 0, sizeof(loaded));
+    for (i = 0U; i < sizeof(dataset_identity); ++i)
+        dataset_identity[i] = (uint8_t)(i + 1U);
+    for (i = 0U; i < sizeof(checkpoint_identity); ++i)
+        checkpoint_identity[i] = (uint8_t)(UINT8_C(0xa0) + (uint8_t)i);
+
+    CHECK((niyah_dataset_cursor_init(&cursor, 7U, UINT64_C(99))) == NIYAH_OK);
+    CHECK((niyah_dataset_cursor_bind_identity(
+        &cursor, dataset_identity)) == NIYAH_OK);
+    CHECK((niyah_dataset_cursor_bind_checkpoint_identity(
+        &cursor, checkpoint_identity)) == NIYAH_OK);
+    CHECK((niyah_dataset_cursor_save(&cursor, path)) == NIYAH_OK);
+#if defined(_MSC_VER)
+
+    CHECK(fopen_s(&file, path, "rb") == 0);
+#else
+
+    file = fopen(path, "rb");
+#endif
+    CHECK(file != NULL);
+    if (file != NULL) {
+        CHECK(fread(bytes, 1U, sizeof(bytes), file) == sizeof(bytes));
+        CHECK(fgetc(file) == EOF);
+        (void)fclose(file);
+        CHECK(bytes[8] == 3U);
+        CHECK(bytes[12] == 3U);
+        CHECK(memcmp(bytes + 48U, dataset_identity,
+                     sizeof(dataset_identity)) == 0);
+        CHECK(memcmp(bytes + 80U, checkpoint_identity,
+                     sizeof(checkpoint_identity)) == 0);
+    }
+
+    CHECK((niyah_dataset_cursor_load(path, &loaded)) == NIYAH_OK);
+    CHECK(loaded.has_dataset_identity == 1);
+    CHECK(loaded.has_checkpoint_identity == 1);
+    CHECK(memcmp(loaded.dataset_identity, dataset_identity,
+                 sizeof(dataset_identity)) == 0);
+    CHECK(memcmp(loaded.checkpoint_identity, checkpoint_identity,
+                 sizeof(checkpoint_identity)) == 0);
+    CHECK(loaded.sample_count == cursor.sample_count);
+    CHECK(loaded.seed == cursor.seed);
+    CHECK(loaded.epoch == cursor.epoch);
+    CHECK(loaded.position == cursor.position);
+
+    niyah_dataset_cursor_destroy(&loaded);
+    niyah_dataset_cursor_destroy(&cursor);
+    (void)remove(path);
+}
+
 static void test_rejection(void)
 {
     const char *p="niyah_dataset_cursor_v1.bin",*bad="niyah_dataset_cursor_bad.bin";
@@ -141,7 +202,12 @@ static void test_rejection(void)
     if(d&&n==56U){
         d[55U]^=1U;CHECK(write_all(bad,d,n));
         CHECK(niyah_dataset_cursor_load(bad,&l)==NIYAH_ERR_CORRUPT_DATA);CHECK(l.order==NULL);
-        d[55U]^=1U;d[8U]=3U;CHECK(write_all(bad,d,n));
+        d[55U]^=1U;d[8U]=3U;        /* P6-Kd: V1/V2/V3 are valid; V4 must be unsupported. */
+        d[8U] = 4U;
+        d[9U] = 0U;
+        d[10U] = 0U;
+        d[11U] = 0U;
+CHECK(write_all(bad,d,n));
         CHECK(niyah_dataset_cursor_load(bad,&l)==NIYAH_ERR_UNSUPPORTED_VERSION);CHECK(l.order==NULL);
         d[8U]=1U;CHECK(write_all(bad,d,n-1U));
         CHECK(niyah_dataset_cursor_load(bad,&l)==NIYAH_ERR_CORRUPT_DATA);CHECK(l.order==NULL);
@@ -155,6 +221,7 @@ int main(void)
     test_determinism();
     test_resume();
     test_bound_resume_v2();
+    test_checkpoint_bound_resume_v3();
     test_rejection();
     if(failures){fprintf(stderr,"niyah_dataset_test: %d failure(s)\n",failures);return 1;}
     puts("NIYAH_DATASET_LIFECYCLE_P6_D=PASS");

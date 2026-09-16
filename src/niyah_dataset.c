@@ -9,8 +9,10 @@ _Static_assert(CHAR_BIT == 8, "dataset cursor persistence requires 8-bit bytes")
 
 #define NIYAH_DATASET_CURSOR_VERSION_V1 UINT32_C(1)
 #define NIYAH_DATASET_CURSOR_VERSION_V2 UINT32_C(2)
+#define NIYAH_DATASET_CURSOR_VERSION_V3 UINT32_C(3)
 #define NIYAH_DATASET_CURSOR_FLAGS_V1 UINT32_C(0)
 #define NIYAH_DATASET_CURSOR_FLAG_DATASET_IDENTITY UINT32_C(1)
+#define NIYAH_DATASET_CURSOR_FLAG_CHECKPOINT_IDENTITY UINT32_C(2)
 #define NIYAH_DATASET_CURSOR_CHECKSUM_CRC32 UINT32_C(1)
 
 static const unsigned char NIYAH_DATASET_CURSOR_MAGIC[8] = {
@@ -85,7 +87,11 @@ static NiyahStatus validate_cursor(const NiyahDatasetCursor *cursor)
     if (cursor->sample_count == 0U || cursor->order == NULL ||
         cursor->position > cursor->sample_count ||
         (cursor->has_dataset_identity != 0 &&
-         cursor->has_dataset_identity != 1))
+         cursor->has_dataset_identity != 1) ||
+        (cursor->has_checkpoint_identity != 0 &&
+         cursor->has_checkpoint_identity != 1) ||
+        (cursor->has_checkpoint_identity != 0 &&
+         cursor->has_dataset_identity == 0))
         return NIYAH_ERR_INVALID_CONFIG;
     return NIYAH_OK;
 }
@@ -110,6 +116,8 @@ NiyahStatus niyah_dataset_cursor_init(NiyahDatasetCursor *cursor,
     cursor->epoch = UINT64_C(0);
     memset(cursor->dataset_identity, 0, sizeof(cursor->dataset_identity));
     cursor->has_dataset_identity = 0;
+    memset(cursor->checkpoint_identity, 0, sizeof(cursor->checkpoint_identity));
+    cursor->has_checkpoint_identity = 0;
 
     status = build_order(cursor);
     if (status != NIYAH_OK) {
@@ -243,11 +251,29 @@ NiyahStatus niyah_dataset_cursor_bind_identity(
     return NIYAH_OK;
 }
 
+NiyahStatus niyah_dataset_cursor_bind_checkpoint_identity(
+    NiyahDatasetCursor *cursor,
+    const uint8_t identity[NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE])
+{
+    NiyahStatus status;
+
+    if (identity == NULL) return NIYAH_ERR_INVALID_ARGUMENT;
+    status = validate_cursor(cursor);
+    if (status != NIYAH_OK) return status;
+    if (cursor->has_dataset_identity == 0)
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    memcpy(cursor->checkpoint_identity, identity,
+           sizeof(cursor->checkpoint_identity));
+    cursor->has_checkpoint_identity = 1;
+    return NIYAH_OK;
+}
+
 NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
                                       const char *path)
 {
     FILE *file;
-    unsigned char header[80], footer[8];
+    unsigned char header[112], footer[8];
     size_t header_size;
     uint32_t version;
     uint32_t flags;
@@ -262,10 +288,15 @@ NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
         cursor->position > (size_t)UINT64_MAX)
         return NIYAH_ERR_OVERFLOW;
 
-    if (cursor->has_dataset_identity != 0) {
+    if (cursor->has_checkpoint_identity != 0) {
+        version = NIYAH_DATASET_CURSOR_VERSION_V3;
+        flags = NIYAH_DATASET_CURSOR_FLAG_DATASET_IDENTITY |
+                NIYAH_DATASET_CURSOR_FLAG_CHECKPOINT_IDENTITY;
+        header_size = sizeof(header);
+    } else if (cursor->has_dataset_identity != 0) {
         version = NIYAH_DATASET_CURSOR_VERSION_V2;
         flags = NIYAH_DATASET_CURSOR_FLAG_DATASET_IDENTITY;
-        header_size = sizeof(header);
+        header_size = 80U;
     } else {
         version = NIYAH_DATASET_CURSOR_VERSION_V1;
         flags = NIYAH_DATASET_CURSOR_FLAGS_V1;
@@ -279,9 +310,13 @@ NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
     store_u64_le(header+24U, cursor->seed);
     store_u64_le(header+32U, cursor->epoch);
     store_u64_le(header+40U, (uint64_t)cursor->position);
-    if (version == NIYAH_DATASET_CURSOR_VERSION_V2)
+    if (version == NIYAH_DATASET_CURSOR_VERSION_V2 ||
+        version == NIYAH_DATASET_CURSOR_VERSION_V3)
         memcpy(header+48U, cursor->dataset_identity,
                NIYAH_DATASET_IDENTITY_SHA256_SIZE);
+    if (version == NIYAH_DATASET_CURSOR_VERSION_V3)
+        memcpy(header+80U, cursor->checkpoint_identity,
+               NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE);
 
     crc_init(&crc);
     crc_update(&crc, header, header_size);
@@ -306,7 +341,7 @@ NiyahStatus niyah_dataset_cursor_load(const char *path,
                                       NiyahDatasetCursor *out_cursor)
 {
     FILE *file;
-    unsigned char header[80], footer[8], extra;
+    unsigned char header[112], footer[8], extra;
     size_t header_size;
     NiyahDatasetCrc32 crc;
     NiyahDatasetCursor temp;
@@ -350,6 +385,19 @@ NiyahStatus niyah_dataset_cursor_load(const char *path,
             status=ferror(file)?NIYAH_ERR_IO:NIYAH_ERR_CORRUPT_DATA; goto done;
         }
         header_size=80U;
+    } else if (version == NIYAH_DATASET_CURSOR_VERSION_V3) {
+        if (flags != (NIYAH_DATASET_CURSOR_FLAG_DATASET_IDENTITY |
+                      NIYAH_DATASET_CURSOR_FLAG_CHECKPOINT_IDENTITY)) {
+            status=NIYAH_ERR_CORRUPT_DATA; goto done;
+        }
+        if (fread(header+48U,1U,
+                  NIYAH_DATASET_IDENTITY_SHA256_SIZE +
+                  NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE,file) !=
+            NIYAH_DATASET_IDENTITY_SHA256_SIZE +
+            NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE) {
+            status=ferror(file)?NIYAH_ERR_IO:NIYAH_ERR_CORRUPT_DATA; goto done;
+        }
+        header_size=112U;
     } else {
         status=NIYAH_ERR_UNSUPPORTED_VERSION; goto done;
     }
@@ -382,10 +430,16 @@ NiyahStatus niyah_dataset_cursor_load(const char *path,
 
     temp.epoch=load_u64_le(header+32U);
     temp.position=(size_t)pos64;
-    if (version == NIYAH_DATASET_CURSOR_VERSION_V2) {
+    if (version == NIYAH_DATASET_CURSOR_VERSION_V2 ||
+        version == NIYAH_DATASET_CURSOR_VERSION_V3) {
         memcpy(temp.dataset_identity,header+48U,
                NIYAH_DATASET_IDENTITY_SHA256_SIZE);
         temp.has_dataset_identity=1;
+    }
+    if (version == NIYAH_DATASET_CURSOR_VERSION_V3) {
+        memcpy(temp.checkpoint_identity,header+80U,
+               NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE);
+        temp.has_checkpoint_identity=1;
     }
     status=build_order(&temp);
 
