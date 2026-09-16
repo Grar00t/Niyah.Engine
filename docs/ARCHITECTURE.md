@@ -73,6 +73,9 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 - canonical contiguous FP32 `NiyahModel` weights;
 - deterministic native parameter initialization;
 - native byte-level BPE tokenizer and tokenizer training;
+- tokenizer persistence V1 with stable SHA-256 tokenizer identity;
+- tokenizer-bound Checkpoint V2 while Checkpoint V1 remains supported;
+- deterministic dataset sample ordering with resumable cursor persistence;
 - RMSNorm;
 - RoPE;
 - causal grouped-query attention;
@@ -97,7 +100,6 @@ The CPU reference optimizer updates the same canonical FP32 weight storage used 
 
 ## Not implemented yet
 
-- tokenizer persistence or stable tokenizer identity binding;
 - dataset preprocessing and binary sharding;
 - production training executable/loop;
 - gradient accumulation;
@@ -127,7 +129,7 @@ These are later engineering targets. Checkpoint persistence does not refactor th
 
 ## Architectural boundary
 
-The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, and versioned checkpoint persistence for canonical model + optimizer state. Dataset, training-loop, evaluation, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
+The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, versioned checkpoint persistence, and deterministic dataset cursor sequencing/persistence. Production dataset preprocessing/sharding, training-loop, evaluation, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
 
 ## Out of core
 
