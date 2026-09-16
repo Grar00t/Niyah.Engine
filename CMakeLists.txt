@@ -73,6 +73,16 @@ if(NOT MSVC)
     target_link_libraries(niyah PUBLIC m)
 endif()
 
+add_executable(niyah_train tools/niyah_train.c)
+set_target_properties(niyah_train PROPERTIES OUTPUT_NAME "niyah-train")
+target_link_libraries(niyah_train PRIVATE niyah)
+
+if(MSVC)
+    target_compile_options(niyah_train PRIVATE /W4 /WX)
+else()
+    target_compile_options(niyah_train PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 if(NIYAH_BUILD_TESTS)
     enable_testing()
 
@@ -118,6 +128,9 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_checkpoint_test tests/test_checkpoint.c)
     target_link_libraries(niyah_checkpoint_test PRIVATE niyah)
 
+    add_executable(niyah_training_fixture tests/make_training_fixture.c)
+    target_link_libraries(niyah_training_fixture PRIVATE niyah)
+
     if(MSVC)
         target_compile_options(niyah_model_test PRIVATE /W4 /WX)
         target_compile_options(niyah_tokenizer_test PRIVATE /W4 /WX)
@@ -133,6 +146,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_text_pipeline_test PRIVATE /W4 /WX)
         target_compile_options(niyah_optimizer_test PRIVATE /W4 /WX)
         target_compile_options(niyah_checkpoint_test PRIVATE /W4 /WX)
+        target_compile_options(niyah_training_fixture PRIVATE /W4 /WX)
     else()
         target_compile_options(niyah_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_tokenizer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -148,6 +162,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_text_pipeline_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_optimizer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_checkpoint_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(niyah_training_fixture PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
 
     add_test(NAME niyah_model_test COMMAND niyah_model_test)
@@ -164,4 +179,64 @@ if(NIYAH_BUILD_TESTS)
     add_test(NAME niyah_text_pipeline_test COMMAND niyah_text_pipeline_test)
     add_test(NAME niyah_optimizer_test COMMAND niyah_optimizer_test)
     add_test(NAME niyah_checkpoint_test COMMAND niyah_checkpoint_test)
+
+    set(_NIYAH_TRAIN_TOK "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture.tok")
+    set(_NIYAH_TRAIN_SHARD "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture.srd")
+    set(_NIYAH_TRAIN_CKPT1 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_1.ckpt")
+    set(_NIYAH_TRAIN_CUR1 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_1.cursor")
+    set(_NIYAH_TRAIN_CKPT2 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_2.ckpt")
+    set(_NIYAH_TRAIN_CUR2 "${CMAKE_CURRENT_BINARY_DIR}/niyah_train_fixture_2.cursor")
+
+    add_test(NAME niyah_train_help_test COMMAND niyah_train --help)
+
+    add_test(NAME niyah_training_fixture_test
+        COMMAND niyah_training_fixture
+            "${_NIYAH_TRAIN_TOK}" "${_NIYAH_TRAIN_SHARD}"
+            "${_NIYAH_TRAIN_CKPT1}" "${_NIYAH_TRAIN_CUR1}"
+            "${_NIYAH_TRAIN_CKPT2}" "${_NIYAH_TRAIN_CUR2}")
+    set_tests_properties(niyah_training_fixture_test PROPERTIES
+        FIXTURES_SETUP niyah_train_files)
+
+    add_test(NAME niyah_train_new_test
+        COMMAND niyah_train new
+            --tokenizer "${_NIYAH_TRAIN_TOK}"
+            --shard "${_NIYAH_TRAIN_SHARD}"
+            --checkpoint-out "${_NIYAH_TRAIN_CKPT1}"
+            --cursor-out "${_NIYAH_TRAIN_CUR1}"
+            --updates 2
+            --batch-size 1
+            --accumulation-steps 1
+            --model-seed 42
+            --data-seed 7
+            --context-length 4
+            --embedding-dim 8
+            --layers 1
+            --heads 2
+            --kv-heads 1
+            --ffn-hidden-dim 16
+            --rms-norm-eps 0.00001
+            --tie-word-embeddings 1
+            --learning-rate 0.001
+            --beta1 0.9
+            --beta2 0.999
+            --epsilon 0.00000001
+            --weight-decay 0.0
+            --max-grad-norm 1.0)
+    set_tests_properties(niyah_train_new_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
+
+    add_test(NAME niyah_train_resume_test
+        COMMAND niyah_train resume
+            --tokenizer "${_NIYAH_TRAIN_TOK}"
+            --shard "${_NIYAH_TRAIN_SHARD}"
+            --checkpoint-in "${_NIYAH_TRAIN_CKPT1}"
+            --cursor-in "${_NIYAH_TRAIN_CUR1}"
+            --checkpoint-out "${_NIYAH_TRAIN_CKPT2}"
+            --cursor-out "${_NIYAH_TRAIN_CUR2}"
+            --updates 2
+            --batch-size 1
+            --accumulation-steps 1)
+    set_tests_properties(niyah_train_resume_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files
+        DEPENDS niyah_train_new_test)
 endif()
