@@ -40,15 +40,15 @@ int main(int argc, char **argv)
     }
     status = niyah_dataset_shard_save(&shard, tokenizer, argv[2]);
     if (status == NIYAH_OK) {
-        size_t i;
-        size_t j;
+        size_t swap_i;
+        size_t swap_j;
         int changed = 0;
-        for (i = 1U; i + 1U < shard.token_count && changed == 0; ++i) {
-            for (j = i + 1U; j + 1U < shard.token_count; ++j) {
-                if (shard.tokens[i] != shard.tokens[j]) {
-                    uint32_t tmp = shard.tokens[i];
-                    shard.tokens[i] = shard.tokens[j];
-                    shard.tokens[j] = tmp;
+        for (swap_i = 1U; swap_i + 1U < shard.token_count && changed == 0; ++swap_i) {
+            for (swap_j = swap_i + 1U; swap_j + 1U < shard.token_count; ++swap_j) {
+                if (shard.tokens[swap_i] != shard.tokens[swap_j]) {
+                    uint32_t tmp = shard.tokens[swap_i];
+                    shard.tokens[swap_i] = shard.tokens[swap_j];
+                    shard.tokens[swap_j] = tmp;
                     changed = 1;
                     break;
                 }
