@@ -30,8 +30,9 @@ token ids
   -> cross entropy
   -> backward
   -> gradients
-  -> [planned] AdamW
-  -> [planned] same weights updated
+  -> global gradient clipping
+  -> AdamW
+  -> same canonical weights updated
   -> [planned] checkpoint / resume
 ```
 
@@ -40,8 +41,8 @@ token ids
 - Native C11 implementation.
 - CPU FP32 is the current reference path; optional CUDA acceleration is planned later.
 - One canonical `NiyahModel` layout for training and inference.
-- Deterministic tests currently cover model math, tokenizer behavior, forward/decode parity, gradients, generation, and the tokenizer-to-model text pipeline.
-- Optimizer and checkpoint tests will be added with those implementations; they do not exist yet.
+- Deterministic tests currently cover model math, tokenizer behavior, forward/decode parity, gradients, generation, the tokenizer-to-model text pipeline, AdamW arithmetic, global clipping, and a tiny backward-to-AdamW training chain.
+- The tiny deterministic training-chain tests verify executable integration and loss decrease on a synthetic task; they do not establish real-corpus convergence or Arabic/English model capability.
 - No hidden telemetry.
 - No hosted-model API dependency.
 - No external LLM runtime or model dependency.
@@ -59,13 +60,17 @@ Implemented:
 3. RMSNorm, RoPE, attention/GQA, SwiGLU, residual path.
 4. KV cache and autoregressive generation.
 5. Cross-entropy and explicit backward gradients on the canonical weights.
+6. Native reference AdamW with robust global gradient clipping over the canonical gradient vector.
 
 Planned:
 
-6. AdamW, gradient clipping, and deterministic checkpoint/resume.
-7. Evaluation/perplexity.
-8. Optional CUDA kernels and residency.
+7. Versioned checkpoint/resume foundation.
+8. Tokenizer persistence/identity binding and deterministic dataset/training lifecycle.
+9. Held-out validation/perplexity.
+10. Optional CUDA kernels and residency.
 
 ## Status
 
-The current implementation is the native CPU reference path through explicit backward gradients. AdamW, checkpoint/resume, tokenizer persistence, production dataset/training tooling, held-out evaluation, mixed precision, and CUDA are not implemented yet.
+The current implementation is the native CPU reference path through explicit backward gradients, robust global gradient clipping, and AdamW updates to the same canonical FP32 model weights.
+
+Checkpoint/resume, tokenizer persistence, production dataset preprocessing/sharding, a production training executable/loop, true mini-batches, gradient accumulation, held-out validation/perplexity, mixed precision, CUDA, instruction tuning, and conversational tuning are not implemented. Real-corpus convergence, Arabic model capability, and English model capability have not been demonstrated.
