@@ -4,6 +4,10 @@
 #include "niyah/optimizer.h"
 #include "niyah/tokenizer.h"
 
+#ifdef NIYAH_CLI_ENABLE_CUDA
+#include "niyah_cuda_matvec.h"
+#endif
+
 #include <errno.h>
 #include <math.h>
 #include <stdint.h>
@@ -19,6 +23,7 @@ typedef struct NiyahRunOptions {
     float temperature;
     uint64_t seed;
     int have_max_new_tokens;
+    int use_cuda;
 } NiyahRunOptions;
 
 static void usage(FILE *stream)
@@ -26,7 +31,8 @@ static void usage(FILE *stream)
     fprintf(stream,
         "Usage:\n"
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
-        "      --max-new-tokens N [--temperature F] [--seed N]\n");
+        "      --max-new-tokens N [--temperature F] [--seed N]\n"
+        "      [--backend cpu|cuda]\n");
 }
 
 static const char *status_name(NiyahStatus status)
@@ -165,6 +171,18 @@ static int parse_run_options(
                 !parse_u64(value, &options->seed)) {
                 return 0;
             }
+        } else if (strcmp(key, "--backend") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) {
+                return 0;
+            }
+            if (strcmp(value, "cpu") == 0) {
+                options->use_cuda = 0;
+            } else if (strcmp(value, "cuda") == 0) {
+                options->use_cuda = 1;
+            } else {
+                return 0;
+            }
         } else {
             return 0;
         }
@@ -188,9 +206,16 @@ static int run_command(int argc, char **argv)
     NiyahKVCache cache;
     NiyahGenerationConfig generation_config;
     NiyahGenerationResult generation_result;
+#ifdef NIYAH_CLI_ENABLE_CUDA
+    NiyahCudaModelState cuda_model;
+    NiyahCudaDecodeState cuda_decode;
+#endif
     uint32_t *prompt_tokens = NULL;
     uint32_t *generated_tokens = NULL;
     float *workspace = NULL;
+#ifdef NIYAH_CLI_ENABLE_CUDA
+    float *cuda_logits = NULL;
+#endif
     uint8_t *decoded = NULL;
     size_t prompt_count = 0U;
     size_t workspace_count = 0U;
@@ -206,11 +231,22 @@ static int run_command(int argc, char **argv)
     memset(&cache, 0, sizeof(cache));
     memset(&generation_config, 0, sizeof(generation_config));
     memset(&generation_result, 0, sizeof(generation_result));
+#ifdef NIYAH_CLI_ENABLE_CUDA
+    memset(&cuda_model, 0, sizeof(cuda_model));
+    memset(&cuda_decode, 0, sizeof(cuda_decode));
+#endif
 
     if (!parse_run_options(argc, argv, &options)) {
         usage(stderr);
         return 2;
     }
+
+#ifndef NIYAH_CLI_ENABLE_CUDA
+    if (options.use_cuda) {
+        fprintf(stderr, "backend_unavailable=cuda\n");
+        return 2;
+    }
+#endif
 
     status = niyah_tokenizer_load(
         options.tokenizer_path,
@@ -303,40 +339,6 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
-    status = niyah_kv_cache_create(
-        &cache,
-        &model.config);
-    if (status != NIYAH_OK) {
-        exit_code = fail_status("kv_cache_create", status);
-        goto cleanup;
-    }
-
-    status = niyah_generation_workspace_floats(
-        &model.config,
-        &workspace_count);
-    if (status != NIYAH_OK) {
-        exit_code = fail_status("workspace_query", status);
-        goto cleanup;
-    }
-
-    if (workspace_count >
-        SIZE_MAX / sizeof(*workspace)) {
-        exit_code = fail_status(
-            "workspace_allocation",
-            NIYAH_ERR_OVERFLOW);
-        goto cleanup;
-    }
-
-    workspace = (float *)calloc(
-        workspace_count,
-        sizeof(*workspace));
-    if (workspace == NULL) {
-        exit_code = fail_status(
-            "workspace_allocation",
-            NIYAH_ERR_OUT_OF_MEMORY);
-        goto cleanup;
-    }
-
     generation_config.max_new_tokens =
         options.max_new_tokens;
     generation_config.eos_token = NIYAH_TOKEN_EOS;
@@ -346,20 +348,109 @@ static int run_command(int argc, char **argv)
     generation_config.sampler.seed =
         options.seed;
 
-    status = niyah_generate(
-        &model,
-        &cache,
-        prompt_tokens,
-        prompt_count,
-        &generation_config,
-        generated_tokens,
-        options.max_new_tokens,
-        &generation_result,
-        workspace,
-        workspace_count);
-    if (status != NIYAH_OK) {
-        exit_code = fail_status("generation", status);
+    if (options.use_cuda) {
+#ifdef NIYAH_CLI_ENABLE_CUDA
+        if (niyah_cuda_model_state_create(
+                &cuda_model,
+                &model) != 0) {
+            fprintf(stderr, "error_stage=cuda_model_create status=CUDA_ERROR\n");
+            goto cleanup;
+        }
+
+        if (niyah_cuda_decode_state_create(
+                &cuda_decode,
+                &cuda_model) != 0) {
+            fprintf(stderr, "error_stage=cuda_decode_create status=CUDA_ERROR\n");
+            goto cleanup;
+        }
+
+        if (vocab_size > SIZE_MAX / sizeof(*cuda_logits)) {
+            exit_code = fail_status(
+                "cuda_logits_allocation",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+
+        cuda_logits = (float *)calloc(
+            vocab_size,
+            sizeof(*cuda_logits));
+        if (cuda_logits == NULL) {
+            exit_code = fail_status(
+                "cuda_logits_allocation",
+                NIYAH_ERR_OUT_OF_MEMORY);
+            goto cleanup;
+        }
+
+        status = niyah_cuda_generate(
+            &cuda_model,
+            &cuda_decode,
+            prompt_tokens,
+            prompt_count,
+            &generation_config,
+            generated_tokens,
+            options.max_new_tokens,
+            &generation_result,
+            cuda_logits,
+            vocab_size);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("cuda_generation", status);
+            goto cleanup;
+        }
+#else
+        fprintf(stderr, "backend_unavailable=cuda\n");
+        exit_code = 2;
         goto cleanup;
+#endif
+    } else {
+        status = niyah_kv_cache_create(
+            &cache,
+            &model.config);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("kv_cache_create", status);
+            goto cleanup;
+        }
+
+        status = niyah_generation_workspace_floats(
+            &model.config,
+            &workspace_count);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("workspace_query", status);
+            goto cleanup;
+        }
+
+        if (workspace_count >
+            SIZE_MAX / sizeof(*workspace)) {
+            exit_code = fail_status(
+                "workspace_allocation",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+
+        workspace = (float *)calloc(
+            workspace_count,
+            sizeof(*workspace));
+        if (workspace == NULL) {
+            exit_code = fail_status(
+                "workspace_allocation",
+                NIYAH_ERR_OUT_OF_MEMORY);
+            goto cleanup;
+        }
+
+        status = niyah_generate(
+            &model,
+            &cache,
+            prompt_tokens,
+            prompt_count,
+            &generation_config,
+            generated_tokens,
+            options.max_new_tokens,
+            &generation_result,
+            workspace,
+            workspace_count);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("generation", status);
+            goto cleanup;
+        }
     }
 
     status = niyah_tokenizer_decode(
@@ -410,6 +501,11 @@ static int run_command(int argc, char **argv)
 
 cleanup:
     free(decoded);
+#ifdef NIYAH_CLI_ENABLE_CUDA
+    free(cuda_logits);
+    niyah_cuda_decode_state_destroy(&cuda_decode);
+    niyah_cuda_model_state_destroy(&cuda_model);
+#endif
     free(workspace);
     free(generated_tokens);
     free(prompt_tokens);
