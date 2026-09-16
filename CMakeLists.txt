@@ -6,6 +6,24 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 option(NIYAH_BUILD_TESTS "Build Niyah.Engine tests" ON)
+option(NIYAH_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+if(NIYAH_ENABLE_SANITIZERS)
+    if(MSVC)
+        message(FATAL_ERROR "NIYAH_ENABLE_SANITIZERS is not supported for MSVC in this CI configuration")
+    endif()
+
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("-fsanitize=address,undefined" NIYAH_HAS_ADDRESS_UNDEFINED_SANITIZERS)
+    check_c_compiler_flag("-fno-omit-frame-pointer" NIYAH_HAS_FRAME_POINTER_FLAG)
+
+    if(NOT NIYAH_HAS_ADDRESS_UNDEFINED_SANITIZERS OR NOT NIYAH_HAS_FRAME_POINTER_FLAG)
+        message(FATAL_ERROR "Requested sanitizer flags are not supported by the active C compiler")
+    endif()
+
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+endif()
 
 add_library(niyah STATIC
     src/niyah_model.c

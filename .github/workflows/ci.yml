@@ -24,3 +24,18 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build-sanitize -DNIYAH_BUILD_TESTS=ON -DNIYAH_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build-sanitize --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build-sanitize --output-on-failure
