@@ -40,6 +40,7 @@ NiyahStatus niyah_dataset_cursor_load(const char *path,
                                       NiyahDatasetCursor *out_cursor);
 
 #define NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE 32U
+#define NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE 32U
 
 typedef struct NiyahDatasetShard {
     uint32_t *tokens;
@@ -73,6 +74,14 @@ NiyahStatus niyah_dataset_shard_sample(
     const uint32_t **out_tokens,
     const uint32_t **out_targets,
     size_t *out_token_count);
+
+/* Stable content identity over tokenizer identity, sample geometry, and the
+ * canonical token stream. This proves content identity, not semantic truth
+ * or authenticity.
+ */
+NiyahStatus niyah_dataset_shard_identity_sha256(
+    const NiyahDatasetShard *shard,
+    uint8_t out_identity[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE]);
 
 /* Binary NIYAHSRD V1 persistence. The tokenizer SHA-256 identity is required
  * and checked on load. CRC32 detects accidental corruption only; it is not an

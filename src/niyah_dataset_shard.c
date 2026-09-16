@@ -1,4 +1,5 @@
 #include "niyah/dataset.h"
+#include "niyah_sha256.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -298,6 +299,66 @@ NiyahStatus niyah_dataset_shard_sample(
     *out_tokens = shard->tokens + start;
     *out_targets = shard->tokens + start + 1U;
     *out_token_count = count;
+    return NIYAH_OK;
+}
+
+
+NiyahStatus niyah_dataset_shard_identity_sha256(
+    const NiyahDatasetShard *shard,
+    uint8_t out_identity[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE])
+{
+    static const unsigned char domain[] = {
+        'N','I','Y','A','H','-','D','A','T','A','S','E','T','-',
+        'S','H','A','R','D','-','V','1'
+    };
+    NiyahSha256 sha;
+    unsigned char u64[8];
+    unsigned char u32[4];
+    size_t expected_samples;
+    size_t i;
+
+    if (shard == NULL || out_identity == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    if (shard->tokens == NULL ||
+        shard->token_count < 2U ||
+        shard->sequence_length == 0U)
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    expected_samples =
+        sample_count_for(shard->token_count, shard->sequence_length);
+    if (expected_samples == 0U ||
+        shard->sample_count != expected_samples ||
+        shard->tokens[0] != NIYAH_TOKEN_BOS ||
+        shard->tokens[shard->token_count - 1U] != NIYAH_TOKEN_EOS)
+        return NIYAH_ERR_INVALID_CONFIG;
+    if (shard->sequence_length > (size_t)UINT64_MAX ||
+        shard->token_count > (size_t)UINT64_MAX ||
+        shard->sample_count > (size_t)UINT64_MAX)
+        return NIYAH_ERR_OVERFLOW;
+
+    niyah_sha256_init(&sha);
+    if (!niyah_sha256_update(&sha, domain, sizeof(domain)) ||
+        !niyah_sha256_update(&sha, shard->tokenizer_identity,
+                             sizeof(shard->tokenizer_identity)))
+        return NIYAH_ERR_OVERFLOW;
+
+    store_u64_le(u64, (uint64_t)shard->sequence_length);
+    if (!niyah_sha256_update(&sha, u64, sizeof(u64)))
+        return NIYAH_ERR_OVERFLOW;
+    store_u64_le(u64, (uint64_t)shard->token_count);
+    if (!niyah_sha256_update(&sha, u64, sizeof(u64)))
+        return NIYAH_ERR_OVERFLOW;
+    store_u64_le(u64, (uint64_t)shard->sample_count);
+    if (!niyah_sha256_update(&sha, u64, sizeof(u64)))
+        return NIYAH_ERR_OVERFLOW;
+
+    for (i = 0U; i < shard->token_count; ++i) {
+        store_u32_le(u32, shard->tokens[i]);
+        if (!niyah_sha256_update(&sha, u32, sizeof(u32)))
+            return NIYAH_ERR_OVERFLOW;
+    }
+
+    niyah_sha256_final(&sha, out_identity);
     return NIYAH_OK;
 }
 

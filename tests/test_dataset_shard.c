@@ -138,6 +138,66 @@ static void test_build_and_samples(void)
     niyah_tokenizer_destroy(tokenizer);
 }
 
+
+static void test_shard_content_identity(void)
+{
+    static const uint8_t corpus[] =
+        "aaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbb aaaaaaaa bbbbbbbb";
+    static const uint8_t text_a[] =
+        "aaaaaaaa bbbbbbbb aaaaaaaa bbbbbbbb";
+    static const uint8_t text_b[] =
+        "aaaaaaaa bbbbbbbb aaaaaaaa bbbbbbb";
+    NiyahTokenizer *tokenizer =
+        make_tokenizer(corpus, sizeof(corpus) - 1U);
+    NiyahDatasetShard a;
+    NiyahDatasetShard a_same;
+    NiyahDatasetShard content_changed;
+    NiyahDatasetShard geometry_changed;
+    uint8_t id_a[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t id_same[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t id_content[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t id_geometry[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+
+    memset(&a, 0, sizeof(a));
+    memset(&a_same, 0, sizeof(a_same));
+    memset(&content_changed, 0, sizeof(content_changed));
+    memset(&geometry_changed, 0, sizeof(geometry_changed));
+
+    CHECK(tokenizer != NULL);
+    if (tokenizer == NULL) return;
+
+    CHECK(niyah_dataset_shard_build_text(
+              tokenizer, text_a, sizeof(text_a) - 1U,
+              4U, &a) == NIYAH_OK);
+    CHECK(niyah_dataset_shard_build_text(
+              tokenizer, text_a, sizeof(text_a) - 1U,
+              4U, &a_same) == NIYAH_OK);
+    CHECK(niyah_dataset_shard_build_text(
+              tokenizer, text_b, sizeof(text_b) - 1U,
+              4U, &content_changed) == NIYAH_OK);
+    CHECK(niyah_dataset_shard_build_text(
+              tokenizer, text_a, sizeof(text_a) - 1U,
+              3U, &geometry_changed) == NIYAH_OK);
+
+    CHECK(niyah_dataset_shard_identity_sha256(&a, id_a) == NIYAH_OK);
+    CHECK(niyah_dataset_shard_identity_sha256(
+              &a_same, id_same) == NIYAH_OK);
+    CHECK(niyah_dataset_shard_identity_sha256(
+              &content_changed, id_content) == NIYAH_OK);
+    CHECK(niyah_dataset_shard_identity_sha256(
+              &geometry_changed, id_geometry) == NIYAH_OK);
+
+    CHECK(memcmp(id_a, id_same, sizeof(id_a)) == 0);
+    CHECK(memcmp(id_a, id_content, sizeof(id_a)) != 0);
+    CHECK(memcmp(id_a, id_geometry, sizeof(id_a)) != 0);
+
+    niyah_dataset_shard_destroy(&geometry_changed);
+    niyah_dataset_shard_destroy(&content_changed);
+    niyah_dataset_shard_destroy(&a_same);
+    niyah_dataset_shard_destroy(&a);
+    niyah_tokenizer_destroy(tokenizer);
+}
+
 static void test_persistence_and_identity(void)
 {
     static const char path_a[] = "niyah_dataset_shard_v1_a.bin";
@@ -335,6 +395,7 @@ static void test_invalid_inputs(void)
 int main(void)
 {
     test_build_and_samples();
+    test_shard_content_identity();
     test_persistence_and_identity();
     test_corruption_rejection();
     test_invalid_inputs();
