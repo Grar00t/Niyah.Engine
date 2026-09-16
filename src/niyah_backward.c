@@ -562,7 +562,6 @@ NiyahStatus niyah_train_backward(const NiyahModel *model,
     probs = cursor; cursor += s.token_count;
     dp = cursor;
 
-    niyah_model_gradients_zero(gradients);
     status = niyah_cached_forward(model, tokens, &s, layer_cache_base, final_norm, logits, probs);
     if (status != NIYAH_OK) {
         return status;
@@ -573,6 +572,7 @@ NiyahStatus niyah_train_backward(const NiyahModel *model,
         return status;
     }
 
+    niyah_model_gradients_zero(gradients);
     memset(dh, 0, s.td * sizeof(float));
     for (t = 0U; t < s.token_count; ++t) {
         const float *dy = dlogits + t * s.vocab;
