@@ -194,6 +194,34 @@ static uint32_t crc_final(const NiyahDatasetCrc32 *crc)
     return crc->value ^ UINT32_C(0xffffffff);
 }
 
+NiyahStatus niyah_dataset_cursor_seek(NiyahDatasetCursor *cursor,
+                                      uint64_t epoch,
+                                      size_t position)
+{
+    uint64_t old_epoch;
+    size_t old_position;
+    NiyahStatus status;
+
+    status = validate_cursor(cursor);
+    if (status != NIYAH_OK) return status;
+    if (position > cursor->sample_count) return NIYAH_ERR_INVALID_ARGUMENT;
+
+    old_epoch = cursor->epoch;
+    old_position = cursor->position;
+
+    cursor->epoch = epoch;
+    cursor->position = position;
+    status = build_order(cursor);
+    if (status != NIYAH_OK) {
+        cursor->epoch = old_epoch;
+        cursor->position = old_position;
+        (void)build_order(cursor);
+        return status;
+    }
+
+    return NIYAH_OK;
+}
+
 NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
                                       const char *path)
 {
