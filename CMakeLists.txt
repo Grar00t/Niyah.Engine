@@ -14,15 +14,30 @@ if(NIYAH_ENABLE_SANITIZERS)
     endif()
 
     include(CheckCCompilerFlag)
-    check_c_compiler_flag("-fsanitize=address,undefined" NIYAH_HAS_ADDRESS_UNDEFINED_SANITIZERS)
+    include(CheckCSourceCompiles)
+
+    set(_NIYAH_SAVED_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
+    set(_NIYAH_SAVED_REQUIRED_LINK_OPTIONS "${CMAKE_REQUIRED_LINK_OPTIONS}")
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -fsanitize=address,undefined")
+    list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=address,undefined")
+    check_c_source_compiles("int main(void) { return 0; }"
+                            NIYAH_HAS_ADDRESS_UNDEFINED_SANITIZERS)
+    set(CMAKE_REQUIRED_FLAGS "${_NIYAH_SAVED_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_LINK_OPTIONS "${_NIYAH_SAVED_REQUIRED_LINK_OPTIONS}")
+    unset(_NIYAH_SAVED_REQUIRED_FLAGS)
+    unset(_NIYAH_SAVED_REQUIRED_LINK_OPTIONS)
+
     check_c_compiler_flag("-fno-omit-frame-pointer" NIYAH_HAS_FRAME_POINTER_FLAG)
 
-    if(NOT NIYAH_HAS_ADDRESS_UNDEFINED_SANITIZERS OR NOT NIYAH_HAS_FRAME_POINTER_FLAG)
-        message(FATAL_ERROR "Requested sanitizer flags are not supported by the active C compiler")
+    if(NOT NIYAH_HAS_ADDRESS_UNDEFINED_SANITIZERS)
+        message(FATAL_ERROR "AddressSanitizer and UndefinedBehaviorSanitizer could not compile and link with the active C compiler")
+    endif()
+    if(NOT NIYAH_HAS_FRAME_POINTER_FLAG)
+        message(FATAL_ERROR "The active C compiler does not support -fno-omit-frame-pointer")
     endif()
 
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
-    add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
 endif()
 
 add_library(niyah STATIC

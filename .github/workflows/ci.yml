@@ -38,4 +38,7 @@ jobs:
         run: cmake --build build-sanitize --parallel 2
 
       - name: Test
+        env:
+          ASAN_OPTIONS: halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: ctest --test-dir build-sanitize --output-on-failure
