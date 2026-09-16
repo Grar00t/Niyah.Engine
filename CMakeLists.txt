@@ -7,6 +7,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 option(NIYAH_BUILD_TESTS "Build Niyah.Engine tests" ON)
 option(NIYAH_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(NIYAH_ENABLE_CUDA "Build the optional CUDA backend" OFF)
 
 if(NIYAH_ENABLE_SANITIZERS)
     if(MSVC)
@@ -38,6 +39,31 @@ if(NIYAH_ENABLE_SANITIZERS)
 
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
+endif()
+
+if(NIYAH_ENABLE_CUDA)
+    include(CheckLanguage)
+    check_language(CUDA)
+    if(NOT CMAKE_CUDA_COMPILER)
+        message(FATAL_ERROR "NIYAH_ENABLE_CUDA=ON but no CUDA compiler was found")
+    endif()
+
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+
+    add_library(niyah_cuda_backend STATIC
+        src/niyah_cuda_matvec.cu
+    )
+    target_include_directories(niyah_cuda_backend
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(niyah_cuda_backend PRIVATE CUDA::cudart)
+    set_target_properties(niyah_cuda_backend PROPERTIES
+        CUDA_STANDARD 14
+        CUDA_STANDARD_REQUIRED ON
+        CUDA_EXTENSIONS OFF
+    )
 endif()
 
 add_library(niyah STATIC
@@ -86,6 +112,28 @@ endif()
 
 if(NIYAH_BUILD_TESTS)
     enable_testing()
+
+    if(NIYAH_ENABLE_CUDA)
+        add_executable(niyah_cuda_matvec_test tests/test_cuda_matvec.c)
+        target_include_directories(niyah_cuda_matvec_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_matvec_test
+            PRIVATE
+                niyah
+                niyah_cuda_backend
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_matvec_test PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_matvec_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(NAME niyah_cuda_matvec_test COMMAND niyah_cuda_matvec_test)
+    endif()
 
     add_executable(niyah_model_test tests/test_model.c)
     target_link_libraries(niyah_model_test PRIVATE niyah)
