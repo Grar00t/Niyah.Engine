@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 
+#include <limits.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -544,4 +545,65 @@ extern "C" int niyah_cuda_decode_state_create(
 fail:
     niyah_cuda_decode_state_destroy(state);
     return 1;
+}
+
+extern "C" int niyah_cuda_model_state_matvec_device(
+    const NiyahCudaModelState *state,
+    size_t weight_offset,
+    const void *device_x,
+    void *device_out,
+    size_t rows,
+    size_t cols)
+{
+    const unsigned int threads = 128U;
+    size_t matrix_count;
+    size_t block_count;
+    cudaError_t error;
+
+    if (state == NULL ||
+        state->device_weights == NULL ||
+        device_x == NULL ||
+        device_out == NULL ||
+        device_x == device_out ||
+        rows == 0U ||
+        cols == 0U ||
+        rows > ((size_t)-1) / cols) {
+        return 1;
+    }
+
+    matrix_count = rows * cols;
+
+    if (weight_offset > state->weight_count ||
+        matrix_count > state->weight_count - weight_offset ||
+        rows > ((size_t)-1) - ((size_t)threads - 1U)) {
+        return 1;
+    }
+
+    block_count =
+        (rows + (size_t)threads - 1U) / (size_t)threads;
+
+    if (block_count == 0U ||
+        block_count > (size_t)UINT_MAX) {
+        return 1;
+    }
+
+    niyah_cuda_matvec_kernel<<<
+        (unsigned int)block_count,
+        threads>>>(
+            (float *)device_out,
+            (const float *)state->device_weights + weight_offset,
+            (const float *)device_x,
+            rows,
+            cols);
+
+    error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        return 1;
+    }
+
+    /*
+     * No host/device copies occur here. Synchronization keeps this primitive
+     * fail-closed until a later phase introduces stream-aware execution.
+     */
+    return cudaDeviceSynchronize() == cudaSuccess ? 0 : 1;
 }
