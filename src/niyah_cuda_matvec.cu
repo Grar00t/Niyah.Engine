@@ -14,18 +14,37 @@ __global__ static void niyah_cuda_matvec_kernel(float *out,
                                                 size_t rows,
                                                 size_t cols)
 {
-    const size_t row =
-        (size_t)blockIdx.x * (size_t)blockDim.x + (size_t)threadIdx.x;
+    __shared__ float partial[128];
+    const size_t row = (size_t)blockIdx.x;
+    const unsigned int lane = threadIdx.x;
+    float sum = 0.0f;
+    size_t col;
+    unsigned int stride;
 
-    if (row < rows) {
-        const float *matrix_row = matrix + row * cols;
-        float sum = 0.0f;
-        size_t col;
+    if (row >= rows) {
+        return;
+    }
 
-        for (col = 0U; col < cols; ++col) {
-            sum += matrix_row[col] * x[col];
+    for (col = (size_t)lane;
+         col < cols;
+         col += (size_t)blockDim.x) {
+        sum += matrix[row * cols + col] * x[col];
+    }
+
+    partial[lane] = sum;
+    __syncthreads();
+
+    for (stride = blockDim.x / 2U;
+         stride > 0U;
+         stride >>= 1U) {
+        if (lane < stride) {
+            partial[lane] += partial[lane + stride];
         }
-        out[row] = sum;
+        __syncthreads();
+    }
+
+    if (lane == 0U) {
+        out[row] = partial[0];
     }
 }
 
@@ -46,7 +65,8 @@ extern "C" int niyah_cuda_matvec(float *out,
     int result = 1;
 
     if (out == NULL || matrix == NULL || x == NULL ||
-        rows == 0U || cols == 0U) {
+        rows == 0U || cols == 0U ||
+        rows > (size_t)UINT_MAX) {
         return 1;
     }
 
@@ -83,9 +103,7 @@ extern "C" int niyah_cuda_matvec(float *out,
 
     {
         const unsigned int threads = 128U;
-        const unsigned int blocks =
-            (unsigned int)((rows + (size_t)threads - 1U) /
-                           (size_t)threads);
+        const unsigned int blocks = (unsigned int)rows;
 
         niyah_cuda_matvec_kernel<<<blocks, threads>>>(
             device_out, device_matrix, device_x, rows, cols);
@@ -300,7 +318,8 @@ extern "C" int niyah_cuda_model_state_matvec(
         rows == 0U || cols == 0U ||
         cols > state->input_capacity ||
         rows > state->output_capacity ||
-        rows > ((size_t)-1) / cols) {
+        rows > ((size_t)-1) / cols ||
+        rows > (size_t)UINT_MAX) {
         return 1;
     }
 
@@ -324,8 +343,7 @@ extern "C" int niyah_cuda_model_state_matvec(
         return 1;
     }
 
-    blocks = (unsigned int)(
-        (rows + (size_t)threads - 1U) / (size_t)threads);
+    blocks = (unsigned int)rows;
 
     niyah_cuda_matvec_kernel<<<blocks, threads>>>(
         (float *)state->device_output,
@@ -563,7 +581,6 @@ static int niyah_cuda_model_state_matvec_device_launch(
     size_t cols)
 {
     size_t matrix_count;
-    size_t launch_count;
     unsigned int blocks;
     const unsigned int threads = 128U;
 
@@ -579,21 +596,11 @@ static int niyah_cuda_model_state_matvec_device_launch(
         weight_offset > state->weight_count ||
         matrix_count >
             state->weight_count - weight_offset ||
-        !niyah_cuda_size_add_ok(
-            rows,
-            (size_t)threads - 1U,
-            &launch_count)) {
+        rows > (size_t)UINT_MAX) {
         return 1;
     }
 
-    launch_count /= (size_t)threads;
-
-    if (launch_count == 0U ||
-        launch_count > (size_t)UINT_MAX) {
-        return 1;
-    }
-
-    blocks = (unsigned int)launch_count;
+    blocks = (unsigned int)rows;
 
     niyah_cuda_matvec_kernel<<<blocks, threads>>>(
         (float *)device_out,
