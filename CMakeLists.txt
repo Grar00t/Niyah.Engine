@@ -150,6 +150,12 @@ add_executable(niyah_cli tools/niyah.c)
 set_target_properties(niyah_cli PROPERTIES OUTPUT_NAME "niyah")
 target_link_libraries(niyah_cli PRIVATE niyah)
 
+if(NIYAH_ENABLE_CUDA)
+    target_include_directories(niyah_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(niyah_cli PRIVATE niyah_cuda_backend)
+    target_compile_definitions(niyah_cli PRIVATE NIYAH_CLI_ENABLE_CUDA=1)
+endif()
+
 if(MSVC)
     target_compile_options(niyah_cli PRIVATE /W4 /WX)
 else()
@@ -466,7 +472,31 @@ if(NIYAH_BUILD_TESTS)
             -DNIYAH_TRAIN=$<TARGET_FILE:niyah_train>
             -DNIYAH_CLI=$<TARGET_FILE:niyah_cli>
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DBACKEND=cpu
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_run.cmake)
+
+    if(NIYAH_ENABLE_CUDA)
+        add_test(NAME niyah_cli_cuda_run_test
+            COMMAND ${CMAKE_COMMAND}
+                -DNIYAH_FIXTURE=$<TARGET_FILE:niyah_training_fixture>
+                -DNIYAH_TRAIN=$<TARGET_FILE:niyah_train>
+                -DNIYAH_CLI=$<TARGET_FILE:niyah_cli>
+                -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                -DBACKEND=cuda
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_run.cmake)
+    else()
+        add_test(NAME niyah_cli_cuda_unavailable_test
+            COMMAND niyah_cli run
+                --tokenizer unused
+                --checkpoint unused
+                --prompt x
+                --max-new-tokens 1
+                --backend cuda)
+        set_tests_properties(
+            niyah_cli_cuda_unavailable_test
+            PROPERTIES
+                WILL_FAIL TRUE)
+    endif()
 
     add_test(NAME niyah_train_resume_test
         COMMAND niyah_train resume

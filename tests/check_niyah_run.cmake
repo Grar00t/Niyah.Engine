@@ -5,12 +5,21 @@ if(NOT DEFINED NIYAH_FIXTURE OR
     message(FATAL_ERROR "missing runtime test arguments")
 endif()
 
-set(TOK "${WORK_DIR}/niyah_cli_fixture.tok")
-set(SHARD "${WORK_DIR}/niyah_cli_fixture.srd")
-set(SHARD_ALT "${WORK_DIR}/niyah_cli_fixture_alt.srd")
-set(CKPT "${WORK_DIR}/niyah_cli_fixture.ckpt")
-set(CURSOR "${WORK_DIR}/niyah_cli_fixture.cursor")
-set(OUTPUT "${WORK_DIR}/niyah_cli_fixture.out")
+if(NOT DEFINED BACKEND)
+    set(BACKEND "cpu")
+endif()
+
+if(NOT BACKEND STREQUAL "cpu" AND NOT BACKEND STREQUAL "cuda")
+    message(FATAL_ERROR "invalid backend: ${BACKEND}")
+endif()
+
+set(PREFIX "${WORK_DIR}/niyah_cli_${BACKEND}_fixture")
+set(TOK "${PREFIX}.tok")
+set(SHARD "${PREFIX}.srd")
+set(SHARD_ALT "${PREFIX}_alt.srd")
+set(CKPT "${PREFIX}.ckpt")
+set(CURSOR "${PREFIX}.cursor")
+set(OUTPUT "${PREFIX}.out")
 
 file(REMOVE
     "${TOK}"
@@ -71,6 +80,7 @@ execute_process(
         --max-new-tokens 1
         --temperature 0
         --seed 1
+        --backend "${BACKEND}"
     RESULT_VARIABLE run_result
     OUTPUT_FILE "${OUTPUT}"
 )
@@ -87,4 +97,4 @@ if(output_size LESS 1)
     message(FATAL_ERROR "runtime output empty")
 endif()
 
-message("P8A_NATIVE_RUNTIME_E2E=PASS")
+message("P8B_NATIVE_RUNTIME_BACKEND_${BACKEND}=PASS")
