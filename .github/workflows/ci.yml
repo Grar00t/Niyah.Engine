@@ -5,6 +5,9 @@ on:
     branches: [ main, "bootstrap/**" ]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     strategy:
@@ -14,7 +17,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Configure
         run: cmake -S . -B build -DNIYAH_BUILD_TESTS=ON
@@ -29,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Configure
         run: cmake -S . -B build-sanitize -DNIYAH_BUILD_TESTS=ON -DNIYAH_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
