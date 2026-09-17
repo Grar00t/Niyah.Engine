@@ -52,6 +52,12 @@ typedef struct NiyahRunOptions {
     const char *evidence_out_path;
 } NiyahRunOptions;
 
+typedef struct NiyahVerifyEvidenceOptions {
+    const char *file_path;
+    const char *checkpoint_path;
+    const char *tokenizer_path;
+} NiyahVerifyEvidenceOptions;
+
 static void usage(FILE *stream)
 {
     fprintf(stream,
@@ -963,6 +969,43 @@ static int parse_run_options(
             options->emit_receipt);
 }
 
+static int parse_verify_evidence_options(
+    int argc,
+    char **argv,
+    NiyahVerifyEvidenceOptions *options)
+{
+    int i;
+
+    memset(options, 0, sizeof(*options));
+
+    for (i = 2; i < argc; ++i) {
+        const char *key = argv[i];
+        const char *value;
+
+        if (strcmp(key, "--file") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->file_path = value;
+        } else if (
+            strcmp(key, "--checkpoint") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->checkpoint_path = value;
+        } else if (
+            strcmp(key, "--tokenizer") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->tokenizer_path = value;
+        } else {
+            return 0;
+        }
+    }
+
+    return options->file_path != NULL &&
+           options->checkpoint_path != NULL &&
+           options->tokenizer_path != NULL;
+}
+
 static NiyahStatus write_evidence_file_atomic(
     const char *path,
     const uint8_t *receipt_hash,
@@ -1554,6 +1597,116 @@ cleanup:
     return exit_code;
 }
 
+static int verify_evidence_command(
+    int argc,
+    char **argv)
+{
+    NiyahVerifyEvidenceOptions options;
+    NiyahEvidenceDocument document;
+    NiyahTokenizer *tokenizer = NULL;
+    uint8_t *artifact = NULL;
+    size_t artifact_size = 0U;
+
+    uint8_t checkpoint_identity[
+        NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
+
+    uint8_t tokenizer_identity[
+        NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+
+    NiyahStatus status;
+    int exit_code = 1;
+
+    memset(&document, 0, sizeof(document));
+
+    if (!parse_verify_evidence_options(
+            argc,
+            argv,
+            &options)) {
+        usage(stderr);
+        return 2;
+    }
+
+    if (!read_file_bytes(
+            options.file_path,
+            &artifact,
+            &artifact_size)) {
+        return fail_status(
+            "evidence_read",
+            NIYAH_ERR_IO);
+    }
+
+    status = niyah_evidence_parse_document(
+        (const char *)artifact,
+        artifact_size,
+        &document);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "evidence_parse",
+            status);
+        goto cleanup;
+    }
+
+    status = niyah_checkpoint_identity_sha256(
+        options.checkpoint_path,
+        checkpoint_identity);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "checkpoint_identity",
+            status);
+        goto cleanup;
+    }
+
+    status = niyah_tokenizer_load(
+        options.tokenizer_path,
+        &tokenizer);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "tokenizer_load",
+            status);
+        goto cleanup;
+    }
+
+    status = niyah_tokenizer_identity_sha256(
+        tokenizer,
+        tokenizer_identity);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "tokenizer_identity",
+            status);
+        goto cleanup;
+    }
+
+    status = niyah_evidence_verify_document(
+        &document,
+        checkpoint_identity,
+        tokenizer_identity);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "evidence_verify",
+            status);
+        goto cleanup;
+    }
+
+    if (fputs("VALID\n", stdout) == EOF) {
+        exit_code = fail_status(
+            "stdout_write",
+            NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    exit_code = 0;
+
+cleanup:
+    niyah_tokenizer_destroy(tokenizer);
+    free(artifact);
+    return exit_code;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2 &&
@@ -1565,6 +1718,13 @@ int main(int argc, char **argv)
     if (argc >= 2 &&
         strcmp(argv[1], "prepare") == 0) {
         return prepare_command(argc, argv);
+    }
+
+    if (argc >= 2 &&
+        strcmp(argv[1], "verify-evidence") == 0) {
+        return verify_evidence_command(
+            argc,
+            argv);
     }
 
     if (argc >= 2 &&

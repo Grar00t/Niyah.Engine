@@ -232,5 +232,88 @@ int main(void)
             NIYAH_ERR_INVALID_ARGUMENT);
     }
 
+    {
+        static const char artifact[] =
+            "NIYAH_EVIDENCE_V1\n"
+            "receipt_sha256="
+            "307d9e6b0da2bf9f677d762441844e8b"
+            "c90c4a76b6cb383aa06f5febe40c8a14\n"
+            "checkpoint_sha256="
+            "f4271a4698163d2c0b9915d097230e7a"
+            "5d72d2ddef094a008af48d4e5ff496cc\n"
+            "tokenizer_sha256="
+            "be7834ed2615b31887f3297a644861f8"
+            "2e7e4ede739e1baf34c393a6fc8dd210\n"
+            "evidence_root_sha256="
+            "d1983841bd47ac32e90b2ff0f3a3ac65"
+            "631c90bdf698e207656e6f3277472aaf\n"
+            "NIYAH_RECEIPT_V1\n"
+            "intent=ADD\n"
+            "lhs=2\n"
+            "rhs=7\n"
+            "result=9\n"
+            "ir=ADD|2|7\n";
+
+        NiyahEvidenceDocument document;
+        uint8_t wrong_checkpoint[32];
+
+        CHECK(
+            niyah_evidence_parse_document(
+                artifact,
+                sizeof(artifact) - 1U,
+                &document) ==
+            NIYAH_OK);
+
+        CHECK(document.receipt.ir.op ==
+              NIYAH_IR_OP_ADD);
+        CHECK(document.receipt.ir.lhs == 2);
+        CHECK(document.receipt.ir.rhs == 7);
+        CHECK(document.receipt.result == 9);
+
+        CHECK(
+            niyah_evidence_verify_document(
+                &document,
+                document.checkpoint_sha256,
+                document.tokenizer_sha256) ==
+            NIYAH_OK);
+
+        memcpy(
+            wrong_checkpoint,
+            document.checkpoint_sha256,
+            sizeof(wrong_checkpoint));
+
+        wrong_checkpoint[0] ^= 1U;
+
+        CHECK(
+            niyah_evidence_verify_document(
+                &document,
+                wrong_checkpoint,
+                document.tokenizer_sha256) ==
+            NIYAH_ERR_CORRUPT_DATA);
+
+        document.receipt.result = 8;
+
+        CHECK(
+            niyah_evidence_verify_document(
+                &document,
+                document.checkpoint_sha256,
+                document.tokenizer_sha256) ==
+            NIYAH_ERR_CORRUPT_DATA);
+
+        CHECK(
+            niyah_evidence_parse_document(
+                "NIYAH_EVIDENCE_V1\n",
+                sizeof("NIYAH_EVIDENCE_V1\n") - 1U,
+                &document) ==
+            NIYAH_ERR_CORRUPT_DATA);
+
+        CHECK(
+            niyah_evidence_parse_document(
+                NULL,
+                0U,
+                &document) ==
+            NIYAH_ERR_INVALID_ARGUMENT);
+    }
+
     return 0;
 }
