@@ -84,6 +84,7 @@ add_library(niyah STATIC
     src/niyah_training_loop.c
     src/niyah_optimizer.c
     src/niyah_checkpoint.c
+    src/niyah_ir.c
 )
 
 target_include_directories(niyah
@@ -369,6 +370,20 @@ if(NIYAH_BUILD_TESTS)
 
     add_executable(niyah_checkpoint_test tests/test_checkpoint.c)
     target_link_libraries(niyah_checkpoint_test PRIVATE niyah)
+
+    add_executable(niyah_ir_test tests/test_ir.c)
+    target_link_libraries(niyah_ir_test PRIVATE niyah)
+
+    if(MSVC)
+        target_compile_options(niyah_ir_test PRIVATE /W4 /WX)
+    else()
+        target_compile_options(
+            niyah_ir_test
+            PRIVATE -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+
+    add_test(NAME niyah_ir_test COMMAND niyah_ir_test)
 
     add_executable(niyah_training_fixture tests/make_training_fixture.c)
     target_link_libraries(niyah_training_fixture PRIVATE niyah)

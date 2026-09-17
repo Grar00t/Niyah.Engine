@@ -2,6 +2,7 @@
 #include "niyah/dataset.h"
 #include "niyah/decode.h"
 #include "niyah/generate.h"
+#include "niyah/ir.h"
 #include "niyah/optimizer.h"
 #include "niyah/tokenizer.h"
 
@@ -10,6 +11,7 @@
 #endif
 
 #include <errno.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +45,7 @@ typedef struct NiyahRunOptions {
     uint64_t seed;
     int have_max_new_tokens;
     int use_cuda;
+    int execute_ir;
 } NiyahRunOptions;
 
 static void usage(FILE *stream)
@@ -850,6 +853,8 @@ static int parse_run_options(
             } else {
                 return 0;
             }
+        } else if (strcmp(key, "--execute-ir") == 0) {
+            options->execute_ir = 1;
         } else {
             return 0;
         }
@@ -1151,8 +1156,14 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
-    decoded = (uint8_t *)malloc(
-        decoded_size == 0U ? 1U : decoded_size);
+    if (decoded_size == SIZE_MAX) {
+        exit_code = fail_status(
+            "decode_allocation",
+            NIYAH_ERR_OVERFLOW);
+        goto cleanup;
+    }
+
+    decoded = (uint8_t *)malloc(decoded_size + 1U);
     if (decoded == NULL) {
         exit_code = fail_status(
             "decode_allocation",
@@ -1172,15 +1183,48 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
-    if (decoded_size > 0U &&
-        fwrite(decoded, 1U, decoded_size, stdout) != decoded_size) {
-        exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
-        goto cleanup;
-    }
+    decoded[decoded_size] = '\0';
 
-    if (fputc('\n', stdout) == EOF) {
-        exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
-        goto cleanup;
+    if (options.execute_ir) {
+        NiyahIr ir;
+        int64_t result;
+
+        if (memchr(decoded, '\0', decoded_size) != NULL) {
+            exit_code = fail_status(
+                "ir_text",
+                NIYAH_ERR_INVALID_ARGUMENT);
+            goto cleanup;
+        }
+
+        status = niyah_ir_parse(
+            (const char *)decoded,
+            &ir);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("ir_parse", status);
+            goto cleanup;
+        }
+
+        status = niyah_ir_execute(&ir, &result);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("ir_execute", status);
+            goto cleanup;
+        }
+
+        if (fprintf(stdout, "%" PRId64 "\n", result) < 0) {
+            exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+            goto cleanup;
+        }
+    } else {
+        if (decoded_size > 0U &&
+            fwrite(decoded, 1U, decoded_size, stdout) != decoded_size) {
+            exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+            goto cleanup;
+        }
+
+        if (fputc('\n', stdout) == EOF) {
+            exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+            goto cleanup;
+        }
     }
 
     exit_code = 0;
