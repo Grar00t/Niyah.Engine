@@ -49,6 +49,7 @@ typedef struct NiyahRunOptions {
     int use_cuda;
     int execute_ir;
     int emit_receipt;
+    const char *evidence_out_path;
 } NiyahRunOptions;
 
 static void usage(FILE *stream)
@@ -92,30 +93,82 @@ static int fail_status(const char *stage, NiyahStatus status)
 }
 
 static int write_hex_field(
+    FILE *stream,
     const char *name,
     const uint8_t *bytes,
     size_t size)
 {
     size_t i;
 
-    if (name == NULL || bytes == NULL) {
+    if (stream == NULL ||
+        name == NULL ||
+        bytes == NULL) {
         return 0;
     }
 
-    if (fprintf(stdout, "%s=", name) < 0) {
+    if (fprintf(stream, "%s=", name) < 0) {
         return 0;
     }
 
     for (i = 0U; i < size; ++i) {
         if (fprintf(
-                stdout,
+                stream,
                 "%02x",
                 (unsigned)bytes[i]) < 0) {
             return 0;
         }
     }
 
-    return fputc('\n', stdout) != EOF;
+    return fputc('\n', stream) != EOF;
+}
+
+static int write_evidence_document(
+    FILE *stream,
+    const uint8_t *receipt_hash,
+    const uint8_t *checkpoint_hash,
+    const uint8_t *tokenizer_hash,
+    const uint8_t *evidence_root,
+    const char *receipt_text,
+    size_t receipt_length)
+{
+    if (stream == NULL ||
+        receipt_hash == NULL ||
+        checkpoint_hash == NULL ||
+        tokenizer_hash == NULL ||
+        evidence_root == NULL ||
+        receipt_text == NULL) {
+        return 0;
+    }
+
+    if (fputs("NIYAH_EVIDENCE_V1\n", stream) == EOF ||
+        !write_hex_field(
+            stream,
+            "receipt_sha256",
+            receipt_hash,
+            NIYAH_RECEIPT_SHA256_SIZE) ||
+        !write_hex_field(
+            stream,
+            "checkpoint_sha256",
+            checkpoint_hash,
+            NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE) ||
+        !write_hex_field(
+            stream,
+            "tokenizer_sha256",
+            tokenizer_hash,
+            NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE) ||
+        !write_hex_field(
+            stream,
+            "evidence_root_sha256",
+            evidence_root,
+            NIYAH_EVIDENCE_ROOT_SHA256_SIZE)) {
+        return 0;
+    }
+
+    return fwrite(
+        receipt_text,
+        1U,
+        receipt_length,
+        stream) == receipt_length;
 }
 
 static int parse_u64(const char *text, uint64_t *out)
@@ -887,6 +940,12 @@ static int parse_run_options(
             options->execute_ir = 1;
         } else if (strcmp(key, "--receipt") == 0) {
             options->emit_receipt = 1;
+        } else if (strcmp(key, "--evidence-out") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL || value[0] == '\0') {
+                return 0;
+            }
+            options->evidence_out_path = value;
         } else {
             return 0;
         }
@@ -899,7 +958,96 @@ static int parse_run_options(
            options->have_max_new_tokens &&
            options->max_new_tokens > 0U &&
            (!options->emit_receipt ||
-            options->execute_ir);
+            options->execute_ir) &&
+           (options->evidence_out_path == NULL ||
+            options->emit_receipt);
+}
+
+static NiyahStatus write_evidence_file_atomic(
+    const char *path,
+    const uint8_t *receipt_hash,
+    const uint8_t *checkpoint_hash,
+    const uint8_t *tokenizer_hash,
+    const uint8_t *evidence_root,
+    const char *receipt_text,
+    size_t receipt_length)
+{
+    FILE *stream = NULL;
+    char *temporary = NULL;
+    size_t path_length;
+    NiyahStatus status = NIYAH_ERR_IO;
+
+    if (path == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    path_length = strlen(path);
+
+    if (path_length > SIZE_MAX - 5U) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
+    temporary = (char *)malloc(path_length + 5U);
+    if (temporary == NULL) {
+        return NIYAH_ERR_OUT_OF_MEMORY;
+    }
+
+    if (snprintf(
+            temporary,
+            path_length + 5U,
+            "%s.tmp",
+            path) < 0) {
+        free(temporary);
+        return NIYAH_ERR_IO;
+    }
+
+    (void)remove(temporary);
+
+    stream = fopen(temporary, "wb");
+    if (stream == NULL) {
+        free(temporary);
+        return NIYAH_ERR_IO;
+    }
+
+    if (!write_evidence_document(
+            stream,
+            receipt_hash,
+            checkpoint_hash,
+            tokenizer_hash,
+            evidence_root,
+            receipt_text,
+            receipt_length)) {
+        goto cleanup;
+    }
+
+    if (fflush(stream) != 0) {
+        goto cleanup;
+    }
+
+    if (fclose(stream) != 0) {
+        stream = NULL;
+        goto cleanup;
+    }
+
+    stream = NULL;
+
+    if (rename(temporary, path) != 0) {
+        goto cleanup;
+    }
+
+    status = NIYAH_OK;
+
+cleanup:
+    if (stream != NULL) {
+        (void)fclose(stream);
+    }
+
+    if (status != NIYAH_OK) {
+        (void)remove(temporary);
+    }
+
+    free(temporary);
+    return status;
 }
 
 static int run_command(int argc, char **argv)
@@ -945,6 +1093,15 @@ static int run_command(int argc, char **argv)
 
     if (!parse_run_options(argc, argv, &options)) {
         usage(stderr);
+        return 2;
+    }
+
+    if (options.evidence_out_path != NULL &&
+        path_exists(options.evidence_out_path)) {
+        fprintf(
+            stderr,
+            "error_stage=evidence_output_exists "
+            "status=NIYAH_ERR_INVALID_ARGUMENT\n");
         return 2;
     }
 
@@ -1323,36 +1480,32 @@ static int run_command(int argc, char **argv)
                 goto cleanup;
             }
 
-            if (fputs(
-                    "NIYAH_EVIDENCE_V1\n",
-                    stdout) == EOF ||
-                !write_hex_field(
-                    "receipt_sha256",
+            if (options.evidence_out_path != NULL) {
+                status = write_evidence_file_atomic(
+                    options.evidence_out_path,
                     receipt_hash,
-                    sizeof(receipt_hash)) ||
-                !write_hex_field(
-                    "checkpoint_sha256",
                     checkpoint_hash,
-                    sizeof(checkpoint_hash)) ||
-                !write_hex_field(
-                    "tokenizer_sha256",
                     tokenizer_hash,
-                    sizeof(tokenizer_hash)) ||
-                !write_hex_field(
-                    "evidence_root_sha256",
                     evidence_root,
-                    sizeof(evidence_root))) {
-                exit_code = fail_status(
-                    "stdout_write",
-                    NIYAH_ERR_IO);
-                goto cleanup;
+                    receipt_text,
+                    receipt_length);
+
+                if (status != NIYAH_OK) {
+                    exit_code = fail_status(
+                        "evidence_write",
+                        status);
+                    goto cleanup;
+                }
             }
 
-            if (fwrite(
+            if (!write_evidence_document(
+                    stdout,
+                    receipt_hash,
+                    checkpoint_hash,
+                    tokenizer_hash,
+                    evidence_root,
                     receipt_text,
-                    1U,
-                    receipt_length,
-                    stdout) != receipt_length) {
+                    receipt_length)) {
                 exit_code = fail_status(
                     "stdout_write",
                     NIYAH_ERR_IO);
