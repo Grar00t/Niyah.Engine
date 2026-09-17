@@ -27,6 +27,8 @@ typedef struct NiyahPrepareOptions {
     uint32_t min_pair_frequency;
     size_t sequence_length;
     int record_mode;
+    const char **response_delimiters;
+    size_t response_delimiter_count;
     int have_target_vocab_size;
     int have_min_pair_frequency;
     int have_sequence_length;
@@ -50,6 +52,7 @@ static void usage(FILE *stream)
         "  niyah prepare --corpus FILE --tokenizer-out TOK --shard-out SHARD\n"
         "      --target-vocab N --min-pair-frequency N --sequence-length N\n"
         "      [--record-mode stream|blank-line]\n"
+        "      [--response-delimiter TEXT ...]\n"
         "\n"
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
@@ -168,6 +171,14 @@ static int parse_prepare_options(
 
     memset(options, 0, sizeof(*options));
 
+    options->response_delimiters =
+        (const char **)calloc(
+            (size_t)argc,
+            sizeof(*options->response_delimiters));
+    if (options->response_delimiters == NULL) {
+        return 0;
+    }
+
     for (i = 2; i < argc; ++i) {
         const char *key = argv[i];
         const char *value;
@@ -218,6 +229,32 @@ static int parse_prepare_options(
             } else {
                 return 0;
             }
+        } else if (strcmp(key, "--response-delimiter") == 0) {
+            size_t j;
+
+            value = next_value(argc, argv, &i);
+            if (value == NULL || value[0] == '\0') {
+                return 0;
+            }
+
+            for (j = 0U;
+                 j < options->response_delimiter_count;
+                 ++j) {
+                if (strcmp(
+                        options->response_delimiters[j],
+                        value) == 0) {
+                    return 0;
+                }
+            }
+
+            if (options->response_delimiter_count >=
+                (size_t)argc) {
+                return 0;
+            }
+
+            options->response_delimiters[
+                options->response_delimiter_count++] =
+                    value;
         } else {
             return 0;
         }
@@ -232,7 +269,10 @@ static int parse_prepare_options(
            options->have_min_pair_frequency &&
            options->min_pair_frequency > 0U &&
            options->have_sequence_length &&
-           options->sequence_length > 0U;
+           options->sequence_length > 0U &&
+           (options->response_delimiter_count == 0U ||
+            options->record_mode ==
+                NIYAH_PREPARE_RECORD_BLANK_LINE);
 }
 
 static FILE *niyah_cli_fopen(const char *path, const char *mode)
@@ -416,6 +456,102 @@ static int blank_line_records(
     return count != 0U;
 }
 
+static int supervised_records_from_delimiters(
+    const uint8_t *text,
+    size_t text_size,
+    const size_t *record_offsets,
+    const size_t *record_lengths,
+    size_t record_count,
+    const char *const *delimiters,
+    size_t delimiter_count,
+    NiyahDatasetSupervisedRecord *records)
+{
+    size_t record_index;
+
+    if (text == NULL ||
+        text_size == 0U ||
+        record_offsets == NULL ||
+        record_lengths == NULL ||
+        record_count == 0U ||
+        delimiters == NULL ||
+        delimiter_count == 0U ||
+        records == NULL) {
+        return 0;
+    }
+
+    for (record_index = 0U;
+         record_index < record_count;
+         ++record_index) {
+        const size_t record_start =
+            record_offsets[record_index];
+        const size_t record_length =
+            record_lengths[record_index];
+        size_t record_end;
+        size_t matched_end = 0U;
+        size_t match_count = 0U;
+        size_t delimiter_index;
+
+        if (record_start > text_size ||
+            record_length >
+                text_size - record_start) {
+            return 0;
+        }
+
+        record_end =
+            record_start + record_length;
+
+        for (delimiter_index = 0U;
+             delimiter_index < delimiter_count;
+             ++delimiter_index) {
+            const char *delimiter =
+                delimiters[delimiter_index];
+            const size_t delimiter_length =
+                strlen(delimiter);
+            size_t position;
+
+            if (delimiter_length == 0U ||
+                delimiter_length > record_length) {
+                continue;
+            }
+
+            for (position = record_start;
+                 position <=
+                     record_end - delimiter_length;
+                 ++position) {
+                if (memcmp(
+                        text + position,
+                        delimiter,
+                        delimiter_length) == 0) {
+                    match_count += 1U;
+                    matched_end =
+                        position + delimiter_length;
+
+                    if (match_count > 1U) {
+                        return 0;
+                    }
+                }
+            }
+        }
+
+        if (match_count != 1U ||
+            matched_end <= record_start ||
+            matched_end >= record_end) {
+            return 0;
+        }
+
+        records[record_index].prompt_offset =
+            record_start;
+        records[record_index].prompt_length =
+            matched_end - record_start;
+        records[record_index].response_offset =
+            matched_end;
+        records[record_index].response_length =
+            record_end - matched_end;
+    }
+
+    return 1;
+}
+
 static int prepare_command(int argc, char **argv)
 {
     NiyahPrepareOptions options;
@@ -426,6 +562,7 @@ static int prepare_command(int argc, char **argv)
     size_t corpus_size = 0U;
     size_t *record_offsets = NULL;
     size_t *record_lengths = NULL;
+    NiyahDatasetSupervisedRecord *supervised_records = NULL;
     size_t record_count = 0U;
     NiyahStatus status;
     int tokenizer_created = 0;
@@ -437,6 +574,7 @@ static int prepare_command(int argc, char **argv)
 
     if (!parse_prepare_options(argc, argv, &options)) {
         usage(stderr);
+        free(options.response_delimiters);
         return 2;
     }
 
@@ -522,15 +660,68 @@ static int prepare_command(int argc, char **argv)
             goto cleanup;
         }
 
-        status = niyah_dataset_shard_build_records(
-            tokenizer,
-            corpus,
-            corpus_size,
-            record_offsets,
-            record_lengths,
-            record_count,
-            options.sequence_length,
-            &shard);
+        if (options.response_delimiter_count != 0U) {
+            size_t supervised_bytes;
+
+            if (record_count >
+                SIZE_MAX /
+                    sizeof(*supervised_records)) {
+                exit_code = fail_status(
+                    "response_allocation",
+                    NIYAH_ERR_OVERFLOW);
+                goto cleanup;
+            }
+
+            supervised_bytes =
+                record_count *
+                sizeof(*supervised_records);
+
+            supervised_records =
+                (NiyahDatasetSupervisedRecord *)
+                    malloc(supervised_bytes);
+
+            if (supervised_records == NULL) {
+                exit_code = fail_status(
+                    "response_allocation",
+                    NIYAH_ERR_OUT_OF_MEMORY);
+                goto cleanup;
+            }
+
+            if (!supervised_records_from_delimiters(
+                    corpus,
+                    corpus_size,
+                    record_offsets,
+                    record_lengths,
+                    record_count,
+                    options.response_delimiters,
+                    options.response_delimiter_count,
+                    supervised_records)) {
+                exit_code = fail_status(
+                    "response_split",
+                    NIYAH_ERR_INVALID_CONFIG);
+                goto cleanup;
+            }
+
+            status =
+                niyah_dataset_shard_build_supervised_records(
+                    tokenizer,
+                    corpus,
+                    corpus_size,
+                    supervised_records,
+                    record_count,
+                    options.sequence_length,
+                    &shard);
+        } else {
+            status = niyah_dataset_shard_build_records(
+                tokenizer,
+                corpus,
+                corpus_size,
+                record_offsets,
+                record_lengths,
+                record_count,
+                options.sequence_length,
+                &shard);
+        }
     } else {
         status = niyah_dataset_shard_build_text(
             tokenizer,
@@ -572,6 +763,13 @@ static int prepare_command(int argc, char **argv)
         shard.token_count,
         shard.sample_count);
 
+    if (options.response_delimiter_count != 0U) {
+        fprintf(
+            stdout,
+            "P8F_SUPERVISED_PREPARE=PASS delimiters=%zu\n",
+            options.response_delimiter_count);
+    }
+
     exit_code = 0;
 
 cleanup:
@@ -586,8 +784,10 @@ cleanup:
 
     niyah_dataset_shard_destroy(&shard);
     niyah_tokenizer_destroy(tokenizer);
+    free(supervised_records);
     free(record_lengths);
     free(record_offsets);
+    free(options.response_delimiters);
     free(corpus);
     return exit_code;
 }

@@ -493,14 +493,16 @@ static void niyah_attention_backward(float *dq,
     }
 }
 
-NiyahStatus niyah_train_backward(const NiyahModel *model,
-                                 const uint32_t *tokens,
-                                 const uint32_t *targets,
-                                 size_t token_count,
-                                 float *out_loss,
-                                 NiyahModelGradients *gradients,
-                                 float *workspace,
-                                 size_t workspace_count)
+static NiyahStatus niyah_train_backward_impl(
+    const NiyahModel *model,
+    const uint32_t *tokens,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t loss_start,
+    float *out_loss,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count)
 {
     NiyahTrainShape s;
     size_t required = 0U;
@@ -566,8 +568,15 @@ NiyahStatus niyah_train_backward(const NiyahModel *model,
     if (status != NIYAH_OK) {
         return status;
     }
-    status = niyah_cross_entropy_loss(logits, targets, token_count, s.vocab,
-                                      out_loss, dlogits, s.tv);
+    status = niyah_cross_entropy_loss_masked(
+        logits,
+        targets,
+        token_count,
+        s.vocab,
+        loss_start,
+        out_loss,
+        dlogits,
+        s.tv);
     if (status != NIYAH_OK) {
         return status;
     }
@@ -742,4 +751,49 @@ NiyahStatus niyah_train_backward(const NiyahModel *model,
         }
     }
     return NIYAH_OK;
+}
+
+NiyahStatus niyah_train_backward(
+    const NiyahModel *model,
+    const uint32_t *tokens,
+    const uint32_t *targets,
+    size_t token_count,
+    float *out_loss,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count)
+{
+    return niyah_train_backward_impl(
+        model,
+        tokens,
+        targets,
+        token_count,
+        0U,
+        out_loss,
+        gradients,
+        workspace,
+        workspace_count);
+}
+
+NiyahStatus niyah_train_backward_masked(
+    const NiyahModel *model,
+    const uint32_t *tokens,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t loss_start,
+    float *out_loss,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count)
+{
+    return niyah_train_backward_impl(
+        model,
+        tokens,
+        targets,
+        token_count,
+        loss_start,
+        out_loss,
+        gradients,
+        workspace,
+        workspace_count);
 }

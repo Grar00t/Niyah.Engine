@@ -148,8 +148,93 @@ static void test_train_loss_uses_canonical_forward(void)
     niyah_model_destroy(&model);
 }
 
+
+static void test_masked_cross_entropy(void)
+{
+    static const float logits[] = {
+        3.0f, 1.0f, 0.0f, -1.0f,
+        0.0f, 1.0f, 4.0f, -2.0f,
+        0.5f, 0.0f, -0.5f, 3.0f
+    };
+    static const uint32_t targets[] = {
+        0U, 2U, 3U
+    };
+
+    float full_loss = 0.0f;
+    float masked_loss = 0.0f;
+    float full_via_mask = 0.0f;
+    float d_full[12];
+    float d_masked[12];
+    float d_full_via_mask[12];
+    size_t i;
+    int changed = 0;
+
+    CHECK(niyah_cross_entropy_loss(
+              logits,
+              targets,
+              3U,
+              4U,
+              &full_loss,
+              d_full,
+              12U) == NIYAH_OK);
+
+    CHECK(niyah_cross_entropy_loss_masked(
+              logits,
+              targets,
+              3U,
+              4U,
+              0U,
+              &full_via_mask,
+              d_full_via_mask,
+              12U) == NIYAH_OK);
+
+    CHECK(full_loss == full_via_mask);
+
+    for (i = 0U; i < 12U; ++i) {
+        CHECK(d_full[i] == d_full_via_mask[i]);
+    }
+
+    CHECK(niyah_cross_entropy_loss_masked(
+              logits,
+              targets,
+              3U,
+              4U,
+              2U,
+              &masked_loss,
+              d_masked,
+              12U) == NIYAH_OK);
+
+    CHECK(isfinite(masked_loss));
+
+    for (i = 0U; i < 8U; ++i) {
+        CHECK(d_masked[i] == 0.0f);
+    }
+
+    for (i = 8U; i < 12U; ++i) {
+        if (d_masked[i] != d_full[i]) {
+            changed = 1;
+        }
+    }
+
+    CHECK(changed != 0);
+
+    CHECK(niyah_cross_entropy_loss_masked(
+              logits,
+              targets,
+              3U,
+              4U,
+              3U,
+              &masked_loss,
+              d_masked,
+              12U) ==
+          NIYAH_ERR_INVALID_ARGUMENT);
+
+    puts("P8F_MASKED_CROSS_ENTROPY=PASS");
+}
+
 int main(void)
 {
+    test_masked_cross_entropy();
     test_cross_entropy();
     test_gradient_buffer();
     test_train_loss_uses_canonical_forward();

@@ -13,6 +13,7 @@ NiyahStatus niyah_training_samples_from_shard(
     const uint32_t *tokens = NULL;
     const uint32_t *targets = NULL;
     size_t token_count = 0U;
+    size_t loss_start = 0U;
     size_t i;
     NiyahStatus status;
 
@@ -23,8 +24,9 @@ NiyahStatus niyah_training_samples_from_shard(
     if (shard->sample_count == 0U)
         return NIYAH_ERR_INVALID_CONFIG;
 
-    status = niyah_dataset_shard_sample(
-        shard, 0U, &tokens, &targets, &token_count);
+    status = niyah_dataset_shard_sample_with_loss(
+        shard, 0U, &tokens, &targets,
+        &token_count, &loss_start);
     if (status != NIYAH_OK)
         return status;
 
@@ -38,15 +40,18 @@ NiyahStatus niyah_training_samples_from_shard(
     samples[0U].tokens = tokens;
     samples[0U].targets = targets;
     samples[0U].token_count = token_count;
+    samples[0U].loss_start = loss_start;
 
     for (i = 1U; i < shard->sample_count; ++i) {
-        status = niyah_dataset_shard_sample(
-            shard, i, &tokens, &targets, &token_count);
+        status = niyah_dataset_shard_sample_with_loss(
+            shard, i, &tokens, &targets,
+            &token_count, &loss_start);
         if (status != NIYAH_OK)
             return status;
         samples[i].tokens = tokens;
         samples[i].targets = targets;
         samples[i].token_count = token_count;
+        samples[i].loss_start = loss_start;
     }
 
     return NIYAH_OK;
@@ -71,7 +76,10 @@ static NiyahStatus validate_samples(const NiyahModel *model,
             samples[i].targets == NULL ||
             samples[i].token_count == 0U)
             return NIYAH_ERR_INVALID_ARGUMENT;
-        if (samples[i].token_count > model->config.context_length)
+        if (samples[i].token_count >
+                model->config.context_length ||
+            samples[i].loss_start >=
+                samples[i].token_count)
             return NIYAH_ERR_INVALID_CONFIG;
     }
 
@@ -120,11 +128,12 @@ NiyahStatus niyah_training_step(
             : rollback_status;
     }
 
-    status = niyah_train_backward(
+    status = niyah_train_backward_masked(
         model,
         samples[sample_index].tokens,
         samples[sample_index].targets,
         samples[sample_index].token_count,
+        samples[sample_index].loss_start,
         &loss,
         gradients,
         workspace,
@@ -329,11 +338,12 @@ NiyahStatus niyah_training_accumulated_step(
             return rollback_cursor(
                 cursor, old_epoch, old_position, NIYAH_ERR_INVALID_CONFIG);
 
-        status = niyah_train_backward(
+        status = niyah_train_backward_masked(
             model,
             samples[sample_index].tokens,
             samples[sample_index].targets,
             samples[sample_index].token_count,
+            samples[sample_index].loss_start,
             &loss,
             sample_gradients,
             workspace,

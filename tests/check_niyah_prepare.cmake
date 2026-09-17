@@ -20,6 +20,11 @@ set(RECORD_TOK "${WORK_DIR}/p8d_records.tok")
 set(RECORD_SHARD "${WORK_DIR}/p8d_records.srd")
 set(RECORD_CKPT "${WORK_DIR}/p8d_records.ckpt")
 set(RECORD_CURSOR "${WORK_DIR}/p8d_records.cursor")
+set(SUP_CORPUS "${WORK_DIR}/p8f_supervised.txt")
+set(SUP_TOK "${WORK_DIR}/p8f_supervised.tok")
+set(SUP_SHARD "${WORK_DIR}/p8f_supervised.srd")
+set(SUP_CKPT "${WORK_DIR}/p8f_supervised.ckpt")
+set(SUP_CURSOR "${WORK_DIR}/p8f_supervised.cursor")
 
 file(REMOVE
     "${CORPUS}"
@@ -33,7 +38,12 @@ file(REMOVE
     "${RECORD_TOK}"
     "${RECORD_SHARD}"
     "${RECORD_CKPT}"
-    "${RECORD_CURSOR}")
+    "${RECORD_CURSOR}"
+    "${SUP_CORPUS}"
+    "${SUP_TOK}"
+    "${SUP_SHARD}"
+    "${SUP_CKPT}"
+    "${SUP_CURSOR}")
 
 file(WRITE "${CORPUS}"
     "hello world hello world\n"
@@ -202,4 +212,82 @@ endif()
 
 message("P8D_BOUNDARY_AWARE_PREPARE=PASS")
 
+file(WRITE "${SUP_CORPUS}"
+    "User: A\n"
+    "Assistant: 1\n"
+    "\n"
+    "User: B\n"
+    "Bot: 2\n")
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" prepare
+        --corpus "${SUP_CORPUS}"
+        --tokenizer-out "${SUP_TOK}"
+        --shard-out "${SUP_SHARD}"
+        --target-vocab 258
+        --min-pair-frequency 1
+        --sequence-length 64
+        --record-mode blank-line
+        --response-delimiter "Assistant: "
+        --response-delimiter "Bot: "
+    RESULT_VARIABLE sup_prepare_result
+    OUTPUT_VARIABLE sup_prepare_output
+    ERROR_VARIABLE sup_prepare_error)
+
+if(NOT sup_prepare_result EQUAL 0)
+    message(FATAL_ERROR
+        "supervised prepare failed: ${sup_prepare_result}\n"
+        "stdout=${sup_prepare_output}\n"
+        "stderr=${sup_prepare_error}")
+endif()
+
+if(NOT sup_prepare_output MATCHES
+    "P8F_SUPERVISED_PREPARE=PASS delimiters=2")
+    message(FATAL_ERROR
+        "supervised prepare marker missing: ${sup_prepare_output}")
+endif()
+
+execute_process(
+    COMMAND "${NIYAH_TRAIN}" new
+        --tokenizer "${SUP_TOK}"
+        --shard "${SUP_SHARD}"
+        --checkpoint-out "${SUP_CKPT}"
+        --cursor-out "${SUP_CURSOR}"
+        --updates 1
+        --batch-size 1
+        --accumulation-steps 1
+        --model-seed 42
+        --data-seed 7
+        --context-length 64
+        --embedding-dim 8
+        --layers 1
+        --heads 2
+        --kv-heads 1
+        --ffn-hidden-dim 16
+        --rms-norm-eps 0.00001
+        --tie-word-embeddings 1
+        --learning-rate 0.001
+        --beta1 0.9
+        --beta2 0.999
+        --epsilon 0.00000001
+        --weight-decay 0
+        --max-grad-norm 1
+    RESULT_VARIABLE sup_train_result
+    OUTPUT_VARIABLE sup_train_output
+    ERROR_VARIABLE sup_train_error)
+
+if(NOT sup_train_result EQUAL 0)
+    message(FATAL_ERROR
+        "supervised shard rejected by niyah-train: ${sup_train_result}\n"
+        "stdout=${sup_train_output}\n"
+        "stderr=${sup_train_error}")
+endif()
+
+if(NOT EXISTS "${SUP_CKPT}" OR
+   NOT EXISTS "${SUP_CURSOR}")
+    message(FATAL_ERROR
+        "supervised training outputs missing")
+endif()
+
+message("P8F_SUPERVISED_PREPARE=PASS")
 message("P8C_NATIVE_CORPUS_PREPARE=PASS")
