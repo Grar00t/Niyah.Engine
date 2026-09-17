@@ -87,6 +87,7 @@ add_library(niyah STATIC
     src/niyah_ir.c
     src/niyah_receipt.c
     src/niyah_evidence.c
+    src/niyah_network_ir.c
 )
 
 target_include_directories(niyah
@@ -383,6 +384,31 @@ if(NIYAH_BUILD_TESTS)
     target_link_libraries(niyah_evidence_test PRIVATE niyah)
 
     add_executable(
+        niyah_network_ir_test
+        tests/test_network_ir.c
+    )
+    target_link_libraries(
+        niyah_network_ir_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_network_ir_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_network_ir_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
         niyah_evidence_v1_format_test
         tests/test_evidence_v1_format.c
     )
@@ -419,6 +445,11 @@ if(NIYAH_BUILD_TESTS)
     add_test(NAME niyah_ir_test COMMAND niyah_ir_test)
     add_test(NAME niyah_receipt_test COMMAND niyah_receipt_test)
     add_test(NAME niyah_evidence_test COMMAND niyah_evidence_test)
+
+    add_test(
+        NAME niyah_network_ir_test
+        COMMAND niyah_network_ir_test
+    )
 
     add_test(
         NAME niyah_evidence_v1_format_test
