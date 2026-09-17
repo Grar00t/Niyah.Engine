@@ -97,4 +97,31 @@ if(output_size LESS 1)
     message(FATAL_ERROR "runtime output empty")
 endif()
 
+execute_process(
+    COMMAND "${NIYAH_CLI}" run
+        --tokenizer "${TOK}"
+        --checkpoint "${CKPT}"
+        --prompt "xyz"
+        --max-new-tokens 1
+        --temperature 0
+        --seed 1
+        --backend "${BACKEND}"
+    RESULT_VARIABLE bos_capacity_result
+    ERROR_VARIABLE bos_capacity_error
+    OUTPUT_QUIET
+)
+if(bos_capacity_result EQUAL 0)
+    message(FATAL_ERROR "runtime BOS capacity contract was not enforced")
+endif()
+
+string(FIND
+    "${bos_capacity_error}"
+    "error_stage=context_capacity"
+    bos_capacity_error_index)
+if(bos_capacity_error_index EQUAL -1)
+    message(FATAL_ERROR
+        "runtime BOS capacity rejection used unexpected error: ${bos_capacity_error}")
+endif()
+
+message("P8B_RUNTIME_BOS_CONTRACT_${BACKEND}=PASS")
 message("P8B_NATIVE_RUNTIME_BACKEND_${BACKEND}=PASS")
