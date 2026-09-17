@@ -885,6 +885,7 @@ static int run_command(int argc, char **argv)
 #endif
     uint8_t *decoded = NULL;
     size_t prompt_count = 0U;
+    size_t encoded_prompt_count = 0U;
     size_t workspace_count = 0U;
     size_t decoded_size = 0U;
     size_t vocab_size;
@@ -948,14 +949,23 @@ static int run_command(int argc, char **argv)
         strlen(options.prompt),
         NULL,
         0U,
-        &prompt_count);
+        &encoded_prompt_count);
     if (status != NIYAH_OK) {
         exit_code = fail_status("prompt_encode_query", status);
         goto cleanup;
     }
 
-    if (prompt_count == 0U ||
-        prompt_count > (size_t)model.config.context_length ||
+    if (encoded_prompt_count == 0U ||
+        encoded_prompt_count == SIZE_MAX) {
+        exit_code = fail_status(
+            "context_capacity",
+            NIYAH_ERR_INVALID_ARGUMENT);
+        goto cleanup;
+    }
+
+    prompt_count = encoded_prompt_count + 1U;
+
+    if (prompt_count > (size_t)model.config.context_length ||
         options.max_new_tokens >
             (size_t)model.config.context_length - prompt_count ||
         prompt_count > SIZE_MAX / sizeof(*prompt_tokens)) {
@@ -974,15 +984,24 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
+    prompt_tokens[0] = NIYAH_TOKEN_BOS;
+
     status = niyah_tokenizer_encode(
         tokenizer,
         (const uint8_t *)options.prompt,
         strlen(options.prompt),
-        prompt_tokens,
-        prompt_count,
-        &prompt_count);
+        prompt_tokens + 1U,
+        encoded_prompt_count,
+        &encoded_prompt_count);
     if (status != NIYAH_OK) {
         exit_code = fail_status("prompt_encode", status);
+        goto cleanup;
+    }
+
+    if (encoded_prompt_count + 1U != prompt_count) {
+        exit_code = fail_status(
+            "prompt_encode_contract",
+            NIYAH_ERR_INVALID_CONFIG);
         goto cleanup;
     }
 
