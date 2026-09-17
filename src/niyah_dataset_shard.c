@@ -6,9 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-_Static_assert(CHAR_BIT == 8, "dataset shard v1 requires 8-bit bytes");
+_Static_assert(CHAR_BIT == 8, "dataset shard requires 8-bit bytes");
 
-#define NIYAH_DATASET_SHARD_VERSION UINT32_C(1)
+#define NIYAH_DATASET_SHARD_VERSION_V1 UINT32_C(1)
+#define NIYAH_DATASET_SHARD_VERSION_V2 UINT32_C(2)
 #define NIYAH_DATASET_SHARD_FLAGS UINT32_C(0)
 #define NIYAH_DATASET_SHARD_CHECKSUM_CRC32 UINT32_C(1)
 #define NIYAH_DATASET_SHARD_HEADER_SIZE 72U
@@ -51,6 +52,47 @@ static size_t sample_count_for(size_t token_count, size_t sequence_length)
 {
     if (token_count < 2U || sequence_length == 0U) return 0U;
     return 1U + (token_count - 2U) / sequence_length;
+}
+
+
+static int explicit_geometry_valid(const NiyahDatasetShard *shard)
+{
+    size_t previous_end = 0U;
+    size_t i;
+
+    if (shard == NULL ||
+        shard->tokens == NULL ||
+        shard->token_count < 2U ||
+        shard->sequence_length == 0U ||
+        shard->sample_count == 0U ||
+        shard->sample_offsets == NULL ||
+        shard->sample_lengths == NULL ||
+        shard->has_explicit_samples == 0)
+        return 0;
+
+    for (i = 0U; i < shard->sample_count; ++i) {
+        const size_t start = shard->sample_offsets[i];
+        const size_t count = shard->sample_lengths[i];
+        size_t end;
+
+        if (count == 0U ||
+            count > shard->sequence_length ||
+            start >= shard->token_count - 1U ||
+            count > shard->token_count - 1U - start)
+            return 0;
+
+        end = start + count;
+
+        if (i == 0U) {
+            if (start != 0U) return 0;
+        } else if (start < previous_end) {
+            return 0;
+        }
+
+        previous_end = end;
+    }
+
+    return previous_end == shard->token_count - 1U;
 }
 
 static void store_u32_le(unsigned char out[4], uint32_t value)
@@ -167,16 +209,26 @@ static NiyahStatus validate_shard(const NiyahDatasetShard *shard,
         return NIYAH_ERR_INVALID_ARGUMENT;
     if (shard->tokens == NULL ||
         shard->token_count < 2U ||
-        shard->sequence_length == 0U)
-        return NIYAH_ERR_INVALID_CONFIG;
-
-    expected_samples =
-        sample_count_for(shard->token_count, shard->sequence_length);
-    if (expected_samples == 0U ||
-        shard->sample_count != expected_samples ||
+        shard->sequence_length == 0U ||
+        shard->sample_count == 0U ||
         shard->tokens[0] != NIYAH_TOKEN_BOS ||
         shard->tokens[shard->token_count - 1U] != NIYAH_TOKEN_EOS)
         return NIYAH_ERR_INVALID_CONFIG;
+
+    if (shard->has_explicit_samples != 0) {
+        if (!explicit_geometry_valid(shard))
+            return NIYAH_ERR_INVALID_CONFIG;
+    } else {
+        if (shard->sample_offsets != NULL ||
+            shard->sample_lengths != NULL)
+            return NIYAH_ERR_INVALID_CONFIG;
+
+        expected_samples =
+            sample_count_for(shard->token_count, shard->sequence_length);
+        if (expected_samples == 0U ||
+            shard->sample_count != expected_samples)
+            return NIYAH_ERR_INVALID_CONFIG;
+    }
 
     status = tokenizer_identity(tokenizer, identity);
     if (status != NIYAH_OK) return status;
@@ -185,10 +237,12 @@ static NiyahStatus validate_shard(const NiyahDatasetShard *shard,
 
     vocab_size = niyah_tokenizer_vocab_size(tokenizer);
     if (vocab_size == 0U) return NIYAH_ERR_INVALID_CONFIG;
+
     for (i = 0U; i < shard->token_count; ++i) {
         if ((size_t)shard->tokens[i] >= vocab_size)
             return NIYAH_ERR_INVALID_CONFIG;
     }
+
     return NIYAH_OK;
 }
 
@@ -256,9 +310,202 @@ NiyahStatus niyah_dataset_shard_build_text(
     return NIYAH_OK;
 }
 
+NiyahStatus niyah_dataset_shard_build_records(
+    const NiyahTokenizer *tokenizer,
+    const uint8_t *text,
+    size_t text_size,
+    const size_t *record_offsets,
+    const size_t *record_lengths,
+    size_t record_count,
+    size_t sequence_length,
+    NiyahDatasetShard *out_shard)
+{
+    NiyahDatasetShard temp;
+    size_t total_tokens = 0U;
+    size_t total_samples = 0U;
+    size_t token_bytes = 0U;
+    size_t geometry_bytes = 0U;
+    size_t record_index;
+    size_t write_index = 0U;
+    size_t sample_index = 0U;
+    size_t previous_record_end = 0U;
+    NiyahStatus status;
+
+    if (tokenizer == NULL || text == NULL || text_size == 0U ||
+        record_offsets == NULL || record_lengths == NULL ||
+        record_count == 0U || out_shard == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    if (out_shard->tokens != NULL ||
+        out_shard->sample_offsets != NULL ||
+        out_shard->sample_lengths != NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    if (sequence_length == 0U)
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    memset(&temp, 0, sizeof(temp));
+
+    for (record_index = 0U;
+         record_index < record_count;
+         ++record_index) {
+        const size_t offset = record_offsets[record_index];
+        const size_t length = record_lengths[record_index];
+        size_t encoded_count = 0U;
+        size_t record_tokens;
+        size_t transitions;
+        size_t record_samples;
+        size_t record_end;
+
+        if (length == 0U ||
+            offset > text_size ||
+            length > text_size - offset ||
+            !size_add_ok(offset, length, &record_end))
+            return NIYAH_ERR_INVALID_ARGUMENT;
+
+        if (record_index != 0U && offset < previous_record_end)
+            return NIYAH_ERR_INVALID_ARGUMENT;
+        previous_record_end = record_end;
+
+        status = niyah_tokenizer_encode(
+            tokenizer,
+            text + offset,
+            length,
+            NULL,
+            0U,
+            &encoded_count);
+        if (status != NIYAH_OK)
+            return status;
+
+        if (!size_add_ok(encoded_count, 2U, &record_tokens) ||
+            !size_add_ok(encoded_count, 1U, &transitions))
+            return NIYAH_ERR_OVERFLOW;
+
+        record_samples =
+            1U + (transitions - 1U) / sequence_length;
+
+        if (!size_add_ok(total_tokens, record_tokens, &total_tokens) ||
+            !size_add_ok(total_samples, record_samples, &total_samples))
+            return NIYAH_ERR_OVERFLOW;
+    }
+
+    if (!size_mul_ok(total_tokens, sizeof(uint32_t), &token_bytes) ||
+        !size_mul_ok(total_samples, sizeof(size_t), &geometry_bytes))
+        return NIYAH_ERR_OVERFLOW;
+
+    temp.tokens = (uint32_t *)malloc(token_bytes);
+    temp.sample_offsets = (size_t *)malloc(geometry_bytes);
+    temp.sample_lengths = (size_t *)malloc(geometry_bytes);
+
+    if (temp.tokens == NULL ||
+        temp.sample_offsets == NULL ||
+        temp.sample_lengths == NULL) {
+        niyah_dataset_shard_destroy(&temp);
+        return NIYAH_ERR_OUT_OF_MEMORY;
+    }
+
+    temp.token_count = total_tokens;
+    temp.sequence_length = sequence_length;
+    temp.sample_count = total_samples;
+    temp.has_explicit_samples = 1;
+
+    for (record_index = 0U;
+         record_index < record_count;
+         ++record_index) {
+        const size_t offset = record_offsets[record_index];
+        const size_t length = record_lengths[record_index];
+        const size_t record_base = write_index;
+        size_t encoded_count = 0U;
+        size_t remaining;
+        size_t start;
+
+        status = niyah_tokenizer_encode(
+            tokenizer,
+            text + offset,
+            length,
+            NULL,
+            0U,
+            &encoded_count);
+        if (status != NIYAH_OK) {
+            niyah_dataset_shard_destroy(&temp);
+            return status;
+        }
+
+        temp.tokens[write_index++] = NIYAH_TOKEN_BOS;
+
+        if (encoded_count != 0U) {
+            size_t written = 0U;
+            status = niyah_tokenizer_encode(
+                tokenizer,
+                text + offset,
+                length,
+                temp.tokens + write_index,
+                encoded_count,
+                &written);
+            if (status != NIYAH_OK ||
+                written != encoded_count) {
+                niyah_dataset_shard_destroy(&temp);
+                return status == NIYAH_OK
+                    ? NIYAH_ERR_INVALID_CONFIG
+                    : status;
+            }
+            write_index += encoded_count;
+        }
+
+        temp.tokens[write_index++] = NIYAH_TOKEN_EOS;
+
+        remaining = encoded_count + 1U;
+        start = record_base;
+
+        while (remaining != 0U) {
+            const size_t count =
+                remaining < sequence_length
+                    ? remaining
+                    : sequence_length;
+
+            if (sample_index >= total_samples) {
+                niyah_dataset_shard_destroy(&temp);
+                return NIYAH_ERR_INVALID_CONFIG;
+            }
+
+            temp.sample_offsets[sample_index] = start;
+            temp.sample_lengths[sample_index] = count;
+            sample_index += 1U;
+
+            start += count;
+            remaining -= count;
+        }
+    }
+
+    if (write_index != total_tokens ||
+        sample_index != total_samples) {
+        niyah_dataset_shard_destroy(&temp);
+        return NIYAH_ERR_INVALID_CONFIG;
+    }
+
+    status = tokenizer_identity(
+        tokenizer,
+        temp.tokenizer_identity);
+    if (status != NIYAH_OK) {
+        niyah_dataset_shard_destroy(&temp);
+        return status;
+    }
+
+    status = validate_shard(&temp, tokenizer);
+    if (status != NIYAH_OK) {
+        niyah_dataset_shard_destroy(&temp);
+        return status;
+    }
+
+    *out_shard = temp;
+    return NIYAH_OK;
+}
+
+
 void niyah_dataset_shard_destroy(NiyahDatasetShard *shard)
 {
     if (shard == NULL) return;
+
+    free(shard->sample_lengths);
+    free(shard->sample_offsets);
     free(shard->tokens);
     memset(shard, 0, sizeof(*shard));
 }
@@ -277,24 +524,41 @@ NiyahStatus niyah_dataset_shard_sample(
     if (shard == NULL || out_tokens == NULL ||
         out_targets == NULL || out_token_count == NULL)
         return NIYAH_ERR_INVALID_ARGUMENT;
-    if (shard->tokens == NULL || shard->token_count < 2U ||
+    if (shard->tokens == NULL ||
+        shard->token_count < 2U ||
         shard->sequence_length == 0U ||
-        shard->sample_count !=
-            sample_count_for(shard->token_count, shard->sequence_length))
+        shard->sample_count == 0U)
         return NIYAH_ERR_INVALID_CONFIG;
     if (sample_index >= shard->sample_count)
         return NIYAH_ERR_INVALID_ARGUMENT;
-    if (sample_index > SIZE_MAX / shard->sequence_length)
-        return NIYAH_ERR_OVERFLOW;
 
-    start = sample_index * shard->sequence_length;
-    if (start >= shard->token_count - 1U)
-        return NIYAH_ERR_INVALID_CONFIG;
+    if (shard->has_explicit_samples != 0) {
+        if (!explicit_geometry_valid(shard))
+            return NIYAH_ERR_INVALID_CONFIG;
 
-    remaining = shard->token_count - 1U - start;
-    count = remaining < shard->sequence_length
-        ? remaining
-        : shard->sequence_length;
+        start = shard->sample_offsets[sample_index];
+        count = shard->sample_lengths[sample_index];
+    } else {
+        if (shard->sample_offsets != NULL ||
+            shard->sample_lengths != NULL ||
+            shard->sample_count !=
+                sample_count_for(
+                    shard->token_count,
+                    shard->sequence_length))
+            return NIYAH_ERR_INVALID_CONFIG;
+
+        if (sample_index > SIZE_MAX / shard->sequence_length)
+            return NIYAH_ERR_OVERFLOW;
+
+        start = sample_index * shard->sequence_length;
+        if (start >= shard->token_count - 1U)
+            return NIYAH_ERR_INVALID_CONFIG;
+
+        remaining = shard->token_count - 1U - start;
+        count = remaining < shard->sequence_length
+            ? remaining
+            : shard->sequence_length;
+    }
 
     *out_tokens = shard->tokens + start;
     *out_targets = shard->tokens + start + 1U;
@@ -307,10 +571,16 @@ NiyahStatus niyah_dataset_shard_identity_sha256(
     const NiyahDatasetShard *shard,
     uint8_t out_identity[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE])
 {
-    static const unsigned char domain[] = {
+    static const unsigned char domain_v1[] = {
         'N','I','Y','A','H','-','D','A','T','A','S','E','T','-',
         'S','H','A','R','D','-','V','1'
     };
+    static const unsigned char domain_v2[] = {
+        'N','I','Y','A','H','-','D','A','T','A','S','E','T','-',
+        'S','H','A','R','D','-','V','2'
+    };
+    const unsigned char *domain;
+    size_t domain_size;
     NiyahSha256 sha;
     unsigned char u64[8];
     unsigned char u32[4];
@@ -321,33 +591,56 @@ NiyahStatus niyah_dataset_shard_identity_sha256(
         return NIYAH_ERR_INVALID_ARGUMENT;
     if (shard->tokens == NULL ||
         shard->token_count < 2U ||
-        shard->sequence_length == 0U)
-        return NIYAH_ERR_INVALID_CONFIG;
-
-    expected_samples =
-        sample_count_for(shard->token_count, shard->sequence_length);
-    if (expected_samples == 0U ||
-        shard->sample_count != expected_samples ||
+        shard->sequence_length == 0U ||
+        shard->sample_count == 0U ||
         shard->tokens[0] != NIYAH_TOKEN_BOS ||
         shard->tokens[shard->token_count - 1U] != NIYAH_TOKEN_EOS)
         return NIYAH_ERR_INVALID_CONFIG;
+
+    if (shard->has_explicit_samples != 0) {
+        if (!explicit_geometry_valid(shard))
+            return NIYAH_ERR_INVALID_CONFIG;
+        domain = domain_v2;
+        domain_size = sizeof(domain_v2);
+    } else {
+        if (shard->sample_offsets != NULL ||
+            shard->sample_lengths != NULL)
+            return NIYAH_ERR_INVALID_CONFIG;
+
+        expected_samples =
+            sample_count_for(
+                shard->token_count,
+                shard->sequence_length);
+        if (expected_samples == 0U ||
+            shard->sample_count != expected_samples)
+            return NIYAH_ERR_INVALID_CONFIG;
+
+        domain = domain_v1;
+        domain_size = sizeof(domain_v1);
+    }
+
     if (shard->sequence_length > (size_t)UINT64_MAX ||
         shard->token_count > (size_t)UINT64_MAX ||
         shard->sample_count > (size_t)UINT64_MAX)
         return NIYAH_ERR_OVERFLOW;
 
     niyah_sha256_init(&sha);
-    if (!niyah_sha256_update(&sha, domain, sizeof(domain)) ||
-        !niyah_sha256_update(&sha, shard->tokenizer_identity,
-                             sizeof(shard->tokenizer_identity)))
+
+    if (!niyah_sha256_update(&sha, domain, domain_size) ||
+        !niyah_sha256_update(
+            &sha,
+            shard->tokenizer_identity,
+            sizeof(shard->tokenizer_identity)))
         return NIYAH_ERR_OVERFLOW;
 
     store_u64_le(u64, (uint64_t)shard->sequence_length);
     if (!niyah_sha256_update(&sha, u64, sizeof(u64)))
         return NIYAH_ERR_OVERFLOW;
+
     store_u64_le(u64, (uint64_t)shard->token_count);
     if (!niyah_sha256_update(&sha, u64, sizeof(u64)))
         return NIYAH_ERR_OVERFLOW;
+
     store_u64_le(u64, (uint64_t)shard->sample_count);
     if (!niyah_sha256_update(&sha, u64, sizeof(u64)))
         return NIYAH_ERR_OVERFLOW;
@@ -356,6 +649,26 @@ NiyahStatus niyah_dataset_shard_identity_sha256(
         store_u32_le(u32, shard->tokens[i]);
         if (!niyah_sha256_update(&sha, u32, sizeof(u32)))
             return NIYAH_ERR_OVERFLOW;
+    }
+
+    if (shard->has_explicit_samples != 0) {
+        for (i = 0U; i < shard->sample_count; ++i) {
+            if (shard->sample_offsets[i] > (size_t)UINT64_MAX ||
+                shard->sample_lengths[i] > (size_t)UINT64_MAX)
+                return NIYAH_ERR_OVERFLOW;
+
+            store_u64_le(
+                u64,
+                (uint64_t)shard->sample_offsets[i]);
+            if (!niyah_sha256_update(&sha, u64, sizeof(u64)))
+                return NIYAH_ERR_OVERFLOW;
+
+            store_u64_le(
+                u64,
+                (uint64_t)shard->sample_lengths[i]);
+            if (!niyah_sha256_update(&sha, u64, sizeof(u64)))
+                return NIYAH_ERR_OVERFLOW;
+        }
     }
 
     niyah_sha256_final(&sha, out_identity);
@@ -414,9 +727,11 @@ NiyahStatus niyah_dataset_shard_save(
 {
     unsigned char header[NIYAH_DATASET_SHARD_HEADER_SIZE];
     unsigned char token_bytes[4];
+    unsigned char u64_bytes[8];
     unsigned char footer[8];
     NiyahDatasetShardCrc32 crc;
     FILE *file;
+    uint32_t version;
     size_t i;
     NiyahStatus status;
     int close_result;
@@ -426,20 +741,33 @@ NiyahStatus niyah_dataset_shard_save(
 
     status = validate_shard(shard, tokenizer);
     if (status != NIYAH_OK) return status;
+
     if (shard->token_count > (size_t)UINT64_MAX ||
         shard->sequence_length > (size_t)UINT64_MAX ||
         shard->sample_count > (size_t)UINT64_MAX)
         return NIYAH_ERR_OVERFLOW;
 
+    version = shard->has_explicit_samples != 0
+        ? NIYAH_DATASET_SHARD_VERSION_V2
+        : NIYAH_DATASET_SHARD_VERSION_V1;
+
     memset(header, 0, sizeof(header));
     memcpy(header, NIYAH_DATASET_SHARD_MAGIC, 8U);
-    store_u32_le(header + 8U, NIYAH_DATASET_SHARD_VERSION);
+    store_u32_le(header + 8U, version);
     store_u32_le(header + 12U, NIYAH_DATASET_SHARD_FLAGS);
-    store_u64_le(header + 16U, (uint64_t)shard->sequence_length);
-    store_u64_le(header + 24U, (uint64_t)shard->token_count);
-    store_u64_le(header + 32U, (uint64_t)shard->sample_count);
-    memcpy(header + 40U, shard->tokenizer_identity,
-           NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE);
+    store_u64_le(
+        header + 16U,
+        (uint64_t)shard->sequence_length);
+    store_u64_le(
+        header + 24U,
+        (uint64_t)shard->token_count);
+    store_u64_le(
+        header + 32U,
+        (uint64_t)shard->sample_count);
+    memcpy(
+        header + 40U,
+        shard->tokenizer_identity,
+        NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE);
 
     file = shard_fopen(path, "wb");
     if (file == NULL) return NIYAH_ERR_IO;
@@ -447,25 +775,76 @@ NiyahStatus niyah_dataset_shard_save(
     crc_init(&crc);
     status = write_crc(file, header, sizeof(header), &crc);
 
-    for (i = 0U; status == NIYAH_OK && i < shard->token_count; ++i) {
+    for (i = 0U;
+         status == NIYAH_OK && i < shard->token_count;
+         ++i) {
         store_u32_le(token_bytes, shard->tokens[i]);
-        status = write_crc(file, token_bytes, sizeof(token_bytes), &crc);
+        status = write_crc(
+            file,
+            token_bytes,
+            sizeof(token_bytes),
+            &crc);
+    }
+
+    if (status == NIYAH_OK &&
+        version == NIYAH_DATASET_SHARD_VERSION_V2) {
+        for (i = 0U;
+             status == NIYAH_OK && i < shard->sample_count;
+             ++i) {
+            if (shard->sample_offsets[i] > (size_t)UINT64_MAX ||
+                shard->sample_lengths[i] > (size_t)UINT64_MAX) {
+                status = NIYAH_ERR_OVERFLOW;
+                break;
+            }
+
+            store_u64_le(
+                u64_bytes,
+                (uint64_t)shard->sample_offsets[i]);
+            status = write_crc(
+                file,
+                u64_bytes,
+                sizeof(u64_bytes),
+                &crc);
+
+            if (status == NIYAH_OK) {
+                store_u64_le(
+                    u64_bytes,
+                    (uint64_t)shard->sample_lengths[i]);
+                status = write_crc(
+                    file,
+                    u64_bytes,
+                    sizeof(u64_bytes),
+                    &crc);
+            }
+        }
     }
 
     if (status == NIYAH_OK) {
-        store_u32_le(footer + 0U, NIYAH_DATASET_SHARD_CHECKSUM_CRC32);
-        store_u32_le(footer + 4U, crc_final(&crc));
-        if (fwrite(footer, 1U, sizeof(footer), file) != sizeof(footer))
+        store_u32_le(
+            footer + 0U,
+            NIYAH_DATASET_SHARD_CHECKSUM_CRC32);
+        store_u32_le(
+            footer + 4U,
+            crc_final(&crc));
+
+        if (fwrite(
+                footer,
+                1U,
+                sizeof(footer),
+                file) != sizeof(footer))
             status = NIYAH_ERR_IO;
     }
+
     if (status == NIYAH_OK && fflush(file) != 0)
         status = NIYAH_ERR_IO;
 
     close_result = fclose(file);
     if (status == NIYAH_OK && close_result != 0)
         status = NIYAH_ERR_IO;
+
     if (status != NIYAH_OK)
         (void)remove(path);
+
     return status;
 }
 
@@ -476,6 +855,7 @@ NiyahStatus niyah_dataset_shard_load(
 {
     unsigned char header[NIYAH_DATASET_SHARD_HEADER_SIZE];
     unsigned char token_bytes[4];
+    unsigned char u64_bytes[8];
     unsigned char footer[8];
     unsigned char extra;
     uint8_t identity[NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE];
@@ -488,6 +868,7 @@ NiyahStatus niyah_dataset_shard_load(
     uint64_t token_count64;
     uint64_t sample_count64;
     size_t token_bytes_size;
+    size_t geometry_bytes_size;
     size_t expected_samples;
     size_t vocab_size;
     size_t i;
@@ -497,18 +878,30 @@ NiyahStatus niyah_dataset_shard_load(
     if (path == NULL || path[0] == '\0' ||
         tokenizer == NULL || out_shard == NULL)
         return NIYAH_ERR_INVALID_ARGUMENT;
-    if (out_shard->tokens != NULL)
+
+    if (out_shard->tokens != NULL ||
+        out_shard->sample_offsets != NULL ||
+        out_shard->sample_lengths != NULL)
         return NIYAH_ERR_INVALID_ARGUMENT;
 
     memset(&temp, 0, sizeof(temp));
+
     file = shard_fopen(path, "rb");
     if (file == NULL) return NIYAH_ERR_IO;
 
     crc_init(&crc);
-    status = read_crc(file, header, sizeof(header), &crc);
+
+    status = read_crc(
+        file,
+        header,
+        sizeof(header),
+        &crc);
     if (status != NIYAH_OK) goto done;
 
-    if (memcmp(header, NIYAH_DATASET_SHARD_MAGIC, 8U) != 0) {
+    if (memcmp(
+            header,
+            NIYAH_DATASET_SHARD_MAGIC,
+            8U) != 0) {
         status = NIYAH_ERR_CORRUPT_DATA;
         goto done;
     }
@@ -519,10 +912,12 @@ NiyahStatus niyah_dataset_shard_load(
     token_count64 = load_u64_le(header + 24U);
     sample_count64 = load_u64_le(header + 32U);
 
-    if (version != NIYAH_DATASET_SHARD_VERSION) {
+    if (version != NIYAH_DATASET_SHARD_VERSION_V1 &&
+        version != NIYAH_DATASET_SHARD_VERSION_V2) {
         status = NIYAH_ERR_UNSUPPORTED_VERSION;
         goto done;
     }
+
     if (flags != NIYAH_DATASET_SHARD_FLAGS ||
         sequence64 == UINT64_C(0) ||
         token_count64 < UINT64_C(2) ||
@@ -537,29 +932,70 @@ NiyahStatus niyah_dataset_shard_load(
     temp.sequence_length = (size_t)sequence64;
     temp.token_count = (size_t)token_count64;
     temp.sample_count = (size_t)sample_count64;
-    expected_samples =
-        sample_count_for(temp.token_count, temp.sequence_length);
-    if (temp.sample_count != expected_samples) {
-        status = NIYAH_ERR_CORRUPT_DATA;
-        goto done;
+
+    if (version == NIYAH_DATASET_SHARD_VERSION_V1) {
+        expected_samples =
+            sample_count_for(
+                temp.token_count,
+                temp.sequence_length);
+
+        if (temp.sample_count != expected_samples) {
+            status = NIYAH_ERR_CORRUPT_DATA;
+            goto done;
+        }
+    } else {
+        temp.has_explicit_samples = 1;
     }
 
     status = tokenizer_identity(tokenizer, identity);
     if (status != NIYAH_OK) goto done;
-    if (memcmp(identity, header + 40U, sizeof(identity)) != 0) {
+
+    if (memcmp(
+            identity,
+            header + 40U,
+            sizeof(identity)) != 0) {
         status = NIYAH_ERR_INVALID_CONFIG;
         goto done;
     }
-    memcpy(temp.tokenizer_identity, header + 40U, sizeof(identity));
 
-    if (!size_mul_ok(temp.token_count, sizeof(uint32_t), &token_bytes_size)) {
+    memcpy(
+        temp.tokenizer_identity,
+        header + 40U,
+        sizeof(identity));
+
+    if (!size_mul_ok(
+            temp.token_count,
+            sizeof(uint32_t),
+            &token_bytes_size)) {
         status = NIYAH_ERR_OVERFLOW;
         goto done;
     }
+
     temp.tokens = (uint32_t *)malloc(token_bytes_size);
     if (temp.tokens == NULL) {
         status = NIYAH_ERR_OUT_OF_MEMORY;
         goto done;
+    }
+
+    if (version == NIYAH_DATASET_SHARD_VERSION_V2) {
+        if (!size_mul_ok(
+                temp.sample_count,
+                sizeof(size_t),
+                &geometry_bytes_size)) {
+            status = NIYAH_ERR_OVERFLOW;
+            goto done;
+        }
+
+        temp.sample_offsets =
+            (size_t *)malloc(geometry_bytes_size);
+        temp.sample_lengths =
+            (size_t *)malloc(geometry_bytes_size);
+
+        if (temp.sample_offsets == NULL ||
+            temp.sample_lengths == NULL) {
+            status = NIYAH_ERR_OUT_OF_MEMORY;
+            goto done;
+        }
     }
 
     vocab_size = niyah_tokenizer_vocab_size(tokenizer);
@@ -569,19 +1005,66 @@ NiyahStatus niyah_dataset_shard_load(
     }
 
     for (i = 0U; i < temp.token_count; ++i) {
-        status = read_crc(file, token_bytes, sizeof(token_bytes), &crc);
+        status = read_crc(
+            file,
+            token_bytes,
+            sizeof(token_bytes),
+            &crc);
         if (status != NIYAH_OK) goto done;
+
         temp.tokens[i] = load_u32_le(token_bytes);
+
         if ((size_t)temp.tokens[i] >= vocab_size) {
             status = NIYAH_ERR_CORRUPT_DATA;
             goto done;
         }
     }
 
-    if (fread(footer, 1U, sizeof(footer), file) != sizeof(footer)) {
-        status = ferror(file) ? NIYAH_ERR_IO : NIYAH_ERR_CORRUPT_DATA;
+    if (version == NIYAH_DATASET_SHARD_VERSION_V2) {
+        for (i = 0U; i < temp.sample_count; ++i) {
+            uint64_t value;
+
+            status = read_crc(
+                file,
+                u64_bytes,
+                sizeof(u64_bytes),
+                &crc);
+            if (status != NIYAH_OK) goto done;
+
+            value = load_u64_le(u64_bytes);
+            if (value > (uint64_t)SIZE_MAX) {
+                status = NIYAH_ERR_CORRUPT_DATA;
+                goto done;
+            }
+            temp.sample_offsets[i] = (size_t)value;
+
+            status = read_crc(
+                file,
+                u64_bytes,
+                sizeof(u64_bytes),
+                &crc);
+            if (status != NIYAH_OK) goto done;
+
+            value = load_u64_le(u64_bytes);
+            if (value > (uint64_t)SIZE_MAX) {
+                status = NIYAH_ERR_CORRUPT_DATA;
+                goto done;
+            }
+            temp.sample_lengths[i] = (size_t)value;
+        }
+    }
+
+    if (fread(
+            footer,
+            1U,
+            sizeof(footer),
+            file) != sizeof(footer)) {
+        status = ferror(file)
+            ? NIYAH_ERR_IO
+            : NIYAH_ERR_CORRUPT_DATA;
         goto done;
     }
+
     if (load_u32_le(footer + 0U) !=
             NIYAH_DATASET_SHARD_CHECKSUM_CRC32 ||
         load_u32_le(footer + 4U) != crc_final(&crc)) {
@@ -593,6 +1076,7 @@ NiyahStatus niyah_dataset_shard_load(
         status = NIYAH_ERR_CORRUPT_DATA;
         goto done;
     }
+
     if (ferror(file)) {
         status = NIYAH_ERR_IO;
         goto done;
@@ -600,8 +1084,12 @@ NiyahStatus niyah_dataset_shard_load(
 
     status = validate_shard(&temp, tokenizer);
 
+    if (status == NIYAH_ERR_INVALID_CONFIG)
+        status = NIYAH_ERR_CORRUPT_DATA;
+
 done:
     close_result = fclose(file);
+
     if (status == NIYAH_OK && close_result != 0)
         status = NIYAH_ERR_IO;
 

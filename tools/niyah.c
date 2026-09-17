@@ -16,6 +16,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define NIYAH_PREPARE_RECORD_STREAM 0
+#define NIYAH_PREPARE_RECORD_BLANK_LINE 1
+
 typedef struct NiyahPrepareOptions {
     const char *corpus_path;
     const char *tokenizer_out;
@@ -23,6 +26,7 @@ typedef struct NiyahPrepareOptions {
     uint32_t target_vocab_size;
     uint32_t min_pair_frequency;
     size_t sequence_length;
+    int record_mode;
     int have_target_vocab_size;
     int have_min_pair_frequency;
     int have_sequence_length;
@@ -45,6 +49,7 @@ static void usage(FILE *stream)
         "Usage:\n"
         "  niyah prepare --corpus FILE --tokenizer-out TOK --shard-out SHARD\n"
         "      --target-vocab N --min-pair-frequency N --sequence-length N\n"
+        "      [--record-mode stream|blank-line]\n"
         "\n"
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
@@ -200,6 +205,19 @@ static int parse_prepare_options(
                 return 0;
             }
             options->have_sequence_length = 1;
+        } else if (strcmp(key, "--record-mode") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+
+            if (strcmp(value, "stream") == 0) {
+                options->record_mode =
+                    NIYAH_PREPARE_RECORD_STREAM;
+            } else if (strcmp(value, "blank-line") == 0) {
+                options->record_mode =
+                    NIYAH_PREPARE_RECORD_BLANK_LINE;
+            } else {
+                return 0;
+            }
         } else {
             return 0;
         }
@@ -314,6 +332,90 @@ static int read_file_bytes(
     return 1;
 }
 
+static int blank_line_records(
+    const uint8_t *text,
+    size_t text_size,
+    size_t *offsets,
+    size_t *lengths,
+    size_t capacity,
+    size_t *out_count)
+{
+    size_t record_start = 0U;
+    size_t position = 0U;
+    size_t count = 0U;
+
+    if (text == NULL ||
+        text_size == 0U ||
+        out_count == NULL)
+        return 0;
+
+    while (position < text_size) {
+        const size_t line_start = position;
+        size_t line_end;
+        int blank;
+
+        while (position < text_size &&
+               text[position] != (uint8_t)'\n')
+            position += 1U;
+
+        line_end = position;
+
+        if (line_end > line_start &&
+            text[line_end - 1U] == (uint8_t)'\r')
+            line_end -= 1U;
+
+        blank = line_end == line_start;
+
+        if (position < text_size)
+            position += 1U;
+
+        if (blank) {
+            size_t record_end = line_start;
+
+            while (record_end > record_start &&
+                   (text[record_end - 1U] == (uint8_t)'\n' ||
+                    text[record_end - 1U] == (uint8_t)'\r'))
+                record_end -= 1U;
+
+            if (record_end > record_start) {
+                if (offsets != NULL) {
+                    if (count >= capacity)
+                        return 0;
+                    offsets[count] = record_start;
+                    lengths[count] =
+                        record_end - record_start;
+                }
+                count += 1U;
+            }
+
+            record_start = position;
+        }
+    }
+
+    {
+        size_t record_end = text_size;
+
+        while (record_end > record_start &&
+               (text[record_end - 1U] == (uint8_t)'\n' ||
+                text[record_end - 1U] == (uint8_t)'\r'))
+            record_end -= 1U;
+
+        if (record_end > record_start) {
+            if (offsets != NULL) {
+                if (count >= capacity)
+                    return 0;
+                offsets[count] = record_start;
+                lengths[count] =
+                    record_end - record_start;
+            }
+            count += 1U;
+        }
+    }
+
+    *out_count = count;
+    return count != 0U;
+}
+
 static int prepare_command(int argc, char **argv)
 {
     NiyahPrepareOptions options;
@@ -322,6 +424,9 @@ static int prepare_command(int argc, char **argv)
     NiyahDatasetShard shard;
     uint8_t *corpus = NULL;
     size_t corpus_size = 0U;
+    size_t *record_offsets = NULL;
+    size_t *record_lengths = NULL;
+    size_t record_count = 0U;
     NiyahStatus status;
     int tokenizer_created = 0;
     int shard_created = 0;
@@ -364,12 +469,77 @@ static int prepare_command(int argc, char **argv)
         goto cleanup;
     }
 
-    status = niyah_dataset_shard_build_text(
-        tokenizer,
-        corpus,
-        corpus_size,
-        options.sequence_length,
-        &shard);
+    if (options.record_mode ==
+        NIYAH_PREPARE_RECORD_BLANK_LINE) {
+        size_t geometry_bytes;
+
+        if (!blank_line_records(
+                corpus,
+                corpus_size,
+                NULL,
+                NULL,
+                0U,
+                &record_count)) {
+            exit_code = fail_status(
+                "record_split",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
+        if (record_count > SIZE_MAX / sizeof(size_t)) {
+            exit_code = fail_status(
+                "record_allocation",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+
+        geometry_bytes =
+            record_count * sizeof(size_t);
+
+        record_offsets =
+            (size_t *)malloc(geometry_bytes);
+        record_lengths =
+            (size_t *)malloc(geometry_bytes);
+
+        if (record_offsets == NULL ||
+            record_lengths == NULL) {
+            exit_code = fail_status(
+                "record_allocation",
+                NIYAH_ERR_OUT_OF_MEMORY);
+            goto cleanup;
+        }
+
+        if (!blank_line_records(
+                corpus,
+                corpus_size,
+                record_offsets,
+                record_lengths,
+                record_count,
+                &record_count)) {
+            exit_code = fail_status(
+                "record_split",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
+        status = niyah_dataset_shard_build_records(
+            tokenizer,
+            corpus,
+            corpus_size,
+            record_offsets,
+            record_lengths,
+            record_count,
+            options.sequence_length,
+            &shard);
+    } else {
+        status = niyah_dataset_shard_build_text(
+            tokenizer,
+            corpus,
+            corpus_size,
+            options.sequence_length,
+            &shard);
+    }
+
     if (status != NIYAH_OK) {
         exit_code = fail_status("shard_build", status);
         goto cleanup;
@@ -416,6 +586,8 @@ cleanup:
 
     niyah_dataset_shard_destroy(&shard);
     niyah_tokenizer_destroy(tokenizer);
+    free(record_lengths);
+    free(record_offsets);
     free(corpus);
     return exit_code;
 }

@@ -331,7 +331,7 @@ static void test_corruption_rejection(void)
     CHECK(rejected.tokens == NULL);
     data[size - 1U] ^= 1U;
 
-    data[8U] = 2U;
+    data[8U] = 3U;
     CHECK(write_all(bad_path, data, size));
     CHECK(niyah_dataset_shard_load(
               bad_path, tokenizer, &rejected) ==
@@ -367,6 +367,129 @@ done:
     (void)remove(bad_path);
 }
 
+static void test_boundary_aware_v2(void)
+{
+    static const char path[] =
+        "niyah_dataset_shard_v2.bin";
+    static const uint8_t corpus[] =
+        "aaaa\n\nbbbb";
+    static const size_t offsets[] = {0U, 6U};
+    static const size_t lengths[] = {4U, 4U};
+
+    NiyahTokenizerTrainConfig config;
+    NiyahTokenizer *tokenizer = NULL;
+    NiyahDatasetShard shard;
+    NiyahDatasetShard loaded;
+    const uint32_t *tokens = NULL;
+    const uint32_t *targets = NULL;
+    size_t count = 0U;
+    unsigned char *bytes = NULL;
+    size_t byte_count = 0U;
+    uint8_t id_a[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t id_b[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+
+    memset(&shard, 0, sizeof(shard));
+    memset(&loaded, 0, sizeof(loaded));
+    (void)remove(path);
+
+    config.target_vocab_size =
+        NIYAH_TOKENIZER_BASE_VOCAB_SIZE;
+    config.min_pair_frequency = 1U;
+
+    CHECK(niyah_tokenizer_train(
+              corpus,
+              sizeof(corpus) - 1U,
+              &config,
+              &tokenizer) == NIYAH_OK);
+
+    CHECK(tokenizer != NULL);
+    if (tokenizer == NULL) goto done;
+
+    CHECK(niyah_dataset_shard_build_records(
+              tokenizer,
+              corpus,
+              sizeof(corpus) - 1U,
+              offsets,
+              lengths,
+              2U,
+              16U,
+              &shard) == NIYAH_OK);
+
+    CHECK(shard.has_explicit_samples != 0);
+    CHECK(shard.sample_count == 2U);
+    CHECK(shard.sample_offsets != NULL);
+    CHECK(shard.sample_lengths != NULL);
+
+    CHECK(niyah_dataset_shard_sample(
+              &shard,
+              0U,
+              &tokens,
+              &targets,
+              &count) == NIYAH_OK);
+    CHECK(count == 5U);
+    CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
+    CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+
+    CHECK(niyah_dataset_shard_sample(
+              &shard,
+              1U,
+              &tokens,
+              &targets,
+              &count) == NIYAH_OK);
+    CHECK(count == 5U);
+    CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
+    CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+
+    CHECK(niyah_dataset_shard_identity_sha256(
+              &shard,
+              id_a) == NIYAH_OK);
+
+    CHECK(niyah_dataset_shard_save(
+              &shard,
+              tokenizer,
+              path) == NIYAH_OK);
+
+    bytes = read_all(path, &byte_count);
+    CHECK(bytes != NULL);
+    CHECK(byte_count > 12U);
+
+    if (bytes != NULL && byte_count > 12U) {
+        CHECK(bytes[8U] == 2U);
+        CHECK(bytes[9U] == 0U);
+        CHECK(bytes[10U] == 0U);
+        CHECK(bytes[11U] == 0U);
+    }
+
+    CHECK(niyah_dataset_shard_load(
+              path,
+              tokenizer,
+              &loaded) == NIYAH_OK);
+
+    CHECK(loaded.has_explicit_samples != 0);
+    CHECK(loaded.sample_count == shard.sample_count);
+    CHECK(loaded.token_count == shard.token_count);
+    CHECK(memcmp(
+              loaded.sample_offsets,
+              shard.sample_offsets,
+              shard.sample_count * sizeof(size_t)) == 0);
+    CHECK(memcmp(
+              loaded.sample_lengths,
+              shard.sample_lengths,
+              shard.sample_count * sizeof(size_t)) == 0);
+
+    CHECK(niyah_dataset_shard_identity_sha256(
+              &loaded,
+              id_b) == NIYAH_OK);
+    CHECK(memcmp(id_a, id_b, sizeof(id_a)) == 0);
+
+done:
+    free(bytes);
+    niyah_dataset_shard_destroy(&loaded);
+    niyah_dataset_shard_destroy(&shard);
+    niyah_tokenizer_destroy(tokenizer);
+    (void)remove(path);
+}
+
 static void test_invalid_inputs(void)
 {
     static const uint8_t corpus[] = "aaaaaaaaaaaaaaaa";
@@ -398,6 +521,7 @@ int main(void)
     test_shard_content_identity();
     test_persistence_and_identity();
     test_corruption_rejection();
+    test_boundary_aware_v2();
     test_invalid_inputs();
 
     if (failures != 0) {
@@ -409,5 +533,6 @@ int main(void)
     puts("P6H_BINARY_SHARD_V1=PASS");
     puts("P6H_TOKENIZER_BINDING=PASS");
     puts("P6H_CORRUPTION_REJECTION=PASS");
+    puts("P8D_BOUNDARY_AWARE_SHARD_V2=PASS");
     return 0;
 }
