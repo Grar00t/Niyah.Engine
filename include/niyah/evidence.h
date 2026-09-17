@@ -25,6 +25,18 @@ NiyahStatus niyah_evidence_root_sha256(
     uint8_t
         out_root[NIYAH_EVIDENCE_ROOT_SHA256_SIZE]);
 
+NiyahStatus niyah_evidence_verify_root(
+    const NiyahExecutionReceipt *receipt,
+    const uint8_t
+        checkpoint_sha256[
+            NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE],
+    const uint8_t
+        tokenizer_sha256[
+            NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE],
+    const uint8_t
+        claimed_root[
+            NIYAH_EVIDENCE_ROOT_SHA256_SIZE]);
+
 #ifdef __cplusplus
 }
 #endif
