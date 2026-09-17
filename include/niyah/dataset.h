@@ -72,7 +72,9 @@ typedef struct NiyahDatasetShard {
     size_t sample_count;
     size_t *sample_offsets;
     size_t *sample_lengths;
+    size_t *sample_loss_starts;
     int has_explicit_samples;
+    int has_loss_starts;
     uint8_t tokenizer_identity[NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE];
 } NiyahDatasetShard;
 
@@ -111,6 +113,31 @@ NiyahStatus niyah_dataset_shard_build_records(
     size_t sequence_length,
     NiyahDatasetShard *out_shard);
 
+typedef struct NiyahDatasetSupervisedRecord {
+    size_t prompt_offset;
+    size_t prompt_length;
+    size_t response_offset;
+    size_t response_length;
+} NiyahDatasetSupervisedRecord;
+
+/* Build one supervised causal sample per prompt/response record.
+ *
+ * Stored record:
+ *   BOS, tokenizer(prompt), tokenizer(response), EOS
+ *
+ * Prompt tokens remain causal context. Direct objective supervision begins
+ * at the first response target and includes the following EOS target.
+ * Each complete record must fit in sequence_length transitions.
+ */
+NiyahStatus niyah_dataset_shard_build_supervised_records(
+    const NiyahTokenizer *tokenizer,
+    const uint8_t *text,
+    size_t text_size,
+    const NiyahDatasetSupervisedRecord *records,
+    size_t record_count,
+    size_t sequence_length,
+    NiyahDatasetShard *out_shard);
+
 void niyah_dataset_shard_destroy(NiyahDatasetShard *shard);
 
 NiyahStatus niyah_dataset_shard_sample(
@@ -119,6 +146,14 @@ NiyahStatus niyah_dataset_shard_sample(
     const uint32_t **out_tokens,
     const uint32_t **out_targets,
     size_t *out_token_count);
+
+NiyahStatus niyah_dataset_shard_sample_with_loss(
+    const NiyahDatasetShard *shard,
+    size_t sample_index,
+    const uint32_t **out_tokens,
+    const uint32_t **out_targets,
+    size_t *out_token_count,
+    size_t *out_loss_start);
 
 /* Stable content identity over tokenizer identity, sample geometry, and the
  * canonical token stream. This proves content identity, not semantic truth
@@ -137,7 +172,8 @@ NiyahStatus niyah_dataset_collection_identity_sha256(
     size_t shard_count,
     uint8_t out_identity[NIYAH_DATASET_COLLECTION_IDENTITY_SHA256_SIZE]);
 
-/* Binary NIYAHSRD V1/V2 persistence. V2 stores explicit sample geometry.
+/* Binary NIYAHSRD V1/V2/V3 persistence. V2 stores explicit sample geometry;
+ * V3 additionally stores per-sample objective loss starts.
  * The tokenizer SHA-256 identity is required
  * and checked on load. CRC32 detects accidental corruption only; it is not an
  * authenticity mechanism.

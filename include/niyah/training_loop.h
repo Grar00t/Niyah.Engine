@@ -15,6 +15,7 @@ typedef struct NiyahTrainingSample {
     const uint32_t *tokens;
     const uint32_t *targets;
     size_t token_count;
+    size_t loss_start;
 } NiyahTrainingSample;
 
 /* Build zero-copy training sample descriptors over one loaded dataset shard.

@@ -52,7 +52,7 @@ static void test_deterministic_run(void)
     static const uint32_t t2[] = {3U, 4U, 5U};
     static const uint32_t y2[] = {4U, 5U, 6U};
     const NiyahTrainingSample samples[] = {
-        {t0, y0, 3U}, {t1, y1, 3U}, {t2, y2, 3U}
+        {t0, y0, 3U, 0U}, {t1, y1, 3U, 0U}, {t2, y2, 3U, 0U}
     };
     NiyahModelConfig config = test_config();
     NiyahAdamWConfig opt = optimizer_config();
@@ -101,7 +101,7 @@ static void test_cursor_rollback_on_backward_failure(void)
 {
     static const uint32_t tokens[] = {1U, 2U, 3U};
     static const uint32_t bad_targets[] = {2U, 3U, 99U};
-    const NiyahTrainingSample sample = {tokens, bad_targets, 3U};
+    const NiyahTrainingSample sample = {tokens, bad_targets, 3U, 0U};
     NiyahModelConfig config = test_config();
     NiyahAdamWConfig opt = optimizer_config();
     NiyahModel model;
@@ -152,7 +152,7 @@ static void test_loss_decreases(void)
 {
     static const uint32_t tokens[] = {1U, 2U, 3U};
     static const uint32_t targets[] = {2U, 3U, 4U};
-    const NiyahTrainingSample sample = {tokens, targets, 3U};
+    const NiyahTrainingSample sample = {tokens, targets, 3U, 0U};
     NiyahModelConfig config = test_config();
     NiyahAdamWConfig opt = optimizer_config();
     NiyahModel model;
@@ -213,7 +213,7 @@ static void test_accumulated_step_matches_single_step(void)
 {
     static const uint32_t tokens[] = {1U, 2U, 3U};
     static const uint32_t targets[] = {2U, 3U, 4U};
-    const NiyahTrainingSample sample = {tokens, targets, 3U};
+    const NiyahTrainingSample sample = {tokens, targets, 3U, 0U};
     NiyahModelConfig config = test_config();
     NiyahAdamWConfig opt = optimizer_config();
     NiyahModel a, b;
@@ -299,7 +299,7 @@ static void test_minibatch_accumulation_deterministic(void)
     static const uint32_t t2[] = {3U, 4U, 5U};
     static const uint32_t y2[] = {4U, 5U, 6U};
     const NiyahTrainingSample samples[] = {
-        {t0, y0, 3U}, {t1, y1, 3U}, {t2, y2, 3U}
+        {t0, y0, 3U, 0U}, {t1, y1, 3U, 0U}, {t2, y2, 3U, 0U}
     };
     NiyahModelConfig config = test_config();
     NiyahAdamWConfig opt = optimizer_config();
@@ -354,8 +354,8 @@ static void test_accumulated_step_rolls_back_whole_group(void)
     static const uint32_t good_targets[] = {2U, 3U, 4U};
     static const uint32_t bad_targets[] = {2U, 3U, 99U};
     NiyahTrainingSample samples[] = {
-        {good_tokens, good_targets, 3U},
-        {good_tokens, bad_targets, 3U}
+        {good_tokens, good_targets, 3U, 0U},
+        {good_tokens, bad_targets, 3U, 0U}
     };
     NiyahModelConfig config = test_config();
     NiyahAdamWConfig opt = optimizer_config();
