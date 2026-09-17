@@ -382,6 +382,31 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_evidence_test tests/test_evidence.c)
     target_link_libraries(niyah_evidence_test PRIVATE niyah)
 
+    add_executable(
+        niyah_evidence_v1_format_test
+        tests/test_evidence_v1_format.c
+    )
+    target_link_libraries(
+        niyah_evidence_v1_format_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_evidence_v1_format_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_evidence_v1_format_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
     if(MSVC)
         target_compile_options(niyah_ir_test PRIVATE /W4 /WX)
     else()
@@ -394,6 +419,11 @@ if(NIYAH_BUILD_TESTS)
     add_test(NAME niyah_ir_test COMMAND niyah_ir_test)
     add_test(NAME niyah_receipt_test COMMAND niyah_receipt_test)
     add_test(NAME niyah_evidence_test COMMAND niyah_evidence_test)
+
+    add_test(
+        NAME niyah_evidence_v1_format_test
+        COMMAND niyah_evidence_v1_format_test
+    )
 
     add_executable(niyah_training_fixture tests/make_training_fixture.c)
     target_link_libraries(niyah_training_fixture PRIVATE niyah)
