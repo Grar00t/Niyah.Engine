@@ -31,6 +31,21 @@ NiyahStatus niyah_cross_entropy_loss(const float *logits,
                                      float *dlogits,
                                      size_t dlogits_count);
 
+/* Mean cross-entropy over targets in [loss_start, token_count).
+ * Earlier positions remain part of the causal forward context but contribute
+ * zero direct objective gradient. loss_start == 0 is exactly the canonical
+ * all-token objective.
+ */
+NiyahStatus niyah_cross_entropy_loss_masked(
+    const float *logits,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t vocab_size,
+    size_t loss_start,
+    float *out_loss,
+    float *dlogits,
+    size_t dlogits_count);
+
 /* Canonical objective-only path. It uses the exact inference forward API. */
 NiyahStatus niyah_train_loss(const NiyahModel *model,
                              const uint32_t *tokens,
@@ -61,6 +76,21 @@ NiyahStatus niyah_train_backward(const NiyahModel *model,
                                  NiyahModelGradients *gradients,
                                  float *workspace,
                                  size_t workspace_count);
+
+/* Backward with the same causal forward context as niyah_train_backward,
+ * while supervising only targets in [loss_start, token_count).
+ * loss_start == 0 is equivalent to niyah_train_backward.
+ */
+NiyahStatus niyah_train_backward_masked(
+    const NiyahModel *model,
+    const uint32_t *tokens,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t loss_start,
+    float *out_loss,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count);
 
 #ifdef __cplusplus
 }

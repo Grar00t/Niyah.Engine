@@ -306,8 +306,158 @@ static void test_gradient_step_decreases_loss(void)
     niyah_model_destroy(&model);
 }
 
+
+static void test_masked_backward(void)
+{
+    NiyahModelConfig config;
+    NiyahModel model;
+    NiyahModelGradients full;
+    NiyahModelGradients mask0;
+    NiyahModelGradients tail;
+    static const uint32_t tokens[] = {
+        1U, 2U, 3U
+    };
+    static const uint32_t targets[] = {
+        2U, 3U, 4U
+    };
+    size_t workspace_count = 0U;
+    float *workspace = NULL;
+    float full_loss = 0.0f;
+    float mask0_loss = 0.0f;
+    float tail_loss = 0.0f;
+    size_t i;
+    int differs = 0;
+
+    memset(&config, 0, sizeof(config));
+    memset(&model, 0, sizeof(model));
+    memset(&full, 0, sizeof(full));
+    memset(&mask0, 0, sizeof(mask0));
+    memset(&tail, 0, sizeof(tail));
+
+    config.vocab_size = 8U;
+    config.context_length = 8U;
+    config.embedding_dim = 8U;
+    config.n_layers = 1U;
+    config.n_heads = 2U;
+    config.n_kv_heads = 1U;
+    config.ffn_hidden_dim = 16U;
+    config.rms_norm_eps = 0.00001f;
+    config.tie_word_embeddings = 1;
+
+    CHECK(niyah_model_create(
+              &model,
+              &config) == NIYAH_OK);
+
+    CHECK(niyah_model_reset_parameters(
+              &model,
+              UINT64_C(12345)) == NIYAH_OK);
+
+    CHECK(niyah_model_gradients_create(
+              &full,
+              &model) == NIYAH_OK);
+    CHECK(niyah_model_gradients_create(
+              &mask0,
+              &model) == NIYAH_OK);
+    CHECK(niyah_model_gradients_create(
+              &tail,
+              &model) == NIYAH_OK);
+
+    CHECK(niyah_train_backward_workspace_floats(
+              &config,
+              3U,
+              &workspace_count) == NIYAH_OK);
+
+    workspace = (float *)calloc(
+        workspace_count,
+        sizeof(float));
+    CHECK(workspace != NULL);
+
+    if (workspace != NULL) {
+        CHECK(niyah_train_backward(
+                  &model,
+                  tokens,
+                  targets,
+                  3U,
+                  &full_loss,
+                  &full,
+                  workspace,
+                  workspace_count) == NIYAH_OK);
+
+        memset(
+            workspace,
+            0,
+            workspace_count * sizeof(float));
+
+        CHECK(niyah_train_backward_masked(
+                  &model,
+                  tokens,
+                  targets,
+                  3U,
+                  0U,
+                  &mask0_loss,
+                  &mask0,
+                  workspace,
+                  workspace_count) == NIYAH_OK);
+
+        CHECK(full_loss == mask0_loss);
+        CHECK(full.count == mask0.count);
+
+        for (i = 0U; i < full.count; ++i) {
+            CHECK(full.values[i] == mask0.values[i]);
+        }
+
+        memset(
+            workspace,
+            0,
+            workspace_count * sizeof(float));
+
+        CHECK(niyah_train_backward_masked(
+                  &model,
+                  tokens,
+                  targets,
+                  3U,
+                  2U,
+                  &tail_loss,
+                  &tail,
+                  workspace,
+                  workspace_count) == NIYAH_OK);
+
+        CHECK(isfinite(tail_loss));
+
+        for (i = 0U; i < full.count; ++i) {
+            if (full.values[i] != tail.values[i]) {
+                differs = 1;
+                break;
+            }
+        }
+
+        CHECK(differs != 0);
+
+        CHECK(niyah_train_backward_masked(
+                  &model,
+                  tokens,
+                  targets,
+                  3U,
+                  3U,
+                  &tail_loss,
+                  &tail,
+                  workspace,
+                  workspace_count) ==
+              NIYAH_ERR_INVALID_ARGUMENT);
+    }
+
+    free(workspace);
+    niyah_model_gradients_destroy(&tail);
+    niyah_model_gradients_destroy(&mask0);
+    niyah_model_gradients_destroy(&full);
+    niyah_model_destroy(&model);
+
+    puts("P8F_MASKED_BACKWARD=PASS");
+}
+
 int main(void)
 {
+    test_masked_backward();
     test_backward_and_finite_difference();
     test_rejected_backward_preserves_gradients();
     test_tied_embedding_accumulation();
