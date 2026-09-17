@@ -1,6 +1,7 @@
 #include "niyah/checkpoint.h"
 #include "niyah/dataset.h"
 #include "niyah/decode.h"
+#include "niyah/evidence.h"
 #include "niyah/generate.h"
 #include "niyah/ir.h"
 #include "niyah/receipt.h"
@@ -1257,6 +1258,9 @@ static int run_command(int argc, char **argv)
             uint8_t tokenizer_hash[
                 NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
 
+            uint8_t evidence_root[
+                NIYAH_EVIDENCE_ROOT_SHA256_SIZE];
+
             receipt.ir = ir;
             receipt.result = result;
 
@@ -1306,6 +1310,19 @@ static int run_command(int argc, char **argv)
                 goto cleanup;
             }
 
+            status = niyah_evidence_root_sha256(
+                receipt_hash,
+                checkpoint_hash,
+                tokenizer_hash,
+                evidence_root);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "evidence_root",
+                    status);
+                goto cleanup;
+            }
+
             if (fputs(
                     "NIYAH_EVIDENCE_V1\n",
                     stdout) == EOF ||
@@ -1320,7 +1337,11 @@ static int run_command(int argc, char **argv)
                 !write_hex_field(
                     "tokenizer_sha256",
                     tokenizer_hash,
-                    sizeof(tokenizer_hash))) {
+                    sizeof(tokenizer_hash)) ||
+                !write_hex_field(
+                    "evidence_root_sha256",
+                    evidence_root,
+                    sizeof(evidence_root))) {
                 exit_code = fail_status(
                     "stdout_write",
                     NIYAH_ERR_IO);
