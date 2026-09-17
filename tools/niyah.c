@@ -3,6 +3,7 @@
 #include "niyah/decode.h"
 #include "niyah/generate.h"
 #include "niyah/ir.h"
+#include "niyah/receipt.h"
 #include "niyah/optimizer.h"
 #include "niyah/tokenizer.h"
 
@@ -46,6 +47,7 @@ typedef struct NiyahRunOptions {
     int have_max_new_tokens;
     int use_cuda;
     int execute_ir;
+    int emit_receipt;
 } NiyahRunOptions;
 
 static void usage(FILE *stream)
@@ -86,6 +88,33 @@ static int fail_status(const char *stage, NiyahStatus status)
             status_name(status),
             (int)status);
     return 1;
+}
+
+static int write_hex_field(
+    const char *name,
+    const uint8_t *bytes,
+    size_t size)
+{
+    size_t i;
+
+    if (name == NULL || bytes == NULL) {
+        return 0;
+    }
+
+    if (fprintf(stdout, "%s=", name) < 0) {
+        return 0;
+    }
+
+    for (i = 0U; i < size; ++i) {
+        if (fprintf(
+                stdout,
+                "%02x",
+                (unsigned)bytes[i]) < 0) {
+            return 0;
+        }
+    }
+
+    return fputc('\n', stdout) != EOF;
 }
 
 static int parse_u64(const char *text, uint64_t *out)
@@ -855,6 +884,8 @@ static int parse_run_options(
             }
         } else if (strcmp(key, "--execute-ir") == 0) {
             options->execute_ir = 1;
+        } else if (strcmp(key, "--receipt") == 0) {
+            options->emit_receipt = 1;
         } else {
             return 0;
         }
@@ -865,7 +896,9 @@ static int parse_run_options(
            options->prompt != NULL &&
            options->prompt[0] != '\0' &&
            options->have_max_new_tokens &&
-           options->max_new_tokens > 0U;
+           options->max_new_tokens > 0U &&
+           (!options->emit_receipt ||
+            options->execute_ir);
 }
 
 static int run_command(int argc, char **argv)
@@ -1210,9 +1243,110 @@ static int run_command(int argc, char **argv)
             goto cleanup;
         }
 
-        if (fprintf(stdout, "%" PRId64 "\n", result) < 0) {
-            exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
-            goto cleanup;
+        if (options.emit_receipt) {
+            NiyahExecutionReceipt receipt;
+            char receipt_text[256];
+            size_t receipt_length = 0U;
+
+            uint8_t receipt_hash[
+                NIYAH_RECEIPT_SHA256_SIZE];
+
+            uint8_t checkpoint_hash[
+                NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
+
+            uint8_t tokenizer_hash[
+                NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+
+            receipt.ir = ir;
+            receipt.result = result;
+
+            status = niyah_receipt_format(
+                &receipt,
+                receipt_text,
+                sizeof(receipt_text),
+                &receipt_length);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "receipt_format",
+                    status);
+                goto cleanup;
+            }
+
+            status = niyah_receipt_sha256(
+                &receipt,
+                receipt_hash);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "receipt_hash",
+                    status);
+                goto cleanup;
+            }
+
+            status = niyah_checkpoint_identity_sha256(
+                options.checkpoint_path,
+                checkpoint_hash);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "checkpoint_identity",
+                    status);
+                goto cleanup;
+            }
+
+            status = niyah_tokenizer_identity_sha256(
+                tokenizer,
+                tokenizer_hash);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "tokenizer_identity",
+                    status);
+                goto cleanup;
+            }
+
+            if (fputs(
+                    "NIYAH_EVIDENCE_V1\n",
+                    stdout) == EOF ||
+                !write_hex_field(
+                    "receipt_sha256",
+                    receipt_hash,
+                    sizeof(receipt_hash)) ||
+                !write_hex_field(
+                    "checkpoint_sha256",
+                    checkpoint_hash,
+                    sizeof(checkpoint_hash)) ||
+                !write_hex_field(
+                    "tokenizer_sha256",
+                    tokenizer_hash,
+                    sizeof(tokenizer_hash))) {
+                exit_code = fail_status(
+                    "stdout_write",
+                    NIYAH_ERR_IO);
+                goto cleanup;
+            }
+
+            if (fwrite(
+                    receipt_text,
+                    1U,
+                    receipt_length,
+                    stdout) != receipt_length) {
+                exit_code = fail_status(
+                    "stdout_write",
+                    NIYAH_ERR_IO);
+                goto cleanup;
+            }
+        } else {
+            if (fprintf(
+                    stdout,
+                    "%" PRId64 "\n",
+                    result) < 0) {
+                exit_code = fail_status(
+                    "stdout_write",
+                    NIYAH_ERR_IO);
+                goto cleanup;
+            }
         }
     } else {
         if (decoded_size > 0U &&

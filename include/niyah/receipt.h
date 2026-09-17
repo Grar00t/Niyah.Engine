@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define NIYAH_RECEIPT_SHA256_SIZE 32U
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -20,6 +22,10 @@ NiyahStatus niyah_receipt_format(
     char *out,
     size_t out_size,
     size_t *out_length);
+
+NiyahStatus niyah_receipt_sha256(
+    const NiyahExecutionReceipt *receipt,
+    uint8_t out_hash[NIYAH_RECEIPT_SHA256_SIZE]);
 
 #ifdef __cplusplus
 }

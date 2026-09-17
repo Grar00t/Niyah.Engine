@@ -1,4 +1,5 @@
 #include "niyah/receipt.h"
+#include "niyah_sha256.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -78,5 +79,42 @@ NiyahStatus niyah_receipt_format(
         return NIYAH_ERR_IO;
     }
 
+    return NIYAH_OK;
+}
+
+
+NiyahStatus niyah_receipt_sha256(
+    const NiyahExecutionReceipt *receipt,
+    uint8_t out_hash[NIYAH_RECEIPT_SHA256_SIZE])
+{
+    char canonical[256];
+    size_t canonical_length = 0U;
+    NiyahSha256 sha;
+    NiyahStatus status;
+
+    if (receipt == NULL || out_hash == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    status = niyah_receipt_format(
+        receipt,
+        canonical,
+        sizeof(canonical),
+        &canonical_length);
+
+    if (status != NIYAH_OK) {
+        return status;
+    }
+
+    niyah_sha256_init(&sha);
+
+    if (!niyah_sha256_update(
+            &sha,
+            (const unsigned char *)canonical,
+            canonical_length)) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
+    niyah_sha256_final(&sha, out_hash);
     return NIYAH_OK;
 }
