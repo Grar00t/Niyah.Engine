@@ -9,11 +9,12 @@ extern "C" {
 #endif
 
 /*
- * Extract exactly:
- *   first standalone IPv4 address
- *   first IPv4/CIDR network
+ * Extract exactly one standalone valid IPv4 address and exactly
+ * one valid IPv4/CIDR network from the complete natural-language
+ * text.
  *
- * from natural-language text.
+ * Additional valid IPv4 or IPv4/CIDR operands are ambiguous and
+ * fail closed with NIYAH_ERR_INVALID_ARGUMENT.
  *
  * Output is validated through the existing strict network IR rules.
  */

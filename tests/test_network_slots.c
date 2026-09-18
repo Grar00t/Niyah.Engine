@@ -105,5 +105,53 @@ int main(void)
             NIYAH_ERR_INVALID_ARGUMENT);
     }
 
+
+    /*
+     * P9T-A RED:
+     * ambiguous operand sets must fail closed.
+     *
+     * Current first-match extraction is expected to make
+     * several of these assertions FAIL before the fix.
+     */
+    {
+        NiyahNetworkIr ir;
+
+        CHECK(
+            niyah_network_slots_extract_ip_in_cidr(
+                "Is 192.168.1.42 inside "
+                "192.168.1.0/24 or 10.0.0.0/8?",
+                &ir) ==
+            NIYAH_ERR_INVALID_ARGUMENT);
+
+        CHECK(
+            niyah_network_slots_extract_ip_in_cidr(
+                "Is 192.168.1.42 or 192.168.1.43 "
+                "inside 192.168.1.0/24?",
+                &ir) ==
+            NIYAH_ERR_INVALID_ARGUMENT);
+
+        CHECK(
+            niyah_network_slots_extract_ip_in_cidr(
+                "Is 192.168.1.42 inside "
+                "192.168.1.0/24 or "
+                "10.0.0.1 inside 10.0.0.0/8?",
+                &ir) ==
+            NIYAH_ERR_INVALID_ARGUMENT);
+
+        CHECK(
+            niyah_network_slots_extract_ip_in_cidr(
+                "Is 1.1.1.1 inside 0.0.0.0/0 "
+                "and also consider 1.1.1.0/24?",
+                &ir) ==
+            NIYAH_ERR_INVALID_ARGUMENT);
+
+        CHECK(
+            niyah_network_slots_extract_ip_in_cidr(
+                "Is 192.168.1.42 inside "
+                "192.168.1.0/24? Reference 8.8.8.8.",
+                &ir) ==
+            NIYAH_ERR_INVALID_ARGUMENT);
+    }
+
     return 0;
 }

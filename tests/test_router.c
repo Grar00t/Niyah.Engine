@@ -125,5 +125,36 @@ int main(void)
             NIYAH_ERR_INVALID_ARGUMENT);
     }
 
+
+    /*
+     * P9T-A RED:
+     * ambiguous membership text must not produce a route.
+     */
+    CHECK(
+        check_none(
+            "Is 192.168.1.42 inside "
+            "192.168.1.0/24 or 10.0.0.0/8?") == 0);
+
+    CHECK(
+        check_none(
+            "Is 192.168.1.42 or 192.168.1.43 "
+            "inside 192.168.1.0/24?") == 0);
+
+    CHECK(
+        check_none(
+            "Is 192.168.1.42 inside "
+            "192.168.1.0/24 or "
+            "10.0.0.1 inside 10.0.0.0/8?") == 0);
+
+    CHECK(
+        check_none(
+            "Is 1.1.1.1 inside 0.0.0.0/0 "
+            "and also consider 1.1.1.0/24?") == 0);
+
+    CHECK(
+        check_none(
+            "Is 192.168.1.42 inside "
+            "192.168.1.0/24? Reference 8.8.8.8.") == 0);
+
     return 0;
 }
