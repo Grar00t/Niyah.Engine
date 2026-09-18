@@ -1,5 +1,7 @@
 #include "niyah/native_execute.h"
 
+#include <stdint.h>
+
 #define CHECK(x) \
     do { \
         if (!(x)) return __LINE__; \
@@ -7,6 +9,9 @@
 
 static int check_network(
     const char *text,
+    uint32_t expected_address,
+    uint32_t expected_network,
+    uint8_t expected_prefix,
     int expected_match)
 {
     NiyahNativeExecutionResult result;
@@ -20,6 +25,22 @@ static int check_network(
     CHECK(
         result.route_kind ==
         NIYAH_ROUTE_NETWORK_IP_IN_CIDR);
+
+    CHECK(
+        result.network_ir.op ==
+        NIYAH_NETWORK_IR_OP_IP_IN_CIDR);
+
+    CHECK(
+        result.network_ir.address ==
+        expected_address);
+
+    CHECK(
+        result.network_ir.network ==
+        expected_network);
+
+    CHECK(
+        result.network_ir.prefix_length ==
+        expected_prefix);
 
     CHECK(
         result.network_match ==
@@ -52,41 +73,62 @@ int main(void)
     CHECK(
         check_network(
             "Is 192.168.1.42 inside 192.168.1.0/24?",
+            UINT32_C(0xC0A8012A),
+            UINT32_C(0xC0A80100),
+            24U,
             1) == 0);
 
     /* English negative membership. */
     CHECK(
         check_network(
             "Is 192.168.2.42 inside 192.168.1.0/24?",
+            UINT32_C(0xC0A8022A),
+            UINT32_C(0xC0A80100),
+            24U,
             0) == 0);
 
     /* Arabic positive membership. */
     CHECK(
         check_network(
             "هل 172.16.5.9 داخل الشبكة 172.16.0.0/16؟",
+            UINT32_C(0xAC100509),
+            UINT32_C(0xAC100000),
+            16U,
             1) == 0);
 
     /* Arabic negative membership. */
     CHECK(
         check_network(
             "هل 172.17.5.9 داخل الشبكة 172.16.0.0/16؟",
+            UINT32_C(0xAC110509),
+            UINT32_C(0xAC100000),
+            16U,
             0) == 0);
 
     /* /0 always contains valid IPv4 addresses. */
     CHECK(
         check_network(
             "Check whether 203.0.113.9 is in 0.0.0.0/0.",
+            UINT32_C(0xCB007109),
+            UINT32_C(0),
+            0U,
             1) == 0);
 
     /* /32 exact match. */
     CHECK(
         check_network(
             "Check whether 10.0.0.1 is in 10.0.0.1/32.",
+            UINT32_C(0x0A000001),
+            UINT32_C(0x0A000001),
+            32U,
             1) == 0);
 
     CHECK(
         check_network(
             "Check whether 10.0.0.2 is in 10.0.0.1/32.",
+            UINT32_C(0x0A000002),
+            UINT32_C(0x0A000001),
+            32U,
             0) == 0);
 
     /*

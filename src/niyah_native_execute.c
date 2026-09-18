@@ -33,8 +33,11 @@ NiyahStatus niyah_native_execute_text(
             return NIYAH_OK;
 
         case NIYAH_ROUTE_NETWORK_IP_IN_CIDR:
+            out_result->network_ir =
+                route.network_ir;
+
             return niyah_network_ir_execute(
-                &route.network_ir,
+                &out_result->network_ir,
                 &out_result->network_match);
 
         default:

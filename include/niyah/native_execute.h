@@ -12,6 +12,14 @@ typedef struct NiyahNativeExecutionResult {
     NiyahRouteKind route_kind;
 
     /*
+     * Exact typed IR that was executed.
+     *
+     * Valid only when:
+     * route_kind == NIYAH_ROUTE_NETWORK_IP_IN_CIDR
+     */
+    NiyahNetworkIr network_ir;
+
+    /*
      * Valid only when:
      * route_kind == NIYAH_ROUTE_NETWORK_IP_IN_CIDR
      *
