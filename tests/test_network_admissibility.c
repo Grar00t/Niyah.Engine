@@ -117,6 +117,59 @@ int main(void)
         expect_reject(
             "Is 192.168.1.42 inside 192.168.1.7/24?") == 0);
 
+    /*
+     * P9T-O RED:
+     * membership cues under explicit negation or
+     * meta-linguistic mention must fail closed.
+     */
+
+    CHECK(
+        expect_reject(
+            "Do not test whether "
+            "198.51.100.77 belongs to "
+            "198.51.100.0/24; just print them.") == 0);
+
+    CHECK(
+        expect_reject(
+            "Explain what belongs to means using "
+            "198.51.100.77 and "
+            "198.51.100.0/24.") == 0);
+
+    CHECK(
+        expect_reject(
+            "لا تختبر ما إذا كان "
+            "172.16.5.9 داخل الشبكة "
+            "172.16.0.0/16؛ فقط اطبع القيم.") == 0);
+
+    CHECK(
+        expect_reject(
+            "اشرح عبارة داخل الشبكة باستخدام "
+            "172.16.5.9 و "
+            "172.16.0.0/16.") == 0);
+
+    /*
+     * Negation elsewhere in the sentence must not
+     * become a global veto when the membership
+     * predicate itself is affirmative.
+     */
+    CHECK(
+        expect_accept(
+            "Do not rewrite the values; "
+            "does 198.51.100.77 belong to "
+            "198.51.100.0/24?",
+            UINT32_C(0xC633644D),
+            UINT32_C(0xC6336400),
+            24U) == 0);
+
+    CHECK(
+        expect_accept(
+            "لا تغيّر القيم؛ هل "
+            "172.16.5.9 داخل الشبكة "
+            "172.16.0.0/16؟",
+            UINT32_C(0xAC100509),
+            UINT32_C(0xAC100000),
+            16U) == 0);
+
     /* API contract. */
     {
         NiyahNetworkIr ir;

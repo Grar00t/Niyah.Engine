@@ -108,6 +108,46 @@ int main(void)
         check_none(
             "Is 192.168.1.42 inside 192.168.1.7/24?") == 0);
 
+    /*
+     * P9T-O RED:
+     * deterministic routing must not authorize a
+     * negated membership request.
+     */
+    CHECK(
+        check_none(
+            "Do not test whether "
+            "198.51.100.77 belongs to "
+            "198.51.100.0/24; just print them.") == 0);
+
+    /*
+     * Meta-mention of a membership cue is not a
+     * membership request.
+     */
+    CHECK(
+        check_none(
+            "Explain what belongs to means using "
+            "198.51.100.77 and "
+            "198.51.100.0/24.") == 0);
+
+    CHECK(
+        check_none(
+            "لا تختبر ما إذا كان "
+            "172.16.5.9 داخل الشبكة "
+            "172.16.0.0/16؛ فقط اطبع القيم.") == 0);
+
+    /*
+     * Unrelated negation must not suppress a real
+     * affirmative membership request.
+     */
+    CHECK(
+        check_network(
+            "Do not rewrite the values; "
+            "does 198.51.100.77 belong to "
+            "198.51.100.0/24?",
+            UINT32_C(0xC633644D),
+            UINT32_C(0xC6336400),
+            24U) == 0);
+
     /* API misuse remains an actual error. */
     {
         NiyahRoute route;
