@@ -435,6 +435,31 @@ if(NIYAH_BUILD_TESTS)
     endif()
 
     add_executable(
+        niyah_network_pipeline_test
+        tests/test_network_pipeline.c
+    )
+    target_link_libraries(
+        niyah_network_pipeline_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_network_pipeline_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_network_pipeline_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
         niyah_evidence_v1_format_test
         tests/test_evidence_v1_format.c
     )
@@ -480,6 +505,11 @@ if(NIYAH_BUILD_TESTS)
     add_test(
         NAME niyah_network_ir_test
         COMMAND niyah_network_ir_test
+    )
+
+    add_test(
+        NAME niyah_network_pipeline_test
+        COMMAND niyah_network_pipeline_test
     )
 
     add_test(
