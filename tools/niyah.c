@@ -6,6 +6,8 @@
 #include "niyah/ir.h"
 #include "niyah/native_execute.h"
 #include "niyah/native_format.h"
+#include "niyah/proposal_pipeline.h"
+#include "niyah/proposal_pipeline_format.h"
 #include "niyah/receipt.h"
 #include "niyah/optimizer.h"
 #include "niyah/tokenizer.h"
@@ -50,6 +52,7 @@ typedef struct NiyahRunOptions {
     int have_max_new_tokens;
     int use_cuda;
     int execute_ir;
+    int guarded_proposal_network;
     int emit_receipt;
     const char *evidence_out_path;
 } NiyahRunOptions;
@@ -76,6 +79,8 @@ static void usage(FILE *stream)
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
         "      [--backend cpu|cuda]\n"
+        "      [--execute-ir [--receipt [--evidence-out FILE]]]\n"
+        "      [--guarded-proposal-network]\n"
         "\n"
         "  niyah native --text TEXT\n");
 }
@@ -952,6 +957,10 @@ static int parse_run_options(
             }
         } else if (strcmp(key, "--execute-ir") == 0) {
             options->execute_ir = 1;
+        } else if (strcmp(
+                       key,
+                       "--guarded-proposal-network") == 0) {
+            options->guarded_proposal_network = 1;
         } else if (strcmp(key, "--receipt") == 0) {
             options->emit_receipt = 1;
         } else if (strcmp(key, "--evidence-out") == 0) {
@@ -971,8 +980,14 @@ static int parse_run_options(
            options->prompt[0] != '\0' &&
            options->have_max_new_tokens &&
            options->max_new_tokens > 0U &&
+           (!options->execute_ir ||
+            !options->guarded_proposal_network) &&
            (!options->emit_receipt ||
             options->execute_ir) &&
+           (!options->guarded_proposal_network ||
+            !options->emit_receipt) &&
+           (!options->guarded_proposal_network ||
+            options->evidence_out_path == NULL) &&
            (options->evidence_out_path == NULL ||
             options->emit_receipt);
 }
@@ -1468,7 +1483,100 @@ static int run_command(int argc, char **argv)
 
     decoded[decoded_size] = '\0';
 
-    if (options.execute_ir) {
+    if (options.guarded_proposal_network) {
+        NiyahProposalPolicy policy;
+        NiyahGuardedProposalResult result;
+        char *formatted = NULL;
+        size_t required = 0U;
+        size_t written = 0U;
+
+        if (memchr(
+                decoded,
+                '\0',
+                decoded_size) != NULL) {
+            exit_code = fail_status(
+                "guarded_proposal_text",
+                NIYAH_ERR_INVALID_ARGUMENT);
+            goto cleanup;
+        }
+
+        memset(&policy, 0, sizeof(policy));
+        policy.allow_network = 1;
+
+        status = niyah_guarded_proposal_run(
+            options.prompt,
+            (const char *)decoded,
+            &policy,
+            &result);
+
+        if (status != NIYAH_OK) {
+            exit_code = fail_status(
+                "guarded_proposal",
+                status);
+            goto cleanup;
+        }
+
+        status = niyah_guarded_proposal_format(
+            &result,
+            NULL,
+            0U,
+            &required);
+
+        if (status != NIYAH_OK) {
+            exit_code = fail_status(
+                "guarded_format_query",
+                status);
+            goto cleanup;
+        }
+
+        if (required == SIZE_MAX) {
+            exit_code = fail_status(
+                "guarded_format_allocation",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+
+        formatted = (char *)malloc(
+            required + 1U);
+
+        if (formatted == NULL) {
+            exit_code = fail_status(
+                "guarded_format_allocation",
+                NIYAH_ERR_OUT_OF_MEMORY);
+            goto cleanup;
+        }
+
+        status = niyah_guarded_proposal_format(
+            &result,
+            formatted,
+            required + 1U,
+            &written);
+
+        if (status != NIYAH_OK) {
+            free(formatted);
+
+            exit_code = fail_status(
+                "guarded_format",
+                status);
+            goto cleanup;
+        }
+
+        if (written > 0U &&
+            fwrite(
+                formatted,
+                1U,
+                written,
+                stdout) != written) {
+            free(formatted);
+
+            exit_code = fail_status(
+                "stdout_write",
+                NIYAH_ERR_IO);
+            goto cleanup;
+        }
+
+        free(formatted);
+    } else if (options.execute_ir) {
         NiyahIr ir;
         int64_t result;
 
