@@ -184,6 +184,11 @@ if(NIYAH_BUILD_TESTS)
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_prepare.cmake)
 
+    add_test(NAME niyah_cli_native_test
+        COMMAND ${CMAKE_COMMAND}
+            -DNIYAH_CLI=$<TARGET_FILE:niyah_cli>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_native.cmake)
+
 
     if(NIYAH_ENABLE_CUDA)
         add_executable(niyah_cuda_matvec_test tests/test_cuda_matvec.c)

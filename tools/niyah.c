@@ -4,6 +4,8 @@
 #include "niyah/evidence.h"
 #include "niyah/generate.h"
 #include "niyah/ir.h"
+#include "niyah/native_execute.h"
+#include "niyah/native_format.h"
 #include "niyah/receipt.h"
 #include "niyah/optimizer.h"
 #include "niyah/tokenizer.h"
@@ -52,6 +54,10 @@ typedef struct NiyahRunOptions {
     const char *evidence_out_path;
 } NiyahRunOptions;
 
+typedef struct NiyahNativeOptions {
+    const char *text;
+} NiyahNativeOptions;
+
 typedef struct NiyahVerifyEvidenceOptions {
     const char *file_path;
     const char *checkpoint_path;
@@ -69,7 +75,9 @@ static void usage(FILE *stream)
         "\n"
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
-        "      [--backend cpu|cuda]\n");
+        "      [--backend cpu|cuda]\n"
+        "\n"
+        "  niyah native --text TEXT\n");
 }
 
 static const char *status_name(NiyahStatus status)
@@ -969,6 +977,47 @@ static int parse_run_options(
             options->emit_receipt);
 }
 
+static int parse_native_options(
+    int argc,
+    char **argv,
+    NiyahNativeOptions *options)
+{
+    int i;
+
+    if (options == NULL) {
+        return 0;
+    }
+
+    memset(options, 0, sizeof(*options));
+
+    for (i = 2; i < argc; ++i) {
+        const char *key = argv[i];
+        const char *value;
+
+        if (strcmp(key, "--text") == 0) {
+            if (options->text != NULL) {
+                return 0;
+            }
+
+            value = next_value(
+                argc,
+                argv,
+                &i);
+
+            if (value == NULL ||
+                value[0] == '\0') {
+                return 0;
+            }
+
+            options->text = value;
+        } else {
+            return 0;
+        }
+    }
+
+    return options->text != NULL;
+}
+
 static int parse_verify_evidence_options(
     int argc,
     char **argv,
@@ -1597,6 +1646,101 @@ cleanup:
     return exit_code;
 }
 
+static int native_command(
+    int argc,
+    char **argv)
+{
+    NiyahNativeOptions options;
+    NiyahNativeExecutionResult result;
+    NiyahStatus status;
+    char *formatted = NULL;
+    size_t required = 0U;
+    size_t written = 0U;
+    int exit_code = 1;
+
+    if (!parse_native_options(
+            argc,
+            argv,
+            &options)) {
+        usage(stderr);
+        return 2;
+    }
+
+    status = niyah_native_execute_text(
+        options.text,
+        &result);
+
+    if (status != NIYAH_OK) {
+        return fail_status(
+            "native_execute",
+            status);
+    }
+
+    status = niyah_native_execution_format(
+        &result,
+        NULL,
+        0U,
+        &required);
+
+    if (status != NIYAH_OK) {
+        return fail_status(
+            "native_format_query",
+            status);
+    }
+
+    if (required == SIZE_MAX) {
+        return fail_status(
+            "native_format_allocation",
+            NIYAH_ERR_OVERFLOW);
+    }
+
+    formatted =
+        (char *)malloc(required + 1U);
+
+    if (formatted == NULL) {
+        return fail_status(
+            "native_format_allocation",
+            NIYAH_ERR_OUT_OF_MEMORY);
+    }
+
+    status = niyah_native_execution_format(
+        &result,
+        formatted,
+        required + 1U,
+        &written);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "native_format",
+            status);
+        goto cleanup;
+    }
+
+    if (written != required) {
+        exit_code = fail_status(
+            "native_format_length",
+            NIYAH_ERR_CORRUPT_DATA);
+        goto cleanup;
+    }
+
+    if (fwrite(
+            formatted,
+            1U,
+            written,
+            stdout) != written) {
+        exit_code = fail_status(
+            "stdout_write",
+            NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    exit_code = 0;
+
+cleanup:
+    free(formatted);
+    return exit_code;
+}
+
 static int verify_evidence_command(
     int argc,
     char **argv)
@@ -1723,6 +1867,13 @@ int main(int argc, char **argv)
     if (argc >= 2 &&
         strcmp(argv[1], "verify-evidence") == 0) {
         return verify_evidence_command(
+            argc,
+            argv);
+    }
+
+    if (argc >= 2 &&
+        strcmp(argv[1], "native") == 0) {
+        return native_command(
             argc,
             argv);
     }
