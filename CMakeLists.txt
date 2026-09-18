@@ -97,6 +97,7 @@ add_library(niyah STATIC
     src/niyah_proposal_policy.c
     src/niyah_proposal_execute.c
     src/niyah_proposal_grounding.c
+    src/niyah_proposal_pipeline.c
 )
 
 target_include_directories(niyah
@@ -673,6 +674,31 @@ if(NIYAH_BUILD_TESTS)
     endif()
 
     add_executable(
+        niyah_proposal_pipeline_test
+        tests/test_proposal_pipeline.c
+    )
+    target_link_libraries(
+        niyah_proposal_pipeline_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_proposal_pipeline_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_proposal_pipeline_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
         niyah_evidence_v1_format_test
         tests/test_evidence_v1_format.c
     )
@@ -763,6 +789,11 @@ if(NIYAH_BUILD_TESTS)
     add_test(
         NAME niyah_proposal_grounding_test
         COMMAND niyah_proposal_grounding_test
+    )
+
+    add_test(
+        NAME niyah_proposal_pipeline_test
+        COMMAND niyah_proposal_pipeline_test
     )
 
     add_test(
