@@ -92,6 +92,7 @@ add_library(niyah STATIC
     src/niyah_network_admissibility.c
     src/niyah_router.c
     src/niyah_native_execute.c
+    src/niyah_native_format.c
 )
 
 target_include_directories(niyah
@@ -538,6 +539,31 @@ if(NIYAH_BUILD_TESTS)
     endif()
 
     add_executable(
+        niyah_native_format_test
+        tests/test_native_format.c
+    )
+    target_link_libraries(
+        niyah_native_format_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_native_format_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_native_format_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
         niyah_evidence_v1_format_test
         tests/test_evidence_v1_format.c
     )
@@ -603,6 +629,11 @@ if(NIYAH_BUILD_TESTS)
     add_test(
         NAME niyah_native_execute_test
         COMMAND niyah_native_execute_test
+    )
+
+    add_test(
+        NAME niyah_native_format_test
+        COMMAND niyah_native_format_test
     )
 
     add_test(
