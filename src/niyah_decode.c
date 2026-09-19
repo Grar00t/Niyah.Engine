@@ -225,15 +225,23 @@ static NiyahStatus niyah_attention_one(float *out,
                                        size_t head_dim,
                                        size_t kv_dim)
 {
-    const size_t group_size = n_heads / n_kv_heads;
-    const size_t layer_base = (size_t)layer_index * cache->context_length * kv_dim;
-    const float scale = 1.0f / sqrtf((float)head_dim);
+    size_t group_size;
+    size_t layer_base;
+    float scale;
     size_t head;
 
     if (out == NULL || q == NULL || cache == NULL || scores == NULL ||
-        group_size == 0U || position >= cache->context_length) {
+        n_heads == 0U || n_kv_heads == 0U || head_dim == 0U) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
+
+    group_size = n_heads / n_kv_heads;
+    if (group_size == 0U || position >= cache->context_length) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    layer_base = (size_t)layer_index * cache->context_length * kv_dim;
+    scale = 1.0f / sqrtf((float)head_dim);
 
     memset(out, 0, dim * sizeof(float));
 

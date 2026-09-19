@@ -84,6 +84,21 @@ add_library(niyah STATIC
     src/niyah_training_loop.c
     src/niyah_optimizer.c
     src/niyah_checkpoint.c
+    src/niyah_ir.c
+    src/niyah_receipt.c
+    src/niyah_evidence.c
+    src/niyah_network_ir.c
+    src/niyah_network_slots.c
+    src/niyah_network_admissibility.c
+    src/niyah_router.c
+    src/niyah_native_execute.c
+    src/niyah_native_format.c
+    src/niyah_proposal.c
+    src/niyah_proposal_policy.c
+    src/niyah_proposal_execute.c
+    src/niyah_proposal_grounding.c
+    src/niyah_proposal_pipeline.c
+    src/niyah_proposal_pipeline_format.c
 )
 
 target_include_directories(niyah
@@ -174,6 +189,11 @@ if(NIYAH_BUILD_TESTS)
             -DNIYAH_TRAIN=$<TARGET_FILE:niyah_train>
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_prepare.cmake)
+
+    add_test(NAME niyah_cli_native_test
+        COMMAND ${CMAKE_COMMAND}
+            -DNIYAH_CLI=$<TARGET_FILE:niyah_cli>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_native.cmake)
 
 
     if(NIYAH_ENABLE_CUDA)
@@ -369,6 +389,448 @@ if(NIYAH_BUILD_TESTS)
 
     add_executable(niyah_checkpoint_test tests/test_checkpoint.c)
     target_link_libraries(niyah_checkpoint_test PRIVATE niyah)
+
+    add_executable(niyah_ir_test tests/test_ir.c)
+    target_link_libraries(niyah_ir_test PRIVATE niyah)
+
+    add_executable(niyah_receipt_test tests/test_receipt.c)
+    target_link_libraries(niyah_receipt_test PRIVATE niyah)
+
+    add_executable(niyah_evidence_test tests/test_evidence.c)
+    target_link_libraries(niyah_evidence_test PRIVATE niyah)
+
+    add_executable(
+        niyah_network_slots_test
+        tests/test_network_slots.c
+    )
+    target_link_libraries(
+        niyah_network_slots_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_network_slots_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_network_slots_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_network_ir_test
+        tests/test_network_ir.c
+    )
+    target_link_libraries(
+        niyah_network_ir_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_network_ir_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_network_ir_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_network_pipeline_test
+        tests/test_network_pipeline.c
+    )
+    target_link_libraries(
+        niyah_network_pipeline_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_network_pipeline_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_network_pipeline_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_network_admissibility_test
+        tests/test_network_admissibility.c
+    )
+    target_link_libraries(
+        niyah_network_admissibility_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_network_admissibility_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_network_admissibility_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_router_test
+        tests/test_router.c
+    )
+    target_link_libraries(
+        niyah_router_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_router_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_router_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_native_execute_test
+        tests/test_native_execute.c
+    )
+    target_link_libraries(
+        niyah_native_execute_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_native_execute_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_native_execute_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_native_format_test
+        tests/test_native_format.c
+    )
+    target_link_libraries(
+        niyah_native_format_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_native_format_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_native_format_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_proposal_test
+        tests/test_proposal.c
+    )
+    target_link_libraries(
+        niyah_proposal_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_proposal_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_proposal_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_proposal_policy_test
+        tests/test_proposal_policy.c
+    )
+    target_link_libraries(
+        niyah_proposal_policy_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_proposal_policy_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_proposal_policy_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_proposal_execute_test
+        tests/test_proposal_execute.c
+    )
+    target_link_libraries(
+        niyah_proposal_execute_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_proposal_execute_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_proposal_execute_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_proposal_grounding_test
+        tests/test_proposal_grounding.c
+    )
+    target_link_libraries(
+        niyah_proposal_grounding_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_proposal_grounding_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_proposal_grounding_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_proposal_pipeline_test
+        tests/test_proposal_pipeline.c
+    )
+    target_link_libraries(
+        niyah_proposal_pipeline_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_proposal_pipeline_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_proposal_pipeline_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_proposal_pipeline_format_test
+        tests/test_proposal_pipeline_format.c
+    )
+    target_link_libraries(
+        niyah_proposal_pipeline_format_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_proposal_pipeline_format_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_proposal_pipeline_format_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_executable(
+        niyah_evidence_v1_format_test
+        tests/test_evidence_v1_format.c
+    )
+    target_link_libraries(
+        niyah_evidence_v1_format_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_evidence_v1_format_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_evidence_v1_format_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    if(MSVC)
+        target_compile_options(niyah_ir_test PRIVATE /W4 /WX)
+    else()
+        target_compile_options(
+            niyah_ir_test
+            PRIVATE -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+
+    add_test(NAME niyah_ir_test COMMAND niyah_ir_test)
+    add_test(NAME niyah_receipt_test COMMAND niyah_receipt_test)
+    add_test(NAME niyah_evidence_test COMMAND niyah_evidence_test)
+
+    add_test(
+        NAME niyah_network_slots_test
+        COMMAND niyah_network_slots_test
+    )
+
+    add_test(
+        NAME niyah_network_ir_test
+        COMMAND niyah_network_ir_test
+    )
+
+    add_test(
+        NAME niyah_network_pipeline_test
+        COMMAND niyah_network_pipeline_test
+    )
+
+    add_test(
+        NAME niyah_network_admissibility_test
+        COMMAND niyah_network_admissibility_test
+    )
+
+    add_test(
+        NAME niyah_router_test
+        COMMAND niyah_router_test
+    )
+
+    add_test(
+        NAME niyah_native_execute_test
+        COMMAND niyah_native_execute_test
+    )
+
+    add_test(
+        NAME niyah_native_format_test
+        COMMAND niyah_native_format_test
+    )
+
+    add_test(
+        NAME niyah_proposal_test
+        COMMAND niyah_proposal_test
+    )
+
+    add_test(
+        NAME niyah_proposal_policy_test
+        COMMAND niyah_proposal_policy_test
+    )
+
+    add_test(
+        NAME niyah_proposal_execute_test
+        COMMAND niyah_proposal_execute_test
+    )
+
+    add_test(
+        NAME niyah_proposal_grounding_test
+        COMMAND niyah_proposal_grounding_test
+    )
+
+    add_test(
+        NAME niyah_proposal_pipeline_test
+        COMMAND niyah_proposal_pipeline_test
+    )
+
+    add_test(
+        NAME niyah_proposal_pipeline_format_test
+        COMMAND niyah_proposal_pipeline_format_test
+    )
+
+    add_test(
+        NAME niyah_evidence_v1_format_test
+        COMMAND niyah_evidence_v1_format_test
+    )
 
     add_executable(niyah_training_fixture tests/make_training_fixture.c)
     target_link_libraries(niyah_training_fixture PRIVATE niyah)

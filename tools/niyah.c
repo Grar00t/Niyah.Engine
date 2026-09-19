@@ -1,7 +1,14 @@
 #include "niyah/checkpoint.h"
 #include "niyah/dataset.h"
 #include "niyah/decode.h"
+#include "niyah/evidence.h"
 #include "niyah/generate.h"
+#include "niyah/ir.h"
+#include "niyah/native_execute.h"
+#include "niyah/native_format.h"
+#include "niyah/proposal_pipeline.h"
+#include "niyah/proposal_pipeline_format.h"
+#include "niyah/receipt.h"
 #include "niyah/optimizer.h"
 #include "niyah/tokenizer.h"
 
@@ -10,6 +17,7 @@
 #endif
 
 #include <errno.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,7 +51,21 @@ typedef struct NiyahRunOptions {
     uint64_t seed;
     int have_max_new_tokens;
     int use_cuda;
+    int execute_ir;
+    int guarded_proposal_network;
+    int emit_receipt;
+    const char *evidence_out_path;
 } NiyahRunOptions;
+
+typedef struct NiyahNativeOptions {
+    const char *text;
+} NiyahNativeOptions;
+
+typedef struct NiyahVerifyEvidenceOptions {
+    const char *file_path;
+    const char *checkpoint_path;
+    const char *tokenizer_path;
+} NiyahVerifyEvidenceOptions;
 
 static void usage(FILE *stream)
 {
@@ -56,7 +78,11 @@ static void usage(FILE *stream)
         "\n"
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
-        "      [--backend cpu|cuda]\n");
+        "      [--backend cpu|cuda]\n"
+        "      [--execute-ir [--receipt [--evidence-out FILE]]]\n"
+        "      [--guarded-proposal-network]\n"
+        "\n"
+        "  niyah native --text TEXT\n");
 }
 
 static const char *status_name(NiyahStatus status)
@@ -83,6 +109,85 @@ static int fail_status(const char *stage, NiyahStatus status)
             status_name(status),
             (int)status);
     return 1;
+}
+
+static int write_hex_field(
+    FILE *stream,
+    const char *name,
+    const uint8_t *bytes,
+    size_t size)
+{
+    size_t i;
+
+    if (stream == NULL ||
+        name == NULL ||
+        bytes == NULL) {
+        return 0;
+    }
+
+    if (fprintf(stream, "%s=", name) < 0) {
+        return 0;
+    }
+
+    for (i = 0U; i < size; ++i) {
+        if (fprintf(
+                stream,
+                "%02x",
+                (unsigned)bytes[i]) < 0) {
+            return 0;
+        }
+    }
+
+    return fputc('\n', stream) != EOF;
+}
+
+static int write_evidence_document(
+    FILE *stream,
+    const uint8_t *receipt_hash,
+    const uint8_t *checkpoint_hash,
+    const uint8_t *tokenizer_hash,
+    const uint8_t *evidence_root,
+    const char *receipt_text,
+    size_t receipt_length)
+{
+    if (stream == NULL ||
+        receipt_hash == NULL ||
+        checkpoint_hash == NULL ||
+        tokenizer_hash == NULL ||
+        evidence_root == NULL ||
+        receipt_text == NULL) {
+        return 0;
+    }
+
+    if (fputs("NIYAH_EVIDENCE_V1\n", stream) == EOF ||
+        !write_hex_field(
+            stream,
+            "receipt_sha256",
+            receipt_hash,
+            NIYAH_RECEIPT_SHA256_SIZE) ||
+        !write_hex_field(
+            stream,
+            "checkpoint_sha256",
+            checkpoint_hash,
+            NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE) ||
+        !write_hex_field(
+            stream,
+            "tokenizer_sha256",
+            tokenizer_hash,
+            NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE) ||
+        !write_hex_field(
+            stream,
+            "evidence_root_sha256",
+            evidence_root,
+            NIYAH_EVIDENCE_ROOT_SHA256_SIZE)) {
+        return 0;
+    }
+
+    return fwrite(
+        receipt_text,
+        1U,
+        receipt_length,
+        stream) == receipt_length;
 }
 
 static int parse_u64(const char *text, uint64_t *out)
@@ -850,6 +955,20 @@ static int parse_run_options(
             } else {
                 return 0;
             }
+        } else if (strcmp(key, "--execute-ir") == 0) {
+            options->execute_ir = 1;
+        } else if (strcmp(
+                       key,
+                       "--guarded-proposal-network") == 0) {
+            options->guarded_proposal_network = 1;
+        } else if (strcmp(key, "--receipt") == 0) {
+            options->emit_receipt = 1;
+        } else if (strcmp(key, "--evidence-out") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL || value[0] == '\0') {
+                return 0;
+            }
+            options->evidence_out_path = value;
         } else {
             return 0;
         }
@@ -860,7 +979,182 @@ static int parse_run_options(
            options->prompt != NULL &&
            options->prompt[0] != '\0' &&
            options->have_max_new_tokens &&
-           options->max_new_tokens > 0U;
+           options->max_new_tokens > 0U &&
+           (!options->execute_ir ||
+            !options->guarded_proposal_network) &&
+           (!options->emit_receipt ||
+            options->execute_ir) &&
+           (!options->guarded_proposal_network ||
+            !options->emit_receipt) &&
+           (!options->guarded_proposal_network ||
+            options->evidence_out_path == NULL) &&
+           (options->evidence_out_path == NULL ||
+            options->emit_receipt);
+}
+
+static int parse_native_options(
+    int argc,
+    char **argv,
+    NiyahNativeOptions *options)
+{
+    int i;
+
+    if (options == NULL) {
+        return 0;
+    }
+
+    memset(options, 0, sizeof(*options));
+
+    for (i = 2; i < argc; ++i) {
+        const char *key = argv[i];
+        const char *value;
+
+        if (strcmp(key, "--text") == 0) {
+            if (options->text != NULL) {
+                return 0;
+            }
+
+            value = next_value(
+                argc,
+                argv,
+                &i);
+
+            if (value == NULL ||
+                value[0] == '\0') {
+                return 0;
+            }
+
+            options->text = value;
+        } else {
+            return 0;
+        }
+    }
+
+    return options->text != NULL;
+}
+
+static int parse_verify_evidence_options(
+    int argc,
+    char **argv,
+    NiyahVerifyEvidenceOptions *options)
+{
+    int i;
+
+    memset(options, 0, sizeof(*options));
+
+    for (i = 2; i < argc; ++i) {
+        const char *key = argv[i];
+        const char *value;
+
+        if (strcmp(key, "--file") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->file_path = value;
+        } else if (
+            strcmp(key, "--checkpoint") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->checkpoint_path = value;
+        } else if (
+            strcmp(key, "--tokenizer") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->tokenizer_path = value;
+        } else {
+            return 0;
+        }
+    }
+
+    return options->file_path != NULL &&
+           options->checkpoint_path != NULL &&
+           options->tokenizer_path != NULL;
+}
+
+static NiyahStatus write_evidence_file_atomic(
+    const char *path,
+    const uint8_t *receipt_hash,
+    const uint8_t *checkpoint_hash,
+    const uint8_t *tokenizer_hash,
+    const uint8_t *evidence_root,
+    const char *receipt_text,
+    size_t receipt_length)
+{
+    FILE *stream = NULL;
+    char *temporary = NULL;
+    size_t path_length;
+    NiyahStatus status = NIYAH_ERR_IO;
+
+    if (path == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    path_length = strlen(path);
+
+    if (path_length > SIZE_MAX - 5U) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
+    temporary = (char *)malloc(path_length + 5U);
+    if (temporary == NULL) {
+        return NIYAH_ERR_OUT_OF_MEMORY;
+    }
+
+    if (snprintf(
+            temporary,
+            path_length + 5U,
+            "%s.tmp",
+            path) < 0) {
+        free(temporary);
+        return NIYAH_ERR_IO;
+    }
+
+    (void)remove(temporary);
+
+    stream = niyah_cli_fopen(temporary, "wb");
+    if (stream == NULL) {
+        free(temporary);
+        return NIYAH_ERR_IO;
+    }
+
+    if (!write_evidence_document(
+            stream,
+            receipt_hash,
+            checkpoint_hash,
+            tokenizer_hash,
+            evidence_root,
+            receipt_text,
+            receipt_length)) {
+        goto cleanup;
+    }
+
+    if (fflush(stream) != 0) {
+        goto cleanup;
+    }
+
+    if (fclose(stream) != 0) {
+        stream = NULL;
+        goto cleanup;
+    }
+
+    stream = NULL;
+
+    if (rename(temporary, path) != 0) {
+        goto cleanup;
+    }
+
+    status = NIYAH_OK;
+
+cleanup:
+    if (stream != NULL) {
+        (void)fclose(stream);
+    }
+
+    if (status != NIYAH_OK) {
+        (void)remove(temporary);
+    }
+
+    free(temporary);
+    return status;
 }
 
 static int run_command(int argc, char **argv)
@@ -906,6 +1200,15 @@ static int run_command(int argc, char **argv)
 
     if (!parse_run_options(argc, argv, &options)) {
         usage(stderr);
+        return 2;
+    }
+
+    if (options.evidence_out_path != NULL &&
+        path_exists(options.evidence_out_path)) {
+        fprintf(
+            stderr,
+            "error_stage=evidence_output_exists "
+            "status=NIYAH_ERR_INVALID_ARGUMENT\n");
         return 2;
     }
 
@@ -1151,8 +1454,14 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
-    decoded = (uint8_t *)malloc(
-        decoded_size == 0U ? 1U : decoded_size);
+    if (decoded_size == SIZE_MAX) {
+        exit_code = fail_status(
+            "decode_allocation",
+            NIYAH_ERR_OVERFLOW);
+        goto cleanup;
+    }
+
+    decoded = (uint8_t *)malloc(decoded_size + 1U);
     if (decoded == NULL) {
         exit_code = fail_status(
             "decode_allocation",
@@ -1172,15 +1481,258 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
-    if (decoded_size > 0U &&
-        fwrite(decoded, 1U, decoded_size, stdout) != decoded_size) {
-        exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
-        goto cleanup;
-    }
+    decoded[decoded_size] = '\0';
 
-    if (fputc('\n', stdout) == EOF) {
-        exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
-        goto cleanup;
+    if (options.guarded_proposal_network) {
+        NiyahProposalPolicy policy;
+        NiyahGuardedProposalResult result;
+        char *formatted = NULL;
+        size_t required = 0U;
+        size_t written = 0U;
+
+        if (memchr(
+                decoded,
+                '\0',
+                decoded_size) != NULL) {
+            exit_code = fail_status(
+                "guarded_proposal_text",
+                NIYAH_ERR_INVALID_ARGUMENT);
+            goto cleanup;
+        }
+
+        memset(&policy, 0, sizeof(policy));
+        policy.allow_network = 1;
+
+        status = niyah_guarded_proposal_run(
+            options.prompt,
+            (const char *)decoded,
+            &policy,
+            &result);
+
+        if (status != NIYAH_OK) {
+            exit_code = fail_status(
+                "guarded_proposal",
+                status);
+            goto cleanup;
+        }
+
+        status = niyah_guarded_proposal_format(
+            &result,
+            NULL,
+            0U,
+            &required);
+
+        if (status != NIYAH_OK) {
+            exit_code = fail_status(
+                "guarded_format_query",
+                status);
+            goto cleanup;
+        }
+
+        if (required == SIZE_MAX) {
+            exit_code = fail_status(
+                "guarded_format_allocation",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+
+        formatted = (char *)malloc(
+            required + 1U);
+
+        if (formatted == NULL) {
+            exit_code = fail_status(
+                "guarded_format_allocation",
+                NIYAH_ERR_OUT_OF_MEMORY);
+            goto cleanup;
+        }
+
+        status = niyah_guarded_proposal_format(
+            &result,
+            formatted,
+            required + 1U,
+            &written);
+
+        if (status != NIYAH_OK) {
+            free(formatted);
+
+            exit_code = fail_status(
+                "guarded_format",
+                status);
+            goto cleanup;
+        }
+
+        if (written > 0U &&
+            fwrite(
+                formatted,
+                1U,
+                written,
+                stdout) != written) {
+            free(formatted);
+
+            exit_code = fail_status(
+                "stdout_write",
+                NIYAH_ERR_IO);
+            goto cleanup;
+        }
+
+        free(formatted);
+    } else if (options.execute_ir) {
+        NiyahIr ir;
+        int64_t result;
+
+        if (memchr(decoded, '\0', decoded_size) != NULL) {
+            exit_code = fail_status(
+                "ir_text",
+                NIYAH_ERR_INVALID_ARGUMENT);
+            goto cleanup;
+        }
+
+        status = niyah_ir_parse(
+            (const char *)decoded,
+            &ir);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("ir_parse", status);
+            goto cleanup;
+        }
+
+        status = niyah_ir_execute(&ir, &result);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("ir_execute", status);
+            goto cleanup;
+        }
+
+        if (options.emit_receipt) {
+            NiyahExecutionReceipt receipt;
+            char receipt_text[256];
+            size_t receipt_length = 0U;
+
+            uint8_t receipt_hash[
+                NIYAH_RECEIPT_SHA256_SIZE];
+
+            uint8_t checkpoint_hash[
+                NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
+
+            uint8_t tokenizer_hash[
+                NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+
+            uint8_t evidence_root[
+                NIYAH_EVIDENCE_ROOT_SHA256_SIZE];
+
+            receipt.ir = ir;
+            receipt.result = result;
+
+            status = niyah_receipt_format(
+                &receipt,
+                receipt_text,
+                sizeof(receipt_text),
+                &receipt_length);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "receipt_format",
+                    status);
+                goto cleanup;
+            }
+
+            status = niyah_receipt_sha256(
+                &receipt,
+                receipt_hash);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "receipt_hash",
+                    status);
+                goto cleanup;
+            }
+
+            status = niyah_checkpoint_identity_sha256(
+                options.checkpoint_path,
+                checkpoint_hash);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "checkpoint_identity",
+                    status);
+                goto cleanup;
+            }
+
+            status = niyah_tokenizer_identity_sha256(
+                tokenizer,
+                tokenizer_hash);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "tokenizer_identity",
+                    status);
+                goto cleanup;
+            }
+
+            status = niyah_evidence_root_sha256(
+                receipt_hash,
+                checkpoint_hash,
+                tokenizer_hash,
+                evidence_root);
+
+            if (status != NIYAH_OK) {
+                exit_code = fail_status(
+                    "evidence_root",
+                    status);
+                goto cleanup;
+            }
+
+            if (options.evidence_out_path != NULL) {
+                status = write_evidence_file_atomic(
+                    options.evidence_out_path,
+                    receipt_hash,
+                    checkpoint_hash,
+                    tokenizer_hash,
+                    evidence_root,
+                    receipt_text,
+                    receipt_length);
+
+                if (status != NIYAH_OK) {
+                    exit_code = fail_status(
+                        "evidence_write",
+                        status);
+                    goto cleanup;
+                }
+            }
+
+            if (!write_evidence_document(
+                    stdout,
+                    receipt_hash,
+                    checkpoint_hash,
+                    tokenizer_hash,
+                    evidence_root,
+                    receipt_text,
+                    receipt_length)) {
+                exit_code = fail_status(
+                    "stdout_write",
+                    NIYAH_ERR_IO);
+                goto cleanup;
+            }
+        } else {
+            if (fprintf(
+                    stdout,
+                    "%" PRId64 "\n",
+                    result) < 0) {
+                exit_code = fail_status(
+                    "stdout_write",
+                    NIYAH_ERR_IO);
+                goto cleanup;
+            }
+        }
+    } else {
+        if (decoded_size > 0U &&
+            fwrite(decoded, 1U, decoded_size, stdout) != decoded_size) {
+            exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+            goto cleanup;
+        }
+
+        if (fputc('\n', stdout) == EOF) {
+            exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+            goto cleanup;
+        }
     }
 
     exit_code = 0;
@@ -1202,6 +1754,211 @@ cleanup:
     return exit_code;
 }
 
+static int native_command(
+    int argc,
+    char **argv)
+{
+    NiyahNativeOptions options;
+    NiyahNativeExecutionResult result;
+    NiyahStatus status;
+    char *formatted = NULL;
+    size_t required = 0U;
+    size_t written = 0U;
+    int exit_code = 1;
+
+    if (!parse_native_options(
+            argc,
+            argv,
+            &options)) {
+        usage(stderr);
+        return 2;
+    }
+
+    status = niyah_native_execute_text(
+        options.text,
+        &result);
+
+    if (status != NIYAH_OK) {
+        return fail_status(
+            "native_execute",
+            status);
+    }
+
+    status = niyah_native_execution_format(
+        &result,
+        NULL,
+        0U,
+        &required);
+
+    if (status != NIYAH_OK) {
+        return fail_status(
+            "native_format_query",
+            status);
+    }
+
+    if (required == SIZE_MAX) {
+        return fail_status(
+            "native_format_allocation",
+            NIYAH_ERR_OVERFLOW);
+    }
+
+    formatted =
+        (char *)malloc(required + 1U);
+
+    if (formatted == NULL) {
+        return fail_status(
+            "native_format_allocation",
+            NIYAH_ERR_OUT_OF_MEMORY);
+    }
+
+    status = niyah_native_execution_format(
+        &result,
+        formatted,
+        required + 1U,
+        &written);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "native_format",
+            status);
+        goto cleanup;
+    }
+
+    if (written != required) {
+        exit_code = fail_status(
+            "native_format_length",
+            NIYAH_ERR_CORRUPT_DATA);
+        goto cleanup;
+    }
+
+    if (fwrite(
+            formatted,
+            1U,
+            written,
+            stdout) != written) {
+        exit_code = fail_status(
+            "stdout_write",
+            NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    exit_code = 0;
+
+cleanup:
+    free(formatted);
+    return exit_code;
+}
+
+static int verify_evidence_command(
+    int argc,
+    char **argv)
+{
+    NiyahVerifyEvidenceOptions options;
+    NiyahEvidenceDocument document;
+    NiyahTokenizer *tokenizer = NULL;
+    uint8_t *artifact = NULL;
+    size_t artifact_size = 0U;
+
+    uint8_t checkpoint_identity[
+        NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
+
+    uint8_t tokenizer_identity[
+        NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+
+    NiyahStatus status;
+    int exit_code = 1;
+
+    memset(&document, 0, sizeof(document));
+
+    if (!parse_verify_evidence_options(
+            argc,
+            argv,
+            &options)) {
+        usage(stderr);
+        return 2;
+    }
+
+    if (!read_file_bytes(
+            options.file_path,
+            &artifact,
+            &artifact_size)) {
+        return fail_status(
+            "evidence_read",
+            NIYAH_ERR_IO);
+    }
+
+    status = niyah_evidence_parse_document(
+        (const char *)artifact,
+        artifact_size,
+        &document);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "evidence_parse",
+            status);
+        goto cleanup;
+    }
+
+    status = niyah_checkpoint_identity_sha256(
+        options.checkpoint_path,
+        checkpoint_identity);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "checkpoint_identity",
+            status);
+        goto cleanup;
+    }
+
+    status = niyah_tokenizer_load(
+        options.tokenizer_path,
+        &tokenizer);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "tokenizer_load",
+            status);
+        goto cleanup;
+    }
+
+    status = niyah_tokenizer_identity_sha256(
+        tokenizer,
+        tokenizer_identity);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "tokenizer_identity",
+            status);
+        goto cleanup;
+    }
+
+    status = niyah_evidence_verify_document(
+        &document,
+        checkpoint_identity,
+        tokenizer_identity);
+
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "evidence_verify",
+            status);
+        goto cleanup;
+    }
+
+    if (fputs("VALID\n", stdout) == EOF) {
+        exit_code = fail_status(
+            "stdout_write",
+            NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    exit_code = 0;
+
+cleanup:
+    niyah_tokenizer_destroy(tokenizer);
+    free(artifact);
+    return exit_code;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2 &&
@@ -1213,6 +1970,20 @@ int main(int argc, char **argv)
     if (argc >= 2 &&
         strcmp(argv[1], "prepare") == 0) {
         return prepare_command(argc, argv);
+    }
+
+    if (argc >= 2 &&
+        strcmp(argv[1], "verify-evidence") == 0) {
+        return verify_evidence_command(
+            argc,
+            argv);
+    }
+
+    if (argc >= 2 &&
+        strcmp(argv[1], "native") == 0) {
+        return native_command(
+            argc,
+            argv);
     }
 
     if (argc >= 2 &&
