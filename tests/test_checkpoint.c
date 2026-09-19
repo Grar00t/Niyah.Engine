@@ -218,6 +218,22 @@ static int locate_sections(const unsigned char *data, size_t size, TestSections 
     return 1;
 }
 
+static void test_locate_sections_rejects_short_buffer(void)
+{
+    static const unsigned char short_buffer[40] = {0};
+    TestSections s;
+    size_t i;
+
+    memset(&s, 0xff, sizeof(s));
+    CHECK(locate_sections(short_buffer, sizeof(short_buffer), &s) == 0);
+    CHECK(s.footer_offset == 0U);
+    for (i = 0U; i < 5U; ++i) {
+        CHECK(s.header_offset[i] == 0U);
+        CHECK(s.payload_offset[i] == 0U);
+        CHECK(s.payload_bytes[i] == UINT64_C(0));
+    }
+}
+
 static void rewrite_crc(unsigned char *data, size_t size, size_t footer_offset)
 {
     CHECK(size >= footer_offset + 8U);
@@ -431,7 +447,12 @@ static void test_format_and_malformed(void)
     CHECK(memcmp(valid, "NIYAHCKP", 8U) == 0);
     CHECK(valid[8] == 0x01U && valid[9] == 0x00U && valid[10] == 0x00U && valid[11] == 0x00U);
     CHECK(crc32_reference((const unsigned char *)"123456789", 9U) == UINT32_C(0xcbf43926));
-    CHECK(locate_sections(valid, valid_size, &s));
+    {
+        const int sections_located = locate_sections(valid, valid_size, &s);
+        CHECK(sections_located);
+        /* a zeroed TestSections would make the offset arithmetic below underflow */
+        if (!sections_located) goto cleanup;
+    }
     CHECK(s.footer_offset + 8U == valid_size);
     CHECK(load_u32_le(valid + s.footer_offset) == UINT32_C(1));
     CHECK(load_u32_le(valid + s.footer_offset + 4U) == crc32_reference(valid, s.footer_offset));
@@ -696,6 +717,7 @@ cleanup:
 
 int main(void)
 {
+    test_locate_sections_rejects_short_buffer();
     test_public_adamw_validator();
     roundtrip_case(1, "niyah_checkpoint_tied.bin");
     roundtrip_case(0, "niyah_checkpoint_untied.bin");
