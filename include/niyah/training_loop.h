@@ -88,6 +88,28 @@ NiyahStatus niyah_training_run_updates(
     size_t updates,
     float *out_mean_loss);
 
+/* Invoked after each successfully completed update with the zero-based
+ * update index, total update count, and that update's mean loss.
+ */
+typedef void (*NiyahTrainingProgressFn)(
+    size_t update_index, size_t updates, float loss, void *user_data);
+
+/* Same contract as niyah_training_run_updates, additionally invoking
+ * progress_fn (if non-NULL) after each update completes. */
+NiyahStatus niyah_training_run_updates_with_progress(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss);
+
 #ifdef __cplusplus
 }
 #endif

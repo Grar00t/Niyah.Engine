@@ -101,6 +101,15 @@ static int fail_status(const char *stage, NiyahStatus status)
     return 1;
 }
 
+static void print_training_progress(size_t update_index, size_t updates,
+                                     float loss, void *user_data)
+{
+    (void)user_data;
+    fprintf(stderr, "update=%zu/%zu loss=%.9g\n",
+            update_index + 1U, updates, (double)loss);
+    fflush(stderr);
+}
+
 static int parse_u64(const char *text, uint64_t *out)
 {
     char *end = NULL;
@@ -542,11 +551,11 @@ int main(int argc, char **argv)
         }
     }
 
-    status = niyah_training_run_updates(
+    status = niyah_training_run_updates_with_progress(
         &model, samples, sample_count, &cursor,
         &optimizer_state, &optimizer_config,
         options.batch_size, options.accumulation_steps,
-        options.updates, &mean_loss);
+        options.updates, print_training_progress, NULL, &mean_loss);
     if (status != NIYAH_OK) {
         exit_code = fail_status("training", status);
         goto cleanup;

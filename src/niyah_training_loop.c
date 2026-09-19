@@ -381,7 +381,7 @@ NiyahStatus niyah_training_accumulated_step(
     return NIYAH_OK;
 }
 
-NiyahStatus niyah_training_run_updates(
+NiyahStatus niyah_training_run_updates_with_progress(
     NiyahModel *model,
     const NiyahTrainingSample *samples,
     size_t sample_count,
@@ -391,6 +391,8 @@ NiyahStatus niyah_training_run_updates(
     size_t batch_size,
     size_t accumulation_steps,
     size_t updates,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
     float *out_mean_loss)
 {
     NiyahModelGradients sample_gradients;
@@ -480,6 +482,10 @@ NiyahStatus niyah_training_run_updates(
             niyah_model_gradients_destroy(&sample_gradients);
             return NIYAH_ERR_OVERFLOW;
         }
+
+        if (progress_fn != NULL) {
+            progress_fn(update, updates, mean_loss, progress_user_data);
+        }
     }
 
     free(workspace);
@@ -492,4 +498,23 @@ NiyahStatus niyah_training_run_updates(
 
     *out_mean_loss = (float)loss_sum;
     return NIYAH_OK;
+}
+
+NiyahStatus niyah_training_run_updates(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    float *out_mean_loss)
+{
+    return niyah_training_run_updates_with_progress(
+        model, samples, sample_count, cursor,
+        optimizer_state, optimizer_config,
+        batch_size, accumulation_steps, updates,
+        NULL, NULL, out_mean_loss);
 }
