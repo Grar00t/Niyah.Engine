@@ -7,6 +7,12 @@
 #include <string.h>
 
 _Static_assert(CHAR_BIT == 8, "dataset shard requires 8-bit bytes");
+_Static_assert(NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE ==
+                   NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE,
+               "dataset tokenizer identity size");
+_Static_assert(NIYAH_DATASET_COLLECTION_IDENTITY_SHA256_SIZE ==
+                   NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE,
+               "collection/shard identity size");
 
 #define NIYAH_DATASET_SHARD_VERSION_V1 UINT32_C(1)
 #define NIYAH_DATASET_SHARD_VERSION_V2 UINT32_C(2)
@@ -203,9 +209,6 @@ static NiyahStatus tokenizer_identity(
     const NiyahTokenizer *tokenizer,
     uint8_t out[NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE])
 {
-    if (NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE !=
-        NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE)
-        return NIYAH_ERR_INVALID_CONFIG;
     return niyah_tokenizer_identity_sha256(tokenizer, out);
 }
 
@@ -1082,11 +1085,6 @@ NiyahStatus niyah_dataset_collection_identity_sha256(
     if (shards == NULL || out_identity == NULL)
         return NIYAH_ERR_INVALID_ARGUMENT;
     if (shard_count == 0U)
-        return NIYAH_ERR_INVALID_CONFIG;
-    if (shard_count > (size_t)UINT64_MAX)
-        return NIYAH_ERR_OVERFLOW;
-    if (NIYAH_DATASET_COLLECTION_IDENTITY_SHA256_SIZE !=
-        NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE)
         return NIYAH_ERR_INVALID_CONFIG;
 
     niyah_sha256_init(&sha);
