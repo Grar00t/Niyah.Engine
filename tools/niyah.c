@@ -1110,7 +1110,7 @@ static NiyahStatus write_evidence_file_atomic(
 
     (void)remove(temporary);
 
-    stream = fopen(temporary, "wb");
+    stream = niyah_cli_fopen(temporary, "wb");
     if (stream == NULL) {
         free(temporary);
         return NIYAH_ERR_IO;
