@@ -430,8 +430,12 @@ static void test_boundary_aware_v2(void)
               &targets,
               &count) == NIYAH_OK);
     CHECK(count == 5U);
-    CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
-    CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+    CHECK(tokens != NULL);
+    CHECK(targets != NULL);
+    if (tokens != NULL && targets != NULL && count > 0U) {
+        CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
+        CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+    }
 
     CHECK(niyah_dataset_shard_sample(
               &shard,
@@ -440,8 +444,25 @@ static void test_boundary_aware_v2(void)
               &targets,
               &count) == NIYAH_OK);
     CHECK(count == 5U);
-    CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
-    CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+    CHECK(tokens != NULL);
+    CHECK(targets != NULL);
+    if (tokens != NULL && targets != NULL && count > 0U) {
+        CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
+        CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+    }
+
+    /* out-of-range sample index must be rejected without touching outputs */
+    tokens = NULL;
+    targets = NULL;
+    count = 123U;
+    CHECK(niyah_dataset_shard_sample(
+              &shard,
+              shard.sample_count,
+              &tokens,
+              &targets,
+              &count) == NIYAH_ERR_INVALID_ARGUMENT);
+    CHECK(tokens == NULL);
+    CHECK(targets == NULL);
 
     CHECK(niyah_dataset_shard_identity_sha256(
               &shard,
