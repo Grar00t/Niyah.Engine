@@ -200,7 +200,8 @@ static int niyah_config_equal(const NiyahModelConfig *a,
            a->n_kv_heads == b->n_kv_heads &&
            a->ffn_hidden_dim == b->ffn_hidden_dim &&
            niyah_float_bits(a->rms_norm_eps) == niyah_float_bits(b->rms_norm_eps) &&
-           (a->tie_word_embeddings != 0) == (b->tie_word_embeddings != 0);
+           (a->tie_word_embeddings != 0) == (b->tie_word_embeddings != 0) &&
+           a->n_segments == b->n_segments;
 }
 
 static int niyah_layout_equal(const NiyahModelLayout *a,
@@ -512,6 +513,8 @@ static NiyahStatus niyah_write_header(FILE *file,
     if (status != NIYAH_OK) return status;
     status = niyah_write_u32_crc(file, crc, tie);
     if (status != NIYAH_OK) return status;
+    status = niyah_write_u32_crc(file, crc, model->config.n_segments);
+    if (status != NIYAH_OK) return status;
     return niyah_write_u64_crc(file, crc, (uint64_t)model->weight_count);
 }
 
@@ -672,7 +675,7 @@ static NiyahStatus niyah_read_header(FILE *file,
                                      NiyahCheckpointHeader *out,
                                      uint32_t required_version)
 {
-    unsigned char bytes[68];
+    unsigned char bytes[72];
     uint32_t version;
     uint32_t flags;
     uint32_t reserved;
@@ -714,7 +717,8 @@ static NiyahStatus niyah_read_header(FILE *file,
         return NIYAH_ERR_CORRUPT_DATA;
     }
     out->config.tie_word_embeddings = tie != 0U ? 1 : 0;
-    weight_count_u64 = niyah_load_u64_le(bytes + 60U);
+    out->config.n_segments = niyah_load_u32_le(bytes + 60U);
+    weight_count_u64 = niyah_load_u64_le(bytes + 64U);
     if ((sizeof(size_t) < sizeof(uint64_t) &&
          weight_count_u64 > (uint64_t)SIZE_MAX) ||
         weight_count_u64 > UINT64_MAX / UINT64_C(4)) {

@@ -29,6 +29,20 @@ NiyahStatus niyah_transformer_forward(const NiyahModel *model,
                                       float *workspace,
                                       size_t workspace_count);
 
+/* Same as niyah_transformer_forward, but adds model->weights[layout.segment_embedding
+ * + segment_ids[t] * embedding_dim] into token t's embedding before layer 0.
+ * Requires config->n_segments > 0 and segment_ids[t] < config->n_segments for all t.
+ * This is a training signal for distinguishing input spans (e.g. instruction vs.
+ * untrusted data); it is not a security boundary. */
+NiyahStatus niyah_transformer_forward_with_segments(const NiyahModel *model,
+                                                    const uint32_t *tokens,
+                                                    size_t token_count,
+                                                    const uint32_t *segment_ids,
+                                                    float *logits,
+                                                    size_t logits_count,
+                                                    float *workspace,
+                                                    size_t workspace_count);
+
 #ifdef __cplusplus
 }
 #endif

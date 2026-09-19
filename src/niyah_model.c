@@ -73,6 +73,7 @@ NiyahStatus niyah_model_layout_compute(const NiyahModelConfig *config,
     NiyahModelLayout tmp;
     size_t cursor = 0U;
     size_t token_embedding_count = 0U;
+    size_t segment_embedding_count = 0U;
     size_t q_count = 0U;
     size_t kv_count = 0U;
     size_t ffn_up_count = 0U;
@@ -103,6 +104,7 @@ NiyahStatus niyah_model_layout_compute(const NiyahModelConfig *config,
     }
 
     if (!niyah_checked_mul(vocab, dim, &token_embedding_count) ||
+        !niyah_checked_mul((size_t)config->n_segments, dim, &segment_embedding_count) ||
         !niyah_checked_mul(dim, dim, &q_count) ||
         !niyah_checked_mul(tmp.kv_dim, dim, &kv_count) ||
         !niyah_checked_mul(ffn, dim, &ffn_up_count) ||
@@ -112,6 +114,11 @@ NiyahStatus niyah_model_layout_compute(const NiyahModelConfig *config,
 
     tmp.token_embedding = cursor;
     if (!niyah_checked_add(cursor, token_embedding_count, &cursor)) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
+    tmp.segment_embedding = cursor;
+    if (!niyah_checked_add(cursor, segment_embedding_count, &cursor)) {
         return NIYAH_ERR_OVERFLOW;
     }
 

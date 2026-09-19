@@ -186,13 +186,14 @@ static NiyahStatus niyah_attention(float *out,
     return NIYAH_OK;
 }
 
-NiyahStatus niyah_transformer_forward(const NiyahModel *model,
-                                      const uint32_t *tokens,
-                                      size_t token_count,
-                                      float *logits,
-                                      size_t logits_count,
-                                      float *workspace,
-                                      size_t workspace_count)
+static NiyahStatus niyah_transformer_forward_impl(const NiyahModel *model,
+                                                  const uint32_t *tokens,
+                                                  size_t token_count,
+                                                  const uint32_t *segment_ids,
+                                                  float *logits,
+                                                  size_t logits_count,
+                                                  float *workspace,
+                                                  size_t workspace_count)
 {
     const NiyahModelConfig *config;
     size_t required_workspace = 0U;
@@ -226,6 +227,9 @@ NiyahStatus niyah_transformer_forward(const NiyahModel *model,
     }
 
     config = &model->config;
+    if (segment_ids != NULL && config->n_segments == 0U) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
     status = niyah_transformer_workspace_floats(config, token_count, &required_workspace);
     if (status != NIYAH_OK) {
         return status;
@@ -273,6 +277,17 @@ NiyahStatus niyah_transformer_forward(const NiyahModel *model,
         memcpy(hidden + position * dim,
                model->weights + model->layout.token_embedding + (size_t)token * dim,
                dim * sizeof(float));
+        if (segment_ids != NULL) {
+            const uint32_t segment = segment_ids[position];
+            size_t i;
+            if ((size_t)segment >= (size_t)config->n_segments) {
+                return NIYAH_ERR_INVALID_ARGUMENT;
+            }
+            for (i = 0U; i < dim; ++i) {
+                hidden[position * dim + i] +=
+                    model->weights[model->layout.segment_embedding + (size_t)segment * dim + i];
+            }
+        }
     }
 
     for (layer_index = 0U; layer_index < config->n_layers; ++layer_index) {
@@ -399,4 +414,32 @@ NiyahStatus niyah_transformer_forward(const NiyahModel *model,
     }
 
     return NIYAH_OK;
+}
+
+NiyahStatus niyah_transformer_forward(const NiyahModel *model,
+                                      const uint32_t *tokens,
+                                      size_t token_count,
+                                      float *logits,
+                                      size_t logits_count,
+                                      float *workspace,
+                                      size_t workspace_count)
+{
+    return niyah_transformer_forward_impl(model, tokens, token_count, NULL,
+                                          logits, logits_count, workspace, workspace_count);
+}
+
+NiyahStatus niyah_transformer_forward_with_segments(const NiyahModel *model,
+                                                    const uint32_t *tokens,
+                                                    size_t token_count,
+                                                    const uint32_t *segment_ids,
+                                                    float *logits,
+                                                    size_t logits_count,
+                                                    float *workspace,
+                                                    size_t workspace_count)
+{
+    if (segment_ids == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    return niyah_transformer_forward_impl(model, tokens, token_count, segment_ids,
+                                          logits, logits_count, workspace, workspace_count);
 }

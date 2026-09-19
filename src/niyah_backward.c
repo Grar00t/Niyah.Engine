@@ -250,6 +250,7 @@ static NiyahStatus niyah_attention_forward(float *out,
 
 static NiyahStatus niyah_cached_forward(const NiyahModel *model,
                                         const uint32_t *tokens,
+                                        const uint32_t *segment_ids,
                                         const NiyahTrainShape *s,
                                         float *layer_cache_base,
                                         float *final_norm,
@@ -279,6 +280,17 @@ static NiyahStatus niyah_cached_forward(const NiyahModel *model,
                 memcpy(c.hidden_in + t * s->dim,
                        model->weights + model->layout.token_embedding + (size_t)tokens[t] * s->dim,
                        s->dim * sizeof(float));
+                if (segment_ids != NULL) {
+                    const uint32_t segment = segment_ids[t];
+                    size_t i;
+                    if ((size_t)segment >= (size_t)config->n_segments) {
+                        return NIYAH_ERR_INVALID_ARGUMENT;
+                    }
+                    for (i = 0U; i < s->dim; ++i) {
+                        c.hidden_in[t * s->dim + i] +=
+                            model->weights[model->layout.segment_embedding + (size_t)segment * s->dim + i];
+                    }
+                }
             }
         } else {
             NiyahLayerCacheView prev;
@@ -499,6 +511,7 @@ static NiyahStatus niyah_train_backward_impl(
     const uint32_t *targets,
     size_t token_count,
     size_t loss_start,
+    const uint32_t *segment_ids,
     float *out_loss,
     NiyahModelGradients *gradients,
     float *workspace,
@@ -564,7 +577,7 @@ static NiyahStatus niyah_train_backward_impl(
     probs = cursor; cursor += s.token_count;
     dp = cursor;
 
-    status = niyah_cached_forward(model, tokens, &s, layer_cache_base, final_norm, logits, probs);
+    status = niyah_cached_forward(model, tokens, segment_ids, &s, layer_cache_base, final_norm, logits, probs);
     if (status != NIYAH_OK) {
         return status;
     }
@@ -749,6 +762,13 @@ static NiyahStatus niyah_train_backward_impl(
         for (d = 0U; d < s.dim; ++d) {
             dembed[d] += dh[t * s.dim + d];
         }
+        if (segment_ids != NULL) {
+            float *dsegment = gradients->values + model->layout.segment_embedding +
+                              (size_t)segment_ids[t] * s.dim;
+            for (d = 0U; d < s.dim; ++d) {
+                dsegment[d] += dh[t * s.dim + d];
+            }
+        }
     }
     return NIYAH_OK;
 }
@@ -769,6 +789,7 @@ NiyahStatus niyah_train_backward(
         targets,
         token_count,
         0U,
+        NULL,
         out_loss,
         gradients,
         workspace,
@@ -792,6 +813,35 @@ NiyahStatus niyah_train_backward_masked(
         targets,
         token_count,
         loss_start,
+        NULL,
+        out_loss,
+        gradients,
+        workspace,
+        workspace_count);
+}
+
+NiyahStatus niyah_train_backward_masked_with_segments(
+    const NiyahModel *model,
+    const uint32_t *tokens,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t loss_start,
+    const uint32_t *segment_ids,
+    float *out_loss,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count)
+{
+    if (segment_ids == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    return niyah_train_backward_impl(
+        model,
+        tokens,
+        targets,
+        token_count,
+        loss_start,
+        segment_ids,
         out_loss,
         gradients,
         workspace,

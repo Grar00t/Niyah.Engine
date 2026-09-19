@@ -54,7 +54,8 @@ static int niyah_config_equal(const NiyahModelConfig *a,
            a->n_kv_heads == b->n_kv_heads &&
            a->ffn_hidden_dim == b->ffn_hidden_dim &&
            a->rms_norm_eps == b->rms_norm_eps &&
-           a->tie_word_embeddings == b->tie_word_embeddings;
+           a->tie_word_embeddings == b->tie_word_embeddings &&
+           a->n_segments == b->n_segments;
 }
 
 static int niyah_layout_equal(const NiyahModelLayout *a,
