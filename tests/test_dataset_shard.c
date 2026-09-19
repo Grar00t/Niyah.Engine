@@ -128,7 +128,9 @@ static void test_build_and_samples(void)
             CHECK(niyah_dataset_shard_sample(
                       &shard, i, &tokens, &targets, &count) == NIYAH_OK);
             CHECK(tokens != NULL);
-            CHECK(targets == tokens + 1U);
+            if (tokens != NULL) {
+                CHECK(targets == tokens + 1U);
+            }
             CHECK(count > 0U && count <= 3U);
             covered += count;
         }
@@ -428,8 +430,12 @@ static void test_boundary_aware_v2(void)
               &targets,
               &count) == NIYAH_OK);
     CHECK(count == 5U);
-    CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
-    CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+    CHECK(tokens != NULL);
+    CHECK(targets != NULL);
+    if (tokens != NULL && targets != NULL && count > 0U) {
+        CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
+        CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+    }
 
     CHECK(niyah_dataset_shard_sample(
               &shard,
@@ -438,8 +444,25 @@ static void test_boundary_aware_v2(void)
               &targets,
               &count) == NIYAH_OK);
     CHECK(count == 5U);
-    CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
-    CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+    CHECK(tokens != NULL);
+    CHECK(targets != NULL);
+    if (tokens != NULL && targets != NULL && count > 0U) {
+        CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
+        CHECK(targets[count - 1U] == NIYAH_TOKEN_EOS);
+    }
+
+    /* out-of-range sample index must be rejected without touching outputs */
+    tokens = NULL;
+    targets = NULL;
+    count = 123U;
+    CHECK(niyah_dataset_shard_sample(
+              &shard,
+              shard.sample_count,
+              &tokens,
+              &targets,
+              &count) == NIYAH_ERR_INVALID_ARGUMENT);
+    CHECK(tokens == NULL);
+    CHECK(targets == NULL);
 
     CHECK(niyah_dataset_shard_identity_sha256(
               &shard,
@@ -560,11 +583,19 @@ static void test_supervised_v3(void)
               &loss_start) == NIYAH_OK);
 
     CHECK(tokens != NULL);
-    CHECK(targets == tokens + 1U);
+    if (tokens != NULL) {
+        CHECK(targets == tokens + 1U);
+    }
+
     CHECK(token_count == 19U);
     CHECK(loss_start == 10U);
-    CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
-    CHECK(targets[token_count - 1U] == NIYAH_TOKEN_EOS);
+
+    if (tokens != NULL && token_count > 0U) {
+        CHECK(tokens[0U] == NIYAH_TOKEN_BOS);
+    }
+    if (targets != NULL && token_count > 0U) {
+        CHECK(targets[token_count - 1U] == NIYAH_TOKEN_EOS);
+    }
 
     CHECK(niyah_training_samples_from_shard(
               &shard,
