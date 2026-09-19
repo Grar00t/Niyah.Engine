@@ -1054,9 +1054,11 @@ static NiyahStatus niyah_checkpoint_load_impl(
         temp_state.model_layout = temp_model.layout;
     }
 
-    if (status == NIYAH_OK && fclose(file) != 0) {
-        status = NIYAH_ERR_IO;
-    } else if (status != NIYAH_OK) {
+    if (status == NIYAH_OK) {
+        if (fclose(file) != 0) {
+            status = NIYAH_ERR_IO;
+        }
+    } else {
         (void)fclose(file);
     }
     if (status != NIYAH_OK) {

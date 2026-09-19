@@ -125,14 +125,21 @@ static NiyahStatus niyah_attention(float *out,
                                    size_t kv_dim)
 {
     size_t position;
-    const size_t group_size = n_heads / n_kv_heads;
-    const float scale = 1.0f / sqrtf((float)head_dim);
+    size_t group_size;
+    float scale;
 
     if (out == NULL || q == NULL || k == NULL || v == NULL || scores == NULL ||
         token_count == 0U || dim == 0U || n_heads == 0U || n_kv_heads == 0U ||
-        head_dim == 0U || group_size == 0U) {
+        head_dim == 0U) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
+
+    group_size = n_heads / n_kv_heads;
+    if (group_size == 0U) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    scale = 1.0f / sqrtf((float)head_dim);
 
     memset(out, 0, token_count * dim * sizeof(float));
 
