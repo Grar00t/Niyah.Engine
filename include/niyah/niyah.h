@@ -30,6 +30,10 @@ typedef struct NiyahModelConfig {
     uint32_t ffn_hidden_dim;
     float rms_norm_eps;
     int tie_word_embeddings;
+    /* 0 disables segment embeddings (byte-identical to prior layout/behavior).
+     * N>=1 adds an [N][embedding_dim] table selected per token by segment id;
+     * this is a training signal only, not a security boundary. */
+    uint32_t n_segments;
 } NiyahModelConfig;
 
 typedef struct NiyahLayerLayout {
@@ -46,6 +50,7 @@ typedef struct NiyahLayerLayout {
 
 typedef struct NiyahModelLayout {
     size_t token_embedding;
+    size_t segment_embedding;
     size_t layers;
     size_t layer_stride;
     size_t final_norm;

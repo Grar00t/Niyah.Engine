@@ -286,13 +286,14 @@ static NiyahStatus niyah_attention_one(float *out,
     return NIYAH_OK;
 }
 
-NiyahStatus niyah_transformer_decode_token(const NiyahModel *model,
-                                           NiyahKVCache *cache,
-                                           uint32_t token,
-                                           float *logits,
-                                           size_t logits_count,
-                                           float *workspace,
-                                           size_t workspace_count)
+static NiyahStatus niyah_transformer_decode_token_impl(const NiyahModel *model,
+                                                       NiyahKVCache *cache,
+                                                       uint32_t token,
+                                                       const uint32_t *segment_id,
+                                                       float *logits,
+                                                       size_t logits_count,
+                                                       float *workspace,
+                                                       size_t workspace_count)
 {
     const NiyahModelConfig *config;
     size_t required_workspace = 0U;
@@ -323,6 +324,9 @@ NiyahStatus niyah_transformer_decode_token(const NiyahModel *model,
     }
 
     config = &model->config;
+    if (segment_id != NULL && *segment_id >= config->n_segments) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
     status = niyah_cache_shape(config, &head_dim, &kv_dim, &expected_cache_values);
     if (status != NIYAH_OK) {
         return status;
@@ -368,6 +372,13 @@ NiyahStatus niyah_transformer_decode_token(const NiyahModel *model,
     memcpy(hidden,
            model->weights + model->layout.token_embedding + (size_t)token * dim,
            dim * sizeof(float));
+    if (segment_id != NULL) {
+        size_t i;
+        for (i = 0U; i < dim; ++i) {
+            hidden[i] +=
+                model->weights[model->layout.segment_embedding + (size_t)(*segment_id) * dim + i];
+        }
+    }
 
     for (layer_index = 0U; layer_index < config->n_layers; ++layer_index) {
         NiyahLayerLayout layer;
@@ -453,4 +464,29 @@ NiyahStatus niyah_transformer_decode_token(const NiyahModel *model,
 
     cache->next_position = position + 1U;
     return NIYAH_OK;
+}
+
+NiyahStatus niyah_transformer_decode_token(const NiyahModel *model,
+                                           NiyahKVCache *cache,
+                                           uint32_t token,
+                                           float *logits,
+                                           size_t logits_count,
+                                           float *workspace,
+                                           size_t workspace_count)
+{
+    return niyah_transformer_decode_token_impl(model, cache, token, NULL,
+                                               logits, logits_count, workspace, workspace_count);
+}
+
+NiyahStatus niyah_transformer_decode_token_with_segment(const NiyahModel *model,
+                                                        NiyahKVCache *cache,
+                                                        uint32_t token,
+                                                        uint32_t segment_id,
+                                                        float *logits,
+                                                        size_t logits_count,
+                                                        float *workspace,
+                                                        size_t workspace_count)
+{
+    return niyah_transformer_decode_token_impl(model, cache, token, &segment_id,
+                                               logits, logits_count, workspace, workspace_count);
 }

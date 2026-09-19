@@ -145,7 +145,8 @@ static int niyah_cuda_config_equal(const NiyahModelConfig *a,
            a->ffn_hidden_dim == b->ffn_hidden_dim &&
            a->rms_norm_eps == b->rms_norm_eps &&
            (a->tie_word_embeddings != 0) ==
-               (b->tie_word_embeddings != 0);
+               (b->tie_word_embeddings != 0) &&
+           a->n_segments == b->n_segments;
 }
 
 static int niyah_cuda_layout_equal(const NiyahModelLayout *a,

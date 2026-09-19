@@ -133,7 +133,8 @@ static int config_equal(const NiyahModelConfig *a, const NiyahModelConfig *b)
            a->n_kv_heads == b->n_kv_heads &&
            a->ffn_hidden_dim == b->ffn_hidden_dim &&
            float_bits(a->rms_norm_eps) == float_bits(b->rms_norm_eps) &&
-           (a->tie_word_embeddings != 0) == (b->tie_word_embeddings != 0);
+           (a->tie_word_embeddings != 0) == (b->tie_word_embeddings != 0) &&
+           a->n_segments == b->n_segments;
 }
 
 static int layout_equal(const NiyahModelLayout *a, const NiyahModelLayout *b)
@@ -190,11 +191,12 @@ static unsigned char *read_bytes(const char *path, size_t *out_size)
 
 static int locate_sections(const unsigned char *data, size_t size, TestSections *out)
 {
-    size_t cursor = 68U;
+    /* header grew from 68 to 72 bytes when n_segments was added */
+    size_t cursor = 72U;
     uint32_t count;
     uint32_t i;
     memset(out, 0, sizeof(*out));
-    if (size < 76U) return 0;
+    if (size < 80U) return 0;
     count = load_u32_le(data + 16U);
     if (count > 64U) return 0;
     for (i = 0U; i < count; ++i) {
@@ -443,7 +445,7 @@ static void test_format_and_malformed(void)
     valid = read_bytes(valid_path, &valid_size);
     CHECK(valid != NULL);
     if (valid == NULL) goto cleanup;
-    CHECK(valid_size > 76U);
+    CHECK(valid_size > 80U);
     CHECK(memcmp(valid, "NIYAHCKP", 8U) == 0);
     CHECK(valid[8] == 0x01U && valid[9] == 0x00U && valid[10] == 0x00U && valid[11] == 0x00U);
     CHECK(crc32_reference((const unsigned char *)"123456789", 9U) == UINT32_C(0xcbf43926));
@@ -466,7 +468,7 @@ static void test_format_and_malformed(void)
     do { MUTATE_COPY(); data[0] ^= 0x01U; CHECK(write_bytes(mut_path, data, valid_size)); free(data); expect_load_failure(mut_path, NIYAH_ERR_CORRUPT_DATA); } while (0);
     do { MUTATE_COPY(); store_u32_le(data + 8U, UINT32_C(2)); CHECK(write_bytes(mut_path, data, valid_size)); free(data); expect_load_failure(mut_path, NIYAH_ERR_UNSUPPORTED_VERSION); } while (0);
     CHECK(write_bytes(mut_path, valid, 20U)); expect_load_failure(mut_path, NIYAH_ERR_CORRUPT_DATA);
-    CHECK(write_bytes(mut_path, valid, 68U + 7U)); expect_load_failure(mut_path, NIYAH_ERR_CORRUPT_DATA);
+    CHECK(write_bytes(mut_path, valid, 72U + 7U)); expect_load_failure(mut_path, NIYAH_ERR_CORRUPT_DATA);
     CHECK(write_bytes(mut_path, valid, s.payload_offset[1] + (size_t)s.payload_bytes[1] - 1U)); expect_load_failure(mut_path, NIYAH_ERR_CORRUPT_DATA);
     CHECK(write_bytes(mut_path, valid, valid_size - 1U)); expect_load_failure(mut_path, NIYAH_ERR_CORRUPT_DATA);
 

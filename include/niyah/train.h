@@ -92,6 +92,23 @@ NiyahStatus niyah_train_backward_masked(
     float *workspace,
     size_t workspace_count);
 
+/* Same as niyah_train_backward_masked, but adds and trains
+ * model->weights[layout.segment_embedding + segment_ids[t] * embedding_dim]
+ * into token t's embedding. Requires config->n_segments > 0 and
+ * segment_ids[t] < config->n_segments for all t. Training signal only, not a
+ * security boundary. */
+NiyahStatus niyah_train_backward_masked_with_segments(
+    const NiyahModel *model,
+    const uint32_t *tokens,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t loss_start,
+    const uint32_t *segment_ids,
+    float *out_loss,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count);
+
 #ifdef __cplusplus
 }
 #endif

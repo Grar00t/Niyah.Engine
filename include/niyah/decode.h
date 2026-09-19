@@ -45,6 +45,20 @@ NiyahStatus niyah_transformer_decode_token(const NiyahModel *model,
                                            float *workspace,
                                            size_t workspace_count);
 
+/* Same as niyah_transformer_decode_token, but adds
+ * model->weights[layout.segment_embedding + segment_id * embedding_dim] into
+ * the token embedding before layer 0. Requires config->n_segments > 0 and
+ * segment_id < config->n_segments. Training signal only, not a security
+ * boundary. */
+NiyahStatus niyah_transformer_decode_token_with_segment(const NiyahModel *model,
+                                                        NiyahKVCache *cache,
+                                                        uint32_t token,
+                                                        uint32_t segment_id,
+                                                        float *logits,
+                                                        size_t logits_count,
+                                                        float *workspace,
+                                                        size_t workspace_count);
+
 #ifdef __cplusplus
 }
 #endif
