@@ -477,6 +477,71 @@ static void test_training_samples_from_shard(void)
           NIYAH_ERR_INVALID_CONFIG);
 }
 
+typedef struct ProgressLog {
+    size_t indices[8];
+    size_t updates[8];
+    float losses[8];
+    size_t count;
+} ProgressLog;
+
+static void record_progress(size_t update_index, size_t updates,
+                             float loss, void *user_data)
+{
+    ProgressLog *log = (ProgressLog *)user_data;
+    CHECK(log->count < 8U);
+    if (log->count < 8U) {
+        log->indices[log->count] = update_index;
+        log->updates[log->count] = updates;
+        log->losses[log->count] = loss;
+        log->count += 1U;
+    }
+}
+
+static void test_run_updates_with_progress_invokes_callback(void)
+{
+    static const uint32_t t0[] = {1U, 2U, 3U};
+    static const uint32_t y0[] = {2U, 3U, 4U};
+    static const uint32_t t1[] = {2U, 3U, 4U};
+    static const uint32_t y1[] = {3U, 4U, 5U};
+    const NiyahTrainingSample samples[] = {
+        {t0, y0, 3U, 0U}, {t1, y1, 3U, 0U}
+    };
+    NiyahModelConfig config = test_config();
+    NiyahAdamWConfig opt = optimizer_config();
+    NiyahModel model;
+    NiyahAdamWState state;
+    NiyahDatasetCursor cursor;
+    ProgressLog log;
+    float mean_loss = NAN;
+    size_t i;
+
+    memset(&model, 0, sizeof(model));
+    memset(&state, 0, sizeof(state));
+    memset(&cursor, 0, sizeof(cursor));
+    memset(&log, 0, sizeof(log));
+
+    CHECK(niyah_model_create(&model, &config) == NIYAH_OK);
+    CHECK(niyah_model_reset_parameters(&model, UINT64_C(2026)) == NIYAH_OK);
+    CHECK(niyah_adamw_state_create(&state, &model) == NIYAH_OK);
+    CHECK(niyah_dataset_cursor_init(&cursor, 2U, UINT64_C(7)) == NIYAH_OK);
+
+    CHECK(niyah_training_run_updates_with_progress(
+              &model, samples, 2U, &cursor, &state, &opt,
+              1U, 1U, 3U, record_progress, &log, &mean_loss) == NIYAH_OK);
+
+    CHECK(isfinite(mean_loss));
+    CHECK(log.count == 3U);
+    for (i = 0U; i < log.count; ++i) {
+        CHECK(log.indices[i] == i);
+        CHECK(log.updates[i] == 3U);
+        CHECK(isfinite(log.losses[i]));
+    }
+
+    niyah_dataset_cursor_destroy(&cursor);
+    niyah_adamw_state_destroy(&state);
+    niyah_model_destroy(&model);
+}
+
 int main(void)
 {
     test_training_samples_from_shard();
@@ -486,6 +551,7 @@ int main(void)
     test_accumulated_step_matches_single_step();
     test_minibatch_accumulation_deterministic();
     test_accumulated_step_rolls_back_whole_group();
+    test_run_updates_with_progress_invokes_callback();
 
     if (failures != 0) {
         fprintf(stderr, "niyah_training_loop_test: %d failure(s)\n", failures);
