@@ -430,17 +430,17 @@ static void niyah_linear_backward_accum(const float *weight,
     }
 }
 
-static void niyah_attention_backward(float *dq,
-                                     float *dk,
-                                     float *dv,
-                                     const float *da,
-                                     const float *q,
-                                     const float *k,
-                                     const float *v,
-                                     float *probs,
-                                     float *dp,
-                                     const NiyahModelConfig *config,
-                                     const NiyahTrainShape *s)
+static NiyahStatus niyah_attention_backward(float *dq,
+                                            float *dk,
+                                            float *dv,
+                                            const float *da,
+                                            const float *q,
+                                            const float *k,
+                                            const float *v,
+                                            float *probs,
+                                            float *dp,
+                                            const NiyahModelConfig *config,
+                                            const NiyahTrainShape *s)
 {
     const size_t head_dim = s->dim / (size_t)config->n_heads;
     const size_t group_size = (size_t)config->n_heads / (size_t)config->n_kv_heads;
@@ -479,6 +479,9 @@ static void niyah_attention_backward(float *dq,
                 probs[src] = expf(probs[src] - max_score);
                 sum_exp += probs[src];
             }
+            if (!(sum_exp > 0.0f) || !isfinite(sum_exp)) {
+                return NIYAH_ERR_INVALID_CONFIG;
+            }
             for (src = 0U; src <= t; ++src) {
                 const float *vh = v + src * s->kv_dim + kh * head_dim;
                 float dprob = 0.0f;
@@ -503,6 +506,7 @@ static void niyah_attention_backward(float *dq,
             }
         }
     }
+    return NIYAH_OK;
 }
 
 static NiyahStatus niyah_train_backward_impl(
@@ -719,8 +723,11 @@ static NiyahStatus niyah_train_backward_impl(
                                         s.dim, s.dim);
         }
 
-        niyah_attention_backward(dq, dk, dv, da, c.q, c.k, c.v,
-                                 probs, dp, &model->config, &s);
+        status = niyah_attention_backward(dq, dk, dv, da, c.q, c.k, c.v,
+                                          probs, dp, &model->config, &s);
+        if (status != NIYAH_OK) {
+            return status;
+        }
         for (t = 0U; t < s.token_count; ++t) {
             niyah_apply_rope_signed(dq + t * s.dim, (size_t)model->config.n_heads,
                                     s.dim / (size_t)model->config.n_heads, t, -1.0f);

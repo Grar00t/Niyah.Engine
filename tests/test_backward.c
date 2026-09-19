@@ -205,6 +205,46 @@ static void test_rejected_backward_preserves_gradients(void)
     niyah_model_destroy(&model);
 }
 
+static void test_attention_backward_rejects_nonfinite_softmax(void)
+{
+    const uint32_t tokens[3] = {1U, 2U, 3U};
+    const uint32_t targets[3] = {2U, 3U, 4U};
+    NiyahModelConfig config = test_config(0);
+    NiyahModel model;
+    NiyahModelGradients gradients;
+    NiyahLayerLayout layer;
+    size_t ws_count = 0U;
+    float *ws;
+    float loss = 0.0f;
+
+    memset(&model, 0, sizeof(model));
+    memset(&gradients, 0, sizeof(gradients));
+
+    CHECK(niyah_model_create(&model, &config) == NIYAH_OK);
+    CHECK(niyah_model_reset_parameters(&model, UINT64_C(2026)) == NIYAH_OK);
+    CHECK(niyah_model_gradients_create(&gradients, &model) == NIYAH_OK);
+    CHECK(niyah_train_backward_workspace_floats(&config, 3U, &ws_count) == NIYAH_OK);
+    ws = (float *)calloc(ws_count, sizeof(float));
+    CHECK(ws != NULL);
+    if (ws == NULL) {
+        niyah_model_gradients_destroy(&gradients);
+        niyah_model_destroy(&model);
+        return;
+    }
+
+    CHECK(niyah_model_layer_layout(&config, &model.layout, 0U, &layer) == NIYAH_OK);
+    /* force an infinite query projection component so the recomputed
+       backward-pass softmax denominator becomes non-finite */
+    model.weights[layer.wq] = INFINITY;
+
+    CHECK(niyah_train_backward(&model, tokens, targets, 3U, &loss,
+                               &gradients, ws, ws_count) == NIYAH_ERR_INVALID_CONFIG);
+
+    free(ws);
+    niyah_model_gradients_destroy(&gradients);
+    niyah_model_destroy(&model);
+}
+
 static void test_tied_embedding_accumulation(void)
 {
     const uint32_t tokens[3] = {1U, 2U, 3U};
@@ -460,6 +500,7 @@ int main(void)
     test_masked_backward();
     test_backward_and_finite_difference();
     test_rejected_backward_preserves_gradients();
+    test_attention_backward_rejects_nonfinite_softmax();
     test_tied_embedding_accumulation();
     test_gradient_step_decreases_loss();
 
