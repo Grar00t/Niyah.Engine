@@ -16,3 +16,9 @@ cmake-build-*/
 *.pdb
 __pycache__/
 *.pyc
+
+build-*/
+tools/graph*.svg
+tools/vault-*.svg
+tools/vault.dot
+tools/sample.edges
