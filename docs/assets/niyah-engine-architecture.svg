@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
+  <title id="title">Niyah.Engine architecture</title>
+  <desc id="desc">End-to-end architecture covering corpus preparation, tokenizer and shard artifacts, canonical transformer core, training, checkpoint and cursor persistence, resume, evaluation, CPU inference, and optional CUDA generation acceleration.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L12,6 L0,12 z" fill="#8aa4ff"/>
+    </marker>
+    <style>
+      .bg{fill:#0b1020}.panel{fill:#11182b;stroke:#2b3a5d;stroke-width:2}.core{fill:#131d33;stroke:#6d8cff;stroke-width:2.5}.artifact{fill:#102a24;stroke:#3dd6a4;stroke-width:2}.train{fill:#2a1a18;stroke:#ff9f6e;stroke-width:2}.eval{fill:#241a2d;stroke:#c78cff;stroke-width:2}.cuda{fill:#1d2630;stroke:#75c7ff;stroke-width:2;stroke-dasharray:8 6}.title{font:700 34px system-ui,-apple-system,Segoe UI,sans-serif;fill:#f4f7ff}.subtitle{font:500 18px system-ui,-apple-system,Segoe UI,sans-serif;fill:#aab8d4}.h{font:700 20px system-ui,-apple-system,Segoe UI,sans-serif;fill:#f4f7ff}.t{font:500 16px system-ui,-apple-system,Segoe UI,sans-serif;fill:#d4def2}.small{font:500 14px system-ui,-apple-system,Segoe UI,sans-serif;fill:#aab8d4}.mono{font:600 14px ui-monospace,SFMono-Regular,Consolas,monospace;fill:#cfe1ff}.arrow{fill:none;stroke:#8aa4ff;stroke-width:2.5;marker-end:url(#arrow)}.arrow2{fill:none;stroke:#6bd8b1;stroke-width:2.5;marker-end:url(#arrow)}.arrow3{fill:none;stroke:#f4a77e;stroke-width:2.5;marker-end:url(#arrow)}.label{font:700 13px system-ui,-apple-system,Segoe UI,sans-serif;fill:#8ea5d8;letter-spacing:.6px}.sep{stroke:#26334f;stroke-width:1}
+    </style>
+  </defs>
+  <rect class="bg" width="1600" height="980" rx="22"/>
+  <text x="70" y="62" class="title">Niyah.Engine — Native C11 Language Model Architecture</text>
+  <text x="70" y="94" class="subtitle">One canonical NiyahModel weight layout for preparation, training, resume, evaluation, and autoregressive inference.</text>
+
+  <text x="70" y="142" class="label">DATA PREPARATION</text>
+  <rect x="70" y="160" width="220" height="120" rx="16" class="panel"/>
+  <text x="95" y="198" class="h">Raw text corpus</text>
+  <text x="95" y="228" class="t">UTF-8 / arbitrary bytes</text>
+  <text x="95" y="254" class="small">Input to niyah prepare</text>
+
+  <rect x="355" y="160" width="245" height="120" rx="16" class="panel"/>
+  <text x="380" y="198" class="h">Tokenizer training</text>
+  <text x="380" y="228" class="t">Deterministic byte-level BPE</text>
+  <text x="380" y="254" class="small">256 byte tokens + BOS/EOS + merges</text>
+
+  <rect x="670" y="145" width="220" height="150" rx="16" class="artifact"/>
+  <text x="695" y="184" class="h">tok.bin</text>
+  <text x="695" y="214" class="t">Tokenizer state</text>
+  <text x="695" y="240" class="small">Stable SHA-256 identity</text>
+  <text x="695" y="266" class="small">Used by train / run / eval</text>
+
+  <rect x="965" y="145" width="240" height="150" rx="16" class="artifact"/>
+  <text x="990" y="184" class="h">shard.bin</text>
+  <text x="990" y="214" class="t">NIYAHSRD dataset shard</text>
+  <text x="990" y="240" class="small">Causal-LM sample geometry</text>
+  <text x="990" y="266" class="small">Tokenizer-bound persistence</text>
+
+  <path d="M290 220 H355" class="arrow"/>
+  <path d="M600 205 H670" class="arrow2"/>
+  <path d="M600 245 C760 330 965 305 1015 295" class="arrow2"/>
+
+  <text x="70" y="352" class="label">CANONICAL MODEL CORE</text>
+  <rect x="70" y="370" width="1135" height="245" rx="20" class="core"/>
+  <text x="100" y="410" class="h">NiyahModel — contiguous FP32 canonical weights</text>
+  <line x1="100" y1="432" x2="1175" y2="432" class="sep"/>
+
+  <rect x="105" y="455" width="185" height="110" rx="14" class="panel"/>
+  <text x="128" y="488" class="h">Embeddings</text>
+  <text x="128" y="516" class="t">Token embeddings</text>
+  <text x="128" y="541" class="small">Optional segment table</text>
+
+  <rect x="325" y="455" width="210" height="110" rx="14" class="panel"/>
+  <text x="348" y="488" class="h">Attention</text>
+  <text x="348" y="516" class="t">RMSNorm + RoPE</text>
+  <text x="348" y="541" class="small">Causal GQA: Wq/Wk/Wv/Wo</text>
+
+  <rect x="570" y="455" width="190" height="110" rx="14" class="panel"/>
+  <text x="593" y="488" class="h">Feed-forward</text>
+  <text x="593" y="516" class="t">RMSNorm + SwiGLU</text>
+  <text x="593" y="541" class="small">Gate / up / down projections</text>
+
+  <rect x="795" y="455" width="165" height="110" rx="14" class="panel"/>
+  <text x="818" y="488" class="h">Final norm</text>
+  <text x="818" y="516" class="t">RMSNorm</text>
+  <text x="818" y="541" class="small">Shared core path</text>
+
+  <rect x="995" y="455" width="165" height="110" rx="14" class="panel"/>
+  <text x="1018" y="488" class="h">LM head</text>
+  <text x="1018" y="516" class="t">Vocabulary logits</text>
+  <text x="1018" y="541" class="small">Tied or untied storage</text>
+
+  <path d="M290 510 H325" class="arrow"/><path d="M535 510 H570" class="arrow"/><path d="M760 510 H795" class="arrow"/><path d="M960 510 H995" class="arrow"/>
+
+  <rect x="1260" y="370" width="270" height="245" rx="20" class="cuda"/>
+  <text x="1288" y="410" class="h">Optional CUDA path</text>
+  <text x="1288" y="447" class="t">NIYAH_ENABLE_CUDA=ON</text>
+  <text x="1288" y="480" class="small">CUDA backend is optional.</text>
+  <text x="1288" y="506" class="small">CPU FP32 remains the</text>
+  <text x="1288" y="532" class="small">reference implementation.</text>
+  <text x="1288" y="570" class="mono">niyah run --backend cuda</text>
+  <path d="M1205 500 H1260" class="arrow"/>
+
+  <text x="70" y="672" class="label">TRAINING / PERSISTENCE</text>
+  <rect x="70" y="690" width="235" height="190" rx="18" class="train"/>
+  <text x="95" y="727" class="h">niyah-train new</text>
+  <text x="95" y="759" class="t">Forward → cross entropy</text>
+  <text x="95" y="785" class="t">Backward → gradients</text>
+  <text x="95" y="811" class="t">Global clipping → AdamW</text>
+  <text x="95" y="844" class="small">Deterministic cursor ordering</text>
+
+  <rect x="355" y="690" width="235" height="190" rx="18" class="artifact"/>
+  <text x="380" y="727" class="h">Persisted state</text>
+  <text x="380" y="761" class="mono">model-*.ckpt</text>
+  <text x="380" y="789" class="small">Weights + AdamW state/config</text>
+  <text x="380" y="823" class="mono">cursor-*.bin</text>
+  <text x="380" y="851" class="small">Dataset position + identities</text>
+
+  <rect x="640" y="690" width="230" height="190" rx="18" class="train"/>
+  <text x="665" y="727" class="h">niyah-train resume</text>
+  <text x="665" y="759" class="t">Load tokenizer</text>
+  <text x="665" y="785" class="t">Load checkpoint + cursor</text>
+  <text x="665" y="811" class="t">Verify identities</text>
+  <text x="665" y="837" class="t">Continue optimizer steps</text>
+
+  <text x="930" y="672" class="label">INFERENCE / EVALUATION</text>
+  <rect x="930" y="690" width="270" height="190" rx="18" class="panel"/>
+  <text x="955" y="727" class="h">niyah run</text>
+  <text x="955" y="759" class="t">Tokenizer → BOS + prompt</text>
+  <text x="955" y="785" class="t">KV cache + incremental decode</text>
+  <text x="955" y="811" class="t">Sampler → generated tokens</text>
+  <text x="955" y="837" class="small">CPU reference; optional CUDA backend</text>
+
+  <rect x="1260" y="690" width="270" height="190" rx="18" class="eval"/>
+  <text x="1285" y="727" class="h">Read-only evaluation</text>
+  <text x="1285" y="759" class="t">Held-out token samples</text>
+  <text x="1285" y="785" class="t">Token-weighted mean NLL</text>
+  <text x="1285" y="811" class="t">Perplexity = exp(mean loss)</text>
+  <text x="1285" y="844" class="small">Does not mutate model weights</text>
+
+  <path d="M1085 295 V338 H760 V370" class="arrow2"/>
+  <path d="M780 295 V335 H480 V370" class="arrow2"/>
+  <path d="M480 615 V660 H187 V690" class="arrow3"/>
+  <path d="M305 785 H355" class="arrow3"/>
+  <path d="M590 785 H640" class="arrow3"/>
+  <path d="M755 690 V645 H1010 V615" class="arrow"/>
+  <path d="M1075 615 V690" class="arrow"/>
+  <path d="M1145 615 C1230 640 1365 640 1395 690" class="arrow"/>
+
+  <text x="70" y="932" class="small">Architectural boundary: model core is native C11. RAG, hosted model APIs, databases, agent frameworks, GUI, and external LLM runtimes are not required model-core dependencies.</text>
+  <text x="70" y="958" class="small">Status diagram documents repository architecture; it does not assert production readiness or language-quality capability.</text>
+</svg>
