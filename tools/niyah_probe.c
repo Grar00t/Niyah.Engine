@@ -3,7 +3,7 @@
  * Usage:
  *   niyah_probe --tokenizer TOK
  *               [--shard SHARD]
- *               [--checkpoint CKPT --prompt TEXT [--topk N]]
+ *               [--checkpoint CKPT --prompt TEXT [--topk N] [--trace-steps N]]
  */
 #include "niyah/niyah.h"
 #include "niyah/tokenizer.h"
@@ -11,6 +11,7 @@
 #include "niyah/checkpoint.h"
 #include "niyah/decode.h"
 #include "niyah/optimizer.h"
+#include "niyah/sampler.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +43,22 @@ static void print_token_bytes(const NiyahTokenizer *tok, uint32_t id)
     putchar('"');
 }
 
+static double token_probability(const float *logits, size_t vocab, size_t token_index)
+{
+    double max_logit = -1e300;
+    double total = 0.0;
+    size_t i;
+
+    for (i = 0U; i < vocab; ++i) {
+        if ((double)logits[i] > max_logit) max_logit = (double)logits[i];
+    }
+    for (i = 0U; i < vocab; ++i) {
+        total += exp((double)logits[i] - max_logit);
+    }
+    if (!(total > 0.0) || !isfinite(total)) return 0.0;
+    return exp((double)logits[token_index] - max_logit) / total;
+}
+
 static int shard_report(const char *tokenizer_path, const char *shard_path)
 {
     NiyahTokenizer *tok = NULL;
@@ -71,8 +88,10 @@ static int shard_report(const char *tokenizer_path, const char *shard_path)
     }
     for (i = 0U; i < vocab; ++i) {
         if (counts[i] == 0U) continue;
-        double p = (double)counts[i] / (double)shard.token_count;
-        entropy -= p * log(p);
+        {
+            double p = (double)counts[i] / (double)shard.token_count;
+            entropy -= p * log(p);
+        }
     }
 
     printf("shard_tokens=%zu vocab=%zu unigram_entropy_nats=%.6f\n",
@@ -113,9 +132,10 @@ cleanup:
 }
 
 static int topk_logit_report(const char *tokenizer_path,
-                              const char *checkpoint_path,
-                              const char *prompt,
-                              size_t topk)
+                             const char *checkpoint_path,
+                             const char *prompt,
+                             size_t topk,
+                             size_t trace_steps)
 {
     NiyahTokenizer *tok = NULL;
     NiyahModel model;
@@ -150,13 +170,24 @@ static int topk_logit_report(const char *tokenizer_path,
     if (st != NIYAH_OK) { fail("prompt_encode_query", st); goto cleanup; }
 
     prompt_count = encoded + 1U; /* + BOS — matches tools/niyah.c run_command */
+    if (prompt_count > (size_t)model.config.context_length ||
+        trace_steps > (size_t)model.config.context_length - prompt_count) {
+        fprintf(stderr, "trace_context_overflow prompt_tokens=%zu trace_steps=%zu context=%u\n",
+                prompt_count, trace_steps, model.config.context_length);
+        goto cleanup;
+    }
+
     prompt_tokens = (uint32_t *)malloc(prompt_count * sizeof(*prompt_tokens));
     if (prompt_tokens == NULL) { fprintf(stderr, "oom\n"); goto cleanup; }
     prompt_tokens[0] = NIYAH_TOKEN_BOS;
 
     st = niyah_tokenizer_encode(tok, (const uint8_t *)prompt, strlen(prompt),
-                                 prompt_tokens + 1U, encoded, &encoded);
+                                prompt_tokens + 1U, encoded, &encoded);
     if (st != NIYAH_OK) { fail("prompt_encode", st); goto cleanup; }
+
+    printf("prompt_token_ids:");
+    for (i = 0U; i < prompt_count; ++i) printf(" %u", prompt_tokens[i]);
+    putchar('\n');
 
     st = niyah_kv_cache_create(&cache, &model.config);
     if (st != NIYAH_OK) { fail("kv_cache_create", st); goto cleanup; }
@@ -170,12 +201,12 @@ static int topk_logit_report(const char *tokenizer_path,
 
     for (i = 0U; i < prompt_count; ++i) {
         st = niyah_transformer_decode_token(&model, &cache, prompt_tokens[i],
-                                             logits, vocab, decode_ws, decode_ws_count);
+                                            logits, vocab, decode_ws, decode_ws_count);
         if (st != NIYAH_OK) { fail("decode_token", st); goto cleanup; }
     }
     /* logits[] now holds the raw next-token distribution right after the
-     * prompt — the exact buffer niyah_sampler_sample() argmaxes at temp=0,
-     * read before any sampling call happens. */
+     * prompt — the exact buffer niyah_sampler_sample() sees before the first
+     * generated token. */
 
     taken = (uint8_t *)calloc(vocab, 1U);
     if (taken == NULL) { fprintf(stderr, "oom\n"); goto cleanup; }
@@ -204,6 +235,48 @@ static int topk_logit_report(const char *tokenizer_path,
             ++printed;
         }
     }
+
+    if (trace_steps > 0U) {
+        NiyahSampler sampler;
+        NiyahSamplerConfig sampler_config;
+        size_t step;
+
+        memset(&sampler, 0, sizeof(sampler));
+        memset(&sampler_config, 0, sizeof(sampler_config));
+        sampler_config.temperature = 0.0f;
+        sampler_config.seed = 0U;
+
+        st = niyah_sampler_init(&sampler, &sampler_config);
+        if (st != NIYAH_OK) { fail("trace_sampler_init", st); goto cleanup; }
+
+        printf("greedy_trace_steps=%zu\n", trace_steps);
+        for (step = 0U; step < trace_steps; ++step) {
+            uint32_t token = 0U;
+            size_t cache_before = niyah_kv_cache_position(&cache);
+            size_t cache_after;
+            float selected_logit;
+            double prob;
+
+            st = niyah_sampler_sample(&sampler, logits, vocab, &token);
+            if (st != NIYAH_OK) { fail("trace_sampler_sample", st); goto cleanup; }
+
+            selected_logit = logits[token];
+            prob = token_probability(logits, vocab, (size_t)token);
+
+            st = niyah_transformer_decode_token(&model, &cache, token,
+                                                logits, vocab,
+                                                decode_ws, decode_ws_count);
+            if (st != NIYAH_OK) { fail("trace_decode_token", st); goto cleanup; }
+            cache_after = niyah_kv_cache_position(&cache);
+
+            printf("trace_step=%zu cache=%zu->%zu id=%u logit=%.6f prob=%.6f bytes=",
+                   step, cache_before, cache_after, token,
+                   (double)selected_logit, prob);
+            print_token_bytes(tok, token);
+            putchar('\n');
+        }
+    }
+
     rc = 0;
 
 cleanup:
@@ -225,6 +298,7 @@ int main(int argc, char **argv)
     const char *tokenizer_path = NULL, *shard_path = NULL;
     const char *checkpoint_path = NULL, *prompt = NULL;
     size_t topk = 10U;
+    size_t trace_steps = 0U;
     int i, rc = 0;
 
     for (i = 1; i + 1 <= argc; ++i) {
@@ -233,11 +307,12 @@ int main(int argc, char **argv)
         else if (i + 1 < argc && arg_eq(argv[i], "--checkpoint")) { checkpoint_path = argv[++i]; }
         else if (i + 1 < argc && arg_eq(argv[i], "--prompt")) { prompt = argv[++i]; }
         else if (i + 1 < argc && arg_eq(argv[i], "--topk")) { topk = (size_t)strtoul(argv[++i], NULL, 10); }
+        else if (i + 1 < argc && arg_eq(argv[i], "--trace-steps")) { trace_steps = (size_t)strtoul(argv[++i], NULL, 10); }
     }
 
     if (tokenizer_path == NULL) {
         fprintf(stderr, "usage: niyah_probe --tokenizer TOK [--shard SHARD] "
-                        "[--checkpoint CKPT --prompt TEXT [--topk N]]\n");
+                        "[--checkpoint CKPT --prompt TEXT [--topk N] [--trace-steps N]]\n");
         return 2;
     }
 
@@ -245,7 +320,7 @@ int main(int argc, char **argv)
         rc |= shard_report(tokenizer_path, shard_path);
     }
     if (checkpoint_path != NULL && prompt != NULL) {
-        rc |= topk_logit_report(tokenizer_path, checkpoint_path, prompt, topk);
+        rc |= topk_logit_report(tokenizer_path, checkpoint_path, prompt, topk, trace_steps);
     }
     return rc;
 }
