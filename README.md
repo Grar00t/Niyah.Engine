@@ -1,78 +1,186 @@
 # Niyah.Engine
 
-Niyah.Engine is a native local language model implementation built from scratch in C11, with optional CUDA acceleration planned after the CPU reference path and training lifecycle are established.
+[![core-ci](https://github.com/Grar00t/Niyah.Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Grar00t/Niyah.Engine/actions/workflows/ci.yml)
+![Language](https://img.shields.io/badge/language-C11-5c6bc0)
+![Reference backend](https://img.shields.io/badge/reference-CPU%20FP32-4f7cac)
+![Stage](https://img.shields.io/badge/stage-research%20runtime-c58b39)
+
+**Niyah.Engine** is a native C11 language-model implementation built from first principles around one canonical `NiyahModel` weight layout. The same model state is used for training, checkpoint/resume, evaluation, and autoregressive inference. No hosted-model API or external LLM runtime is required by the model core.
+
+<p align="center">
+  <img src="docs/assets/niyah-engine-architecture.svg" alt="Niyah.Engine end-to-end architecture" width="100%" />
+</p>
+
+## Design goals
+
+- **One model, one weight layout.** Training and inference operate on the same canonical weights.
+- **Native implementation.** Tokenization, Transformer math, backward gradients, optimization, persistence, and generation live in this repository.
+- **Deterministic lifecycle.** Fixed seeds, dataset cursor state, tokenizer identity, checkpoint identity, and explicit failure handling are first-class concerns.
+- **CPU reference first.** CPU FP32 defines the reference behavior. CUDA is an optional build-time backend, not a dependency of the core library.
+- **Evidence before claims.** Passing tests and successful runtime paths establish implementation behavior; they do not by themselves establish production readiness or useful language capability.
+
+## Current implementation
+
+| Area | Current state |
+|---|---|
+| Model core | Canonical contiguous FP32 weights, RMSNorm, RoPE, causal GQA, SwiGLU, final norm, LM head |
+| Tokenizer | Native deterministic byte-level BPE with persistence and SHA-256 identity |
+| Dataset | Tokenizer-bound `NIYAHSRD` shards, deterministic cursor/order persistence, explicit sample geometry |
+| Training | Cross-entropy, explicit backward gradients, global clipping, AdamW, gradient accumulation |
+| Persistence | Versioned checkpoint save/load plus separately persisted dataset cursor state |
+| Resume | Checkpoint + cursor compatibility checks and continued optimizer stepping |
+| Inference | KV cache, incremental decode, deterministic greedy/seeded sampling, autoregressive generation |
+| Evaluation | Read-only token-weighted mean cross-entropy and perplexity |
+| CUDA | Optional backend behind `NIYAH_ENABLE_CUDA`; CPU FP32 remains the reference |
+| CI | Ubuntu + Windows Release build/test, plus Ubuntu ASan/UBSan job |
+
+The repository also contains optional segment/role embedding support in the training API. Segment IDs are a modeling signal, not a security boundary.
+
+## What this repository does **not** claim
+
+The current implementation should not be described as production-ready solely because the native pipeline builds and tests successfully. The repository does not currently establish:
+
+- production-scale training behavior;
+- mixed-precision training;
+- production orchestration or distributed training;
+- final Arabic or English language capability;
+- final held-out quality for a validation set known to share the current tokenizer semantics;
+- compatibility between historical raw K11 weights and the current checkpoint/tokenizer contracts.
+
+## Build
+
+Requirements:
+
+- CMake 3.20+
+- a C11 compiler
+- optional CUDA toolkit only when building the CUDA backend
+
+Configure and build out-of-source:
+
+```sh
+cmake -S . -B build -DNIYAH_BUILD_TESTS=ON
+cmake --build build --config Release
+```
+
+Run the regression suite:
+
+```sh
+ctest --test-dir build -C Release --output-on-failure
+```
+
+The `--config Release` argument is relevant to multi-config generators such as Visual Studio; it is harmless to omit for single-config generators configured with `CMAKE_BUILD_TYPE`.
+
+## Prepare a corpus
+
+```sh
+niyah prepare \
+  --corpus corpus.txt \
+  --tokenizer-out tok.bin \
+  --shard-out shard.bin \
+  --target-vocab 269 \
+  --min-pair-frequency 2 \
+  --sequence-length 64
+```
+
+The base tokenizer vocabulary is 258 tokens: raw bytes `0..255`, BOS `256`, and EOS `257`. Learned BPE tokens begin at `258`.
+
+`prepare` also supports boundary-aware records and supervised prompt/response preprocessing through `--record-mode blank-line` and one or more `--response-delimiter` values.
+
+## Train from scratch
+
+```sh
+niyah-train new \
+  --tokenizer tok.bin \
+  --shard shard.bin \
+  --checkpoint-out model.ckpt \
+  --cursor-out cursor.bin \
+  --updates 100 \
+  --batch-size 32 \
+  --accumulation-steps 4 \
+  --model-seed 42 \
+  --data-seed 42 \
+  --context-length 64 \
+  --embedding-dim 128 \
+  --layers 4 \
+  --heads 4 \
+  --kv-heads 2 \
+  --ffn-hidden-dim 512 \
+  --rms-norm-eps 1e-5 \
+  --tie-word-embeddings 1 \
+  --learning-rate 0.0005 \
+  --beta1 0.9 \
+  --beta2 0.999 \
+  --epsilon 1e-8 \
+  --weight-decay 0.01 \
+  --max-grad-norm 1.0
+```
+
+`niyah-train` prints per-update progress to stderr and a structured summary on successful completion. Multiple `--shard` arguments are accepted in an ordered collection.
+
+## Resume training
+
+```sh
+niyah-train resume \
+  --tokenizer tok.bin \
+  --shard shard.bin \
+  --checkpoint-in model.ckpt \
+  --cursor-in cursor.bin \
+  --checkpoint-out model-next.ckpt \
+  --cursor-out cursor-next.bin \
+  --updates 1 \
+  --batch-size 32 \
+  --accumulation-steps 4
+```
+
+Resume outputs must be new paths. Inputs are never overwritten. Before training continues, the runtime validates tokenizer/checkpoint compatibility and the persisted dataset/cursor identities required by the current format.
+
+## Run inference
+
+```sh
+niyah run \
+  --tokenizer tok.bin \
+  --checkpoint model-next.ckpt \
+  --prompt "Hello" \
+  --max-new-tokens 32 \
+  --temperature 0 \
+  --seed 42 \
+  --backend cpu
+```
+
+When compiled with `NIYAH_ENABLE_CUDA=ON`, the CLI can also select `--backend cuda`. CUDA support is optional; CPU remains the reference path.
+
+## Architectural boundary
+
+Niyah.Engine intentionally keeps the model core independent from application infrastructure. The following are **not required dependencies** of the native model runtime:
+
+- hosted model APIs;
+- Llama / Qwen / Mistral runtimes;
+- llama.cpp or Hugging Face Transformers runtime;
+- RAG or vector databases;
+- PostgreSQL or document services;
+- agent frameworks, GUI shells, or HTTP serving layers.
+
+Those systems may be integrated externally when a concrete application requires them, but they are not prerequisites for building, training, loading, or running the model.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — model layout, data flow, training/inference paths, persistence boundaries
+- [Training lifecycle](docs/TRAINING.md) — prepare, new training, resume, evaluation, and failure boundaries
+- [Verification status](docs/VERIFICATION.md) — what has been demonstrated and what remains unestablished
+
+## Repository layout
+
+```text
+include/niyah/       Public C API
+src/                 Core implementation
+tools/               CLI and benchmark programs
+tests/               Native regression tests
+docs/                Architecture and lifecycle documentation
+.github/workflows/   CI configuration
+```
 
 ## North star
 
-The repository exists to build one canonical language model whose **same weights** are used for training and autoregressive inference.
+The project exists to answer a narrow systems question rigorously: **can one small, native, auditable C implementation own the complete language-model lifecycle without delegating its core semantics to an external LLM runtime?**
 
-Core path:
-
-```text
-text
-  -> Niyah tokenizer
-  -> token ids
-  -> embeddings
-  -> Transformer blocks
-  -> final RMSNorm
-  -> LM head
-  -> logits
-  -> sampler
-  -> autoregressive generation
-```
-
-Training path:
-
-```text
-token ids
-  -> same NiyahModel weights
-  -> forward
-  -> cross entropy
-  -> backward
-  -> gradients
-  -> global gradient clipping
-  -> AdamW
-  -> same canonical weights updated
-  -> versioned model + AdamW checkpoint / resume foundation
-```
-
-## Core rules
-
-- Native C11 implementation.
-- CPU FP32 is the current reference path; optional CUDA acceleration is planned later.
-- One canonical `NiyahModel` layout for training and inference.
-- Deterministic tests currently cover model math, tokenizer behavior, forward/decode parity, gradients, generation, the tokenizer-to-model text pipeline, AdamW arithmetic, global clipping, the tiny backward-to-AdamW training chain, and checkpoint roundtrip/resume, corruption rejection, and failure-atomic behavior.
-- The tiny deterministic training-chain tests verify executable integration and loss decrease on a synthetic task; they do not establish real-corpus convergence or Arabic/English model capability.
-- No hidden telemetry.
-- No hosted-model API dependency.
-- No external LLM runtime or model dependency.
-
-The following are **not** core dependencies: Qwen, Mistral, Llama, llama.cpp, Hugging Face Transformers runtime, OpenAI/Anthropic/Google model APIs, PostgreSQL, RAG, evidence graphs, or constraint engines.
-
-PostgreSQL may be used later only as an optional external service for metadata or tooling if a concrete use case justifies it. It must never be required to build, train, load, or run the model.
-
-## Initial implementation order
-
-Implemented:
-
-1. Canonical model/config and tensor layout.
-2. Tokenizer runtime + tokenizer training.
-3. RMSNorm, RoPE, attention/GQA, SwiGLU, residual path.
-4. KV cache and autoregressive generation.
-5. Cross-entropy and explicit backward gradients on the canonical weights.
-6. Native reference AdamW with robust global gradient clipping over the canonical gradient vector.
-7. Versioned model + AdamW checkpoint/resume foundation.
-
-Planned:
-
-8. Deterministic dataset/training lifecycle: cursor/order persistence, tokenizer-bound binary shard V1 preprocessing/persistence, zero-copy shard-to-training sample adaptation, the reference training loop, deterministic per-sample gradient accumulation with one averaged optimizer update, and the native niyah-train new/resume executable are implemented; production multi-shard tooling, production-scale training orchestration, and true tensor mini-batching remain.
-9. Held-out validation/perplexity: read-only token-weighted mean loss and perplexity evaluation are implemented.
-10. Optional CUDA kernels and residency.
-
-## Status
-
-The current implementation is the native CPU reference path through explicit backward gradients, robust global gradient clipping, AdamW updates to the same canonical FP32 model weights, and versioned persistence of the canonical model plus AdamW training state.
-
-Tokenizer persistence V1 saves and loads tokenizer state with a stable SHA-256 identity. Checkpoint V2 can bind model and AdamW state to that tokenizer identity while Checkpoint V1 remains supported. Dataset cursor state is persisted separately by the dataset lifecycle API; checkpoint persistence does not yet include that cursor state, scheduler state, gradient accumulation state, mixed-precision/CUDA state, or other training-path RNG state.
-
-Production multi-shard dataset tooling, a production training executable, true tensor mini-batching, mixed precision, CUDA, instruction tuning, and conversational tuning are not implemented. Real-corpus convergence, Arabic model capability, and English model capability have not been demonstrated.
+Niyah.Engine treats that as an engineering problem: explicit formats, deterministic state, executable tests, and progressively stronger evidence.
