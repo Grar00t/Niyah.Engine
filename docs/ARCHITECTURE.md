@@ -1,18 +1,40 @@
-# Canonical LLM Architecture
+# Niyah.Engine Architecture
 
-## Identity
+Niyah.Engine is organized around a single architectural invariant: **training, persistence, evaluation, and inference operate on one canonical `NiyahModel` layout**. There is no second model family hidden behind generation and no required external LLM runtime.
 
-Niyah.Engine is one native language model implementation. Training and inference operate on the same `NiyahModel` weight layout.
+<p align="center">
+  <img src="assets/niyah-engine-architecture.svg" alt="Full Niyah.Engine architecture" width="100%" />
+</p>
 
-There is no second "mini" model family and no external model runtime behind generation.
+## 1. System boundary
 
-## Canonical weight order
+The native model core owns:
 
-All model parameters live in one contiguous FP32 array:
+- model configuration and canonical parameter layout;
+- tokenizer training, encoding, decoding, persistence, and identity;
+- dataset shard construction, loading, identity, and deterministic cursor state;
+- full-sequence Transformer forward execution;
+- incremental decode with KV cache;
+- causal language-model loss;
+- explicit backward gradients;
+- robust global gradient clipping;
+- AdamW optimizer state and updates;
+- checkpoint persistence and compatibility validation;
+- read-only evaluation;
+- autoregressive generation and sampling.
+
+Application concerns such as RAG, databases, hosted APIs, agent orchestration, GUIs, HTTP servers, and document systems remain outside this boundary.
+
+## 2. Canonical model representation
+
+`NiyahModel` owns a configuration, a computed layout, one contiguous FP32 weight array, and the total weight count.
+
+Conceptually, the canonical parameter order is:
 
 ```text
 token_embedding [vocab, dim]
-for each layer:
+optional segment_embedding [segments, dim]
+for each transformer layer:
   attn_norm      [dim]
   wq             [dim, dim]
   wk             [kv_dim, dim]
@@ -23,118 +45,335 @@ for each layer:
   w_up           [ffn, dim]
   w_down         [dim, ffn]
 final_norm        [dim]
-lm_head           [vocab, dim]   # omitted as separate storage when tied
+lm_head           [vocab, dim]   # separate only when embeddings are untied
 ```
 
-`head_dim = dim / n_heads` and `kv_dim = head_dim * n_kv_heads`.
+where:
 
-This ordering is the contract for full forward, incremental decode, backward gradients, AdamW updates, and checkpoint persistence.
+```text
+head_dim = embedding_dim / n_heads
+kv_dim   = head_dim * n_kv_heads
+```
 
-## Model invariants
+This order is the contract shared by forward execution, backward gradients, AdamW state, persistence, and inference.
 
-- Configuration validation rejects invalid head/GQA dimensions, including RoPE head dimensions smaller than 2 or not divisible by 2.
-- Weight-size arithmetic is overflow-checked.
-- Tied embeddings make the LM head reference the embedding offset rather than allocating duplicate parameters.
-- Untied embeddings allocate a real independent LM head.
-- Parameter initialization is deterministic for a fixed seed.
-- CPU FP32 math is the current reference implementation.
+### Model invariants
 
-## Tokenizer contract
+- configuration validation rejects incompatible head/GQA geometry;
+- weight-size arithmetic is overflow-checked;
+- tied embeddings reuse physical storage rather than duplicating the LM head;
+- initialization is deterministic for a fixed seed;
+- CPU FP32 is the reference implementation;
+- optional segment embeddings are a trainable modeling signal, not an isolation or security primitive.
 
-The tokenizer is implemented inside Niyah.Engine; it is not delegated to an external model or tokenizer runtime.
+## 3. Tokenizer contract
 
-- Byte tokens `0..255` guarantee lossless coverage of arbitrary input bytes and UTF-8 text.
-- `256` is BOS and `257` is EOS.
-- Learned tokens begin at `258`.
-- Training is deterministic byte-level BPE with explicit merge order and deterministic tie-breaking.
-- `target_vocab_size` is an upper training target; model configuration for a trained tokenizer uses the realized tokenizer vocabulary size.
-- Runtime encoding starts from bytes and applies learned merge rules in training order.
-- Decoding reconstructs original bytes exactly while ignoring BOS/EOS control tokens.
-- Arabic and English round-trip behavior is covered by native tests.
-- Generic generation remains tokenizer-independent; EOS is an explicit caller-provided token ID.
+The tokenizer is native to Niyah.Engine.
 
-## AdamW training primitive
+### Base vocabulary
 
-The CPU reference optimizer updates the same canonical FP32 weight storage used by forward, decode, and backward.
+```text
+0..255  raw byte tokens
+256     BOS
+257     EOS
+258+    learned BPE merge tokens
+```
 
-- One robust global L2 norm is computed over the complete canonical gradient vector.
-- Clipping is optimizer-internal and leaves caller-owned gradients unchanged.
-- Adam first and second moments are stored as FP32 arrays with one element per canonical model weight.
-- Bias correction is evaluated for the next optimizer step using double-precision calculations.
-- Weight decay is decoupled from the gradient/moment path.
-- Token embeddings, projection/feed-forward matrices, and an untied LM head are decay-enabled.
-- Attention RMSNorm, feed-forward RMSNorm, and final RMSNorm scales are decay-exempt.
-- Tied token-embedding/LM-head storage is processed once because it is one physical canonical span.
-- Structural, numerical, step-overflow, aliasing, and FP32-representability checks complete before the two-pass commit mutates weights or optimizer state.
-- Optimizer model/storage pointer binding is an in-process compatibility check only; it is not checkpoint identity.
+The base vocabulary size is therefore 258. `target_vocab_size` is an upper training target; the realized vocabulary depends on how many valid merges are learned from the corpus.
 
-## Implemented now
+### Properties
 
-- canonical contiguous FP32 `NiyahModel` weights;
-- deterministic native parameter initialization;
-- native byte-level BPE tokenizer and tokenizer training;
-- tokenizer persistence V1 with stable SHA-256 tokenizer identity;
-- tokenizer-bound Checkpoint V2 while Checkpoint V1 remains supported;
-- deterministic dataset sample ordering with resumable cursor persistence;
-- deterministic text preprocessing into tokenizer-bound NIYAHSRD V1 binary shards with shifted causal-LM sample views;
-- zero-copy adaptation from a loaded dataset shard into NiyahTrainingSample descriptors;
-- deterministic single-sample reference training loop over dataset cursor, backward gradients, and AdamW;
-- deterministic sequential per-sample gradient accumulation with one averaged AdamW update per accumulated group;
-- native niyah-train orchestration for fresh and resumed single-shard training using tokenizer-bound checkpoints plus separately persisted dataset cursors;
-- read-only held-out evaluation with token-weighted mean cross-entropy and perplexity;
-- RMSNorm;
-- RoPE;
-- causal grouped-query attention;
-- SwiGLU feed-forward path;
-- full-sequence Transformer forward;
-- KV cache;
-- incremental single-token decode;
-- deterministic greedy/seeded sampler;
-- autoregressive generation;
-- cross-entropy objective;
-- explicit CPU backward gradients over the canonical model weights;
-- robust global gradient clipping;
-- native reference AdamW over the canonical model weights;
-- versioned checkpoint save/load for canonical model weights and AdamW `m`, `v`, step, and hyperparameters;
-- explicit little-endian checkpoint wire format with streaming CRC-32 corruption detection;
-- two-pass checkpoint load with structural validation before reconstructed state is committed to caller outputs;
-- optimizer tests covering arithmetic, decay policy, state validation, failure atomicity, and tied/untied storage;
-- deterministic tiny backward -> clipping -> AdamW training-chain coverage for tied and untied models;
-- tokenizer -> realized vocabulary -> model -> incremental decode -> generation -> tokenizer decode integration coverage;
-- Ubuntu and Windows Release CI;
-- Ubuntu Debug AddressSanitizer + UndefinedBehaviorSanitizer CI.
+- arbitrary byte input is representable without an unknown-token fallback;
+- UTF-8 text is handled as bytes and can round-trip losslessly;
+- BPE merge learning and application are deterministic;
+- tokenizer persistence carries a stable SHA-256 identity;
+- tokenizer identity is used by checkpoint and dataset compatibility checks.
 
-## Not implemented yet
+## 4. Dataset architecture
 
-- production multi-shard dataset tooling;
-- production training executable;
-- true tensor mini-batch training;
-- mixed precision;
-- CUDA backend;
-- instruction-tuning pipeline;
-- conversational-tuning pipeline.
+The dataset subsystem has two separate responsibilities: **content persistence** and **sequencing state**.
 
-## Not demonstrated by current tests
+### Dataset shards
 
-- real-corpus language-model convergence;
-- Arabic model capability;
-- English model capability;
-- production-scale training behavior.
+`NiyahDatasetShard` persists tokenized training content and sample geometry. Current code supports versioned `NIYAHSRD` persistence and validates the tokenizer identity when loading a shard.
 
-The tiny deterministic training-chain tests prove only that the currently implemented forward, objective, backward, clipping, and AdamW components form a coherent executable update path whose synthetic loss decreases under the tested configuration.
+The preparation path supports:
 
-## Current scaling risks
+- continuous text streams;
+- boundary-aware blank-line records;
+- supervised prompt/response records with a response delimiter and response-only objective masking.
 
-- Tokenizer BPE training processes the corpus in memory and repeatedly rebuilds/sorts pair arrays.
-- Full training currently materializes `token_count * vocab_size` logits and corresponding `dlogits`.
-- Transformer mathematics is duplicated across full forward, incremental decode, and the cached forward used by backward. Parity tests reduce drift risk but do not remove this duplication.
+A causal-LM sample exposes shifted views:
 
-These are later engineering targets. Checkpoint persistence does not refactor the three Transformer execution paths.
+```text
+input : t0 t1 t2 ... tN-1
+target: t1 t2 t3 ... tN
+```
 
-## Architectural boundary
+### Dataset cursor
 
-The model core contains tokenizer, model layout/weights, Transformer math, inference primitives, backward gradients, global clipping, the reference AdamW optimizer, versioned checkpoint persistence, and deterministic dataset cursor sequencing/persistence. Production multi-shard dataset tooling, production-scale training orchestration, true tensor mini-batching, and accelerator work remain later model-training lifecycle work. Tool use, planning, shell/files/git/search orchestration, persistent task state, GUI, HTTP serving, RAG, databases, and agent frameworks are outside the model core.
+`NiyahDatasetCursor` tracks deterministic sample ordering and progress independently of the shard contents. Persisted cursor state can bind to:
 
-## Out of core
+- sample count;
+- dataset collection identity;
+- checkpoint identity;
+- deterministic epoch/order position.
 
-RAG, evidence systems, graph reasoning, PostgreSQL, document services, hosted model APIs, external LLM runtimes, and agent frameworks are not model-core dependencies. Niyah.Core must remain buildable and usable without those systems.
+This separation lets checkpoint/model state and dataset sequencing state evolve as an explicit pair rather than hiding sequencing state inside the model object.
+
+## 5. Transformer execution
+
+A full forward pass follows:
+
+```text
+token ids
+  → token embeddings
+  → optional segment embeddings
+  → N × Transformer layer
+      → RMSNorm
+      → RoPE
+      → causal grouped-query attention
+      → residual
+      → RMSNorm
+      → SwiGLU feed-forward
+      → residual
+  → final RMSNorm
+  → LM head
+  → logits
+```
+
+### Grouped-query attention
+
+The model allows `n_kv_heads <= n_heads`. Query heads are mapped onto the smaller K/V head set through GQA geometry derived from `head_dim` and `kv_dim`.
+
+### Incremental decode
+
+Inference does not recompute the entire prefix on every generated token. The decode path uses a KV cache and advances token-by-token after the prompt has been encoded.
+
+## 6. Training lifecycle
+
+`niyah-train` exposes two modes: `new` and `resume`.
+
+### New training
+
+```text
+tokenizer + ordered shard collection
+  → model initialization
+  → AdamW state initialization
+  → deterministic dataset cursor
+  → select samples
+  → forward / cross entropy
+  → backward
+  → accumulate gradients
+  → average accumulated gradients
+  → global L2 clipping
+  → AdamW update
+  → repeat
+  → save checkpoint
+  → compute checkpoint identity
+  → bind cursor to checkpoint identity
+  → save cursor
+```
+
+The effective number of sample consumptions per optimizer update is:
+
+```text
+batch_size × accumulation_steps
+```
+
+The current implementation performs deterministic sequential per-sample gradient accumulation and then commits one optimizer update for the accumulated group. This is not the same as a vectorized tensor mini-batch kernel.
+
+### Progress reporting
+
+After each completed optimizer update, `niyah-train` emits:
+
+```text
+update=I/N loss=L
+```
+
+to stderr. The final structured run summary is emitted after successful completion.
+
+## 7. Resume contract
+
+Resume is intentionally strict. It loads and checks the persisted state rather than silently starting a new run.
+
+Conceptually:
+
+```text
+tok.bin
+  + model.ckpt
+  + cursor.bin
+  + ordered shard collection
+      ↓
+load tokenizer
+load checkpoint bound to tokenizer
+load cursor
+compute dataset collection identity
+verify sample count / dataset identity
+verify checkpoint identity
+verify context/model compatibility
+      ↓
+continue optimizer steps
+      ↓
+write new checkpoint + new cursor
+```
+
+Resume inputs are not overwritten; output paths must be new paths.
+
+## 8. Checkpoint architecture
+
+A checkpoint persists the state required to reconstruct the trainable model and optimizer lifecycle, including:
+
+- canonical model configuration;
+- canonical model weights;
+- AdamW first moments;
+- AdamW second moments;
+- optimizer step;
+- optimizer hyperparameters;
+- tokenizer compatibility metadata in tokenizer-bound formats.
+
+Checkpoint persistence is versioned, explicitly serialized, corruption-checked, and loaded through validation before reconstructed state is published to the caller.
+
+A separately persisted dataset cursor completes the resumable training-state pair.
+
+## 9. Evaluation
+
+`niyah_evaluate()` is a read-only evaluation primitive over caller-owned token/target samples.
+
+It reports:
+
+```text
+sample_count
+token_count
+mean_loss   # token-weighted mean cross entropy / mean token NLL
+perplexity  # exp(mean_loss)
+```
+
+Evaluation does not mutate the model weights. A meaningful quality claim still requires a genuinely held-out dataset that is semantically compatible with the tokenizer used to train the checkpoint.
+
+## 10. Inference
+
+`niyah run` performs:
+
+```text
+tok.bin + checkpoint
+  → tokenizer load
+  → tokenizer-bound checkpoint load
+  → prompt encoding
+  → BOS + prompt tokens
+  → KV-cache generation
+  → sampler
+  → decoded output bytes
+```
+
+The runtime validates context capacity before generation.
+
+### Sampling
+
+The CLI supports deterministic generation at `temperature=0` and seeded stochastic generation for positive temperatures.
+
+## 11. CPU and CUDA
+
+### CPU
+
+CPU FP32 is the reference path and the baseline for correctness.
+
+### CUDA
+
+CUDA is optional and enabled at configure time:
+
+```sh
+cmake -S . -B build-cuda -DNIYAH_ENABLE_CUDA=ON
+cmake --build build-cuda --config Release
+```
+
+When enabled, CMake builds the optional CUDA backend and links CUDA support into the `niyah` CLI. The CLI can then select:
+
+```text
+--backend cpu
+--backend cuda
+```
+
+The existence of an optional CUDA path does not by itself establish CUDA training parity, mixed precision, or production accelerator readiness.
+
+## 12. CI and failure boundaries
+
+The repository CI currently exercises:
+
+- Ubuntu Release build/test;
+- Windows Release build/test;
+- Ubuntu Debug with AddressSanitizer and UndefinedBehaviorSanitizer.
+
+Core code is compiled with warnings treated as errors in the configured toolchains.
+
+The design prefers explicit failure over silent state corruption. Examples include validation of:
+
+- model geometry;
+- non-finite numerical states;
+- tokenizer/shard compatibility;
+- checkpoint structure and corruption checks;
+- cursor/dataset/checkpoint identities;
+- output-path collisions;
+- context capacity;
+- optimizer state compatibility.
+
+## 13. Repository map
+
+```text
+include/niyah/
+  niyah.h              Canonical model/config/layout API
+  tokenizer.h          Tokenizer API and token constants
+  dataset.h            Shards, cursor, identities
+  train.h              Loss/backward interfaces
+  training_loop.h      Accumulation/update lifecycle
+  optimizer.h          AdamW and clipping
+  checkpoint.h         Checkpoint persistence/identity
+  eval.h               Read-only evaluation
+  decode.h             KV-cache decode
+  generate.h           Autoregressive generation
+
+src/
+  niyah_model.c
+  niyah_math.c
+  niyah_tokenizer.c
+  niyah_dataset.c
+  niyah_dataset_shard.c
+  niyah_transformer.c
+  niyah_decode.c
+  niyah_sampler.c
+  niyah_generate.c
+  niyah_train.c
+  niyah_backward.c
+  niyah_training_loop.c
+  niyah_optimizer.c
+  niyah_checkpoint.c
+  niyah_eval.c
+
+tools/
+  niyah.c               prepare + run CLI
+  niyah_train.c         new + resume training CLI
+  niyah_cuda_generation_bench.c
+
+tests/
+  native regression coverage
+```
+
+## 14. Architectural non-goals
+
+The following are intentionally not required model-core dependencies:
+
+- external LLM runtimes;
+- hosted model APIs;
+- RAG/vector stores;
+- relational or document databases;
+- agent/tool orchestration frameworks;
+- GUI shells;
+- web serving infrastructure.
+
+These may exist in applications around Niyah.Engine, but they must not become prerequisites for the native language-model lifecycle.
+
+## 15. Evidence boundary
+
+Architecture documentation describes what the implementation is designed to do. It must not be read as evidence that the model has already achieved production-scale convergence or useful language capability.
+
+For the current verification boundary, see [VERIFICATION.md](VERIFICATION.md).
