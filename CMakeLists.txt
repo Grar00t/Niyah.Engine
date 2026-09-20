@@ -162,6 +162,14 @@ else()
     target_compile_options(niyah_cli PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+
+add_executable(niyah_probe tools/niyah_probe.c)
+target_link_libraries(niyah_probe PRIVATE niyah)
+if(MSVC)
+    target_compile_options(niyah_probe PRIVATE /W4 /WX)
+else()
+    target_compile_options(niyah_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 if(NIYAH_BUILD_TESTS)
     enable_testing()
 
