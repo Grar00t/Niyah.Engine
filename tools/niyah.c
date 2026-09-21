@@ -1039,6 +1039,13 @@ static int eval_command(int argc, char **argv)
             goto cleanup;
         }
 
+        if (shard.has_loss_starts != 0) {
+            exit_code = fail_status(
+                "loss_masked_shard",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
         if (shard.sequence_length == 0U ||
             shard.sequence_length >
                 (size_t)model.config.context_length) {
