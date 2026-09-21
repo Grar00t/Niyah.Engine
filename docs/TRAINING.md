@@ -1,8 +1,11 @@
-# Training Lifecycle
+# Training
 
-This document describes the native training lifecycle implemented by Niyah.Engine: corpus preparation, fresh training, checkpoint/cursor persistence, resume, inference verification, and evaluation.
+Niyah.Engine implements a native training lifecycle from tokenizer-bound dataset shards through checkpoint/cursor persistence and resume.
 
-## 1. Lifecycle overview
+> [!NOTE]
+> This document describes training mechanics. Model quality is evaluated separately in [EVALUATION.md](EVALUATION.md).
+
+## Lifecycle
 
 ```text
 raw corpus
@@ -19,14 +22,14 @@ niyah-train resume
   ├─ model-next.ckpt
   └─ cursor-next.bin
        ↓
-niyah run / niyah_evaluate()
+niyah run / niyah_evaluate() / niyah_probe
 ```
 
-The tokenizer, shard collection, checkpoint, and cursor form explicit compatibility boundaries. Do not mix artifacts from unrelated preprocessing/training runs unless compatibility has been demonstrated.
+Tokenizer, dataset, checkpoint, and cursor identities form explicit compatibility boundaries. Do not mix artifacts from unrelated preparation/training runs unless compatibility is established.
 
-## 2. Prepare
+## Corpus preparation
 
-Example:
+Basic preparation:
 
 ```sh
 niyah prepare \
@@ -38,17 +41,7 @@ niyah prepare \
   --sequence-length 64
 ```
 
-### Outputs
-
-`tok.bin`
-: Persisted tokenizer state with a stable identity used by downstream compatibility checks.
-
-`shard.bin`
-: Tokenizer-bound dataset shard containing the token stream and sample geometry used by the training loop.
-
-### Record-aware preparation
-
-Preparation can preserve record boundaries:
+Record-aware preparation:
 
 ```sh
 niyah prepare \
@@ -58,14 +51,25 @@ niyah prepare \
   --target-vocab 269 \
   --min-pair-frequency 2 \
   --sequence-length 64 \
-  --record-mode blank-line
+  --record-mode blank-line \
+  --response-delimiter "Assistant:"
 ```
 
-For supervised records, one or more `--response-delimiter` values can define the prompt/response split. Prompt tokens remain context while direct objective supervision begins at the response target.
+The response delimiter is corpus-specific. Niyah.Engine does not hard-code a universal chat format.
 
-## 3. Fresh training
+### Supervised objective geometry
 
-Example reference configuration:
+For response-masked records:
+
+```text
+BOS + prompt + response + EOS
+```
+
+Prompt tokens remain causal context. Direct objective supervision begins at the response target boundary and continues through the following supervised targets.
+
+## Fresh training
+
+Example exercised small-model configuration:
 
 ```sh
 niyah-train new \
@@ -94,9 +98,9 @@ niyah-train new \
   --max-grad-norm 1.0
 ```
 
-The numeric values above are an exercised small-model configuration, not universal recommended hyperparameters.
+These values document an exercised small configuration. They are not universal recommended hyperparameters.
 
-### Update semantics
+## Update semantics
 
 One optimizer update consumes:
 
@@ -104,7 +108,7 @@ One optimizer update consumes:
 batch_size × accumulation_steps
 ```
 
-samples through deterministic sequential gradient accumulation.
+sample slots through deterministic sequential gradient accumulation.
 
 For example:
 
@@ -114,33 +118,65 @@ For example:
 
 This is an accumulation contract, not a claim of vectorized tensor mini-batching.
 
-### Progress output
+With response masking, the number of supervised target tokens can be lower than:
 
-After every completed update, the CLI emits:
+```text
+sample_consumptions × sequence_length
+```
+
+because prompt positions may contribute causal context without direct objective loss.
+
+## Optimizer path
+
+Conceptually:
+
+```text
+sample
+  ↓
+Transformer forward
+  ↓
+causal / masked cross entropy
+  ↓
+explicit backward gradients
+  ↓
+gradient accumulation
+  ↓
+average accumulated gradients
+  ↓
+global L2 clipping
+  ↓
+AdamW update
+```
+
+The trainable state and optimizer state are persisted in the checkpoint contract used by resume.
+
+## Progress output
+
+After each completed optimizer update, `niyah-train` emits to stderr:
 
 ```text
 update=I/N loss=L
 ```
 
-The reported value is training loss for the completed accumulated update. It is **not** held-out validation loss.
+The per-update value can be noisy because it reflects the current accumulated update. Do not use one final update value as the primary model-quality metric.
 
-## 4. Checkpoint/cursor pair
+On successful completion, the CLI emits a structured summary including fields such as mode, shard/sample counts, update count, optimizer step, cursor state, mean loss, and output paths.
 
-Successful training produces two distinct artifacts.
+## Checkpoint and cursor
+
+Training produces two distinct persistence artifacts.
 
 ### Checkpoint
 
-The model checkpoint carries the canonical trainable state required by the current persistence contract, including model weights and AdamW state/configuration.
+The model checkpoint carries the trainable model/optimizer state required by the current format.
 
 ### Cursor
 
-The dataset cursor carries deterministic sequencing state and persisted identity bindings.
+The dataset cursor carries deterministic sequencing state and identity bindings.
 
-Treat the checkpoint and cursor as a pair for resume purposes. A cursor may be bound to the exact checkpoint bytes through checkpoint identity.
+Treat them as a pair for resume. The cursor can be bound to the exact checkpoint identity and ordered dataset collection identity.
 
-## 5. Resume
-
-Example:
+## Resume
 
 ```sh
 niyah-train resume \
@@ -148,27 +184,53 @@ niyah-train resume \
   --shard shard.bin \
   --checkpoint-in model-0100.ckpt \
   --cursor-in cursor-0100.bin \
-  --checkpoint-out model-0101.ckpt \
-  --cursor-out cursor-0101.bin \
-  --updates 1 \
+  --checkpoint-out model-0200.ckpt \
+  --cursor-out cursor-0200.bin \
+  --updates 100 \
   --batch-size 32 \
   --accumulation-steps 4
 ```
 
-### Resume safety properties
+Resume validates persisted state required by the current formats before continuing.
 
-The current CLI is designed to reject incompatible or ambiguous persisted state rather than silently continuing. Resume validates the state required by the format, including relevant tokenizer, dataset, checkpoint, sample-count, and model-context compatibility.
+Important behavior:
 
-Resume inputs are never overwritten. Output paths must be new.
+- resume inputs are not overwritten;
+- output paths must be new;
+- incompatible tokenizer/checkpoint/dataset/cursor state is rejected rather than silently ignored.
 
-## 6. Inference verification
+## Current diagnostic continuation record
 
-After a checkpoint is created or resumed, verify that it can be loaded by the runtime:
+A supplied local run completed a 635-update resume stage from optimizer step 1270 to 1905:
+
+```text
+updates=635
+batch_size=8
+accumulation_steps=2
+optimizer_step=1905
+cursor_epoch=3
+cursor_position=9
+mean_loss=3.74314785
+RESUME_EXIT=0
+```
+
+Output artifacts were recorded as:
+
+```text
+model-1905.ckpt  13,383,392 bytes
+cursor-1905.bin  120 bytes
+```
+
+The exact repository SHA used to build that local training binary is not present in the supplied transcript. Therefore this experiment record is kept separate from the repository CI snapshot.
+
+## Inference verification
+
+A produced checkpoint can be loaded through the native generation path:
 
 ```sh
 niyah run \
   --tokenizer tok.bin \
-  --checkpoint model-0101.ckpt \
+  --checkpoint model-0200.ckpt \
   --prompt "Hello" \
   --max-new-tokens 16 \
   --temperature 0 \
@@ -176,81 +238,75 @@ niyah run \
   --backend cpu
 ```
 
-A successful exit establishes that the tokenizer/checkpoint pair can enter the native generation path. It does not establish model quality.
+A successful exit establishes load + generation execution for that tokenizer/checkpoint pair. It does not establish useful output quality.
 
-## 7. Evaluation
+## Evaluation discipline
 
-The public evaluation API is read-only:
+Training loss and held-out loss answer different questions.
 
-```c
-NiyahStatus niyah_evaluate(
-    const NiyahModel *model,
-    const NiyahEvaluationSample *samples,
-    size_t sample_count,
-    NiyahEvaluationMetrics *out_metrics);
+```text
+training loss   → how well current updates fit the training objective
+validation loss → how well the checkpoint predicts a fixed unseen selection used for decisions
+final test loss → held untouched until training decisions are frozen
 ```
 
-Metrics are:
+The current 30-record pilot held-out set has been used to decide whether training should continue, so it is now validation-like.
 
-- `sample_count`
-- `token_count`
-- token-weighted mean cross-entropy (`mean_loss`)
-- perplexity (`exp(mean_loss)`)
+See [EVALUATION.md](EVALUATION.md) for the measured checkpoint trajectory.
 
-### Validation requirements
+## Data quality
 
-A defensible held-out result requires all of the following:
+Optimization quality and corpus quality are separate.
 
-1. validation text that was not included in the training corpus;
-2. tokenization semantics known to match the tokenizer used by the checkpoint;
-3. objective/sample geometry compatible with the evaluation being reported;
-4. no mutation of model weights during evaluation.
+A model can successfully lower training and validation loss while learning poor facts or poor conversational style if those patterns exist in both training and validation distributions.
 
-Raw token-ID windows from an older preprocessing pipeline are not automatically semantically compatible merely because every ID falls inside the current vocabulary range.
+The current diagnostic corpus has known quality concerns. See [DATA.md](DATA.md).
 
-## 8. Failure handling
+## Failure handling
 
-Do not reinterpret a rejected artifact as usable data. Important failure classes include:
+Important explicit failure classes include:
 
-- malformed or corrupt shard/checkpoint data;
+- malformed/corrupt shard or checkpoint data;
 - unsupported format versions;
 - tokenizer identity mismatch;
-- invalid model configuration;
-- output-path collisions;
+- invalid model geometry/configuration;
 - non-finite numerical states;
+- output-path collisions;
 - cursor/dataset/checkpoint identity mismatch;
 - context-capacity violations.
 
-The expected response to these failures is to identify the incompatible artifact or contract, not to bypass validation.
+Do not bypass a failed compatibility check merely to continue a run. Identify the incompatible artifact or contract.
 
-## 9. Reproducibility checklist
+## Reproducibility record
 
-For a meaningful training record, capture at minimum:
+For a meaningful training experiment, capture at minimum:
 
 ```text
 repository commit SHA
-tokenizer SHA-256
-shard SHA-256
+tokenizer identity / file SHA-256
+shard identity / file SHA-256
 training command
+model configuration
 model seed
 data seed
 optimizer hyperparameters
-model geometry
 checkpoint SHA-256
 cursor SHA-256
 exit status
-held-out dataset identity and provenance
+validation dataset identity/provenance
+validation output
 ```
 
-This separates executable evidence from later interpretations about model capability.
+A local result without a repository SHA can still be useful diagnostic evidence, but it should be labeled as such rather than attached retroactively to a commit.
 
-## 10. Next-stage scaling work
+## Scaling work not established by the reference lifecycle
 
-Current architectural work that remains distinct from the verified reference lifecycle includes:
+The verified native lifecycle does not by itself establish:
 
 - production-scale orchestration;
+- distributed training;
 - true vectorized tensor mini-batching;
 - mixed precision;
-- accelerator parity beyond the reference CPU path;
-- larger-corpus validation methodology;
-- instruction/conversation tuning quality evaluation.
+- accelerator parity beyond specifically tested paths;
+- final instruction/chat quality;
+- broad generalization.
