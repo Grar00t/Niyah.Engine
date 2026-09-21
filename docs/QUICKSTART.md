@@ -24,7 +24,21 @@ Run the regression suite:
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-On Visual Studio/multi-config builds, executables normally appear under a configuration directory such as `build/Release/`. On single-config generators they are normally directly under the configured build tree.
+The build does not install the executables or add them to `PATH`.
+
+On single-config generators, executables are normally emitted directly under `build/`. For a POSIX shell, make the later bare commands runnable with:
+
+```sh
+export PATH="$PWD/build:$PATH"
+```
+
+On Visual Studio/multi-config builds, Release executables normally appear under `build/Release/`. In PowerShell, use:
+
+```powershell
+$env:Path = "$(Resolve-Path .\build\Release);$env:Path"
+```
+
+Alternatively, invoke each executable by its explicit build path, for example `./build/niyah` on a single-config POSIX build or `.\build\Release\niyah.exe` on a Visual Studio Release build.
 
 ## 3. Prepare a corpus
 
@@ -53,13 +67,21 @@ niyah prepare \
   --record-mode blank-line
 ```
 
-For supervised prompt/response records, add one or more response delimiters:
+For supervised prompt/response records, `--response-delimiter` is valid only with `--record-mode blank-line`. Example:
 
 ```sh
---response-delimiter "Assistant:"
+niyah prepare \
+  --corpus corpus.txt \
+  --tokenizer-out tok.bin \
+  --shard-out shard.bin \
+  --target-vocab 269 \
+  --min-pair-frequency 2 \
+  --sequence-length 64 \
+  --record-mode blank-line \
+  --response-delimiter "Assistant:"
 ```
 
-The exact delimiter must match the corpus format. Niyah.Engine does not hard-code a language-specific chat schema.
+One or more response delimiters may be supplied. Each exact delimiter must match the corpus format. Niyah.Engine does not hard-code a language-specific chat schema.
 
 ## 4. Train a small model
 
@@ -136,15 +158,9 @@ niyah run \
 
 When the project is built with CUDA support, `--backend cuda` is also available.
 
-## 7. Inspect a checkpoint with `niyah_probe`
+## 7. Inspect data or a checkpoint with `niyah_probe`
 
-The diagnostic probe can inspect tokenizer/shard statistics and next-token behavior without modifying training or generation semantics.
-
-Tokenizer only:
-
-```sh
-niyah_probe --tokenizer tok.bin
-```
+`niyah_probe` always requires a tokenizer path, but a tokenizer-only invocation currently emits no report. Use it with a shard and/or with a checkpoint plus prompt.
 
 Tokenizer + shard statistics:
 

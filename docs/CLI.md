@@ -20,13 +20,15 @@ niyah prepare --corpus FILE --tokenizer-out TOK --shard-out SHARD
     [--response-delimiter TEXT ...]
 ```
 
+`--response-delimiter` is accepted only when `--record-mode blank-line` is selected. Supplying a response delimiter in stream mode is rejected by the parser.
+
 Purpose:
 
 - train/build the native tokenizer from the supplied corpus;
 - persist tokenizer state;
 - tokenize and persist a dataset shard;
 - optionally preserve record boundaries;
-- optionally split supervised prompt/response records using explicit delimiters.
+- optionally split supervised prompt/response records using explicit delimiters in blank-line record mode.
 
 Example:
 
@@ -130,9 +132,10 @@ niyah_probe --tokenizer TOK
             [--checkpoint CKPT --prompt TEXT [--topk N] [--trace-steps N]]
 ```
 
+The tokenizer argument is required as shared input, but a tokenizer-only invocation currently emits no report. To obtain output, provide `--shard`, or provide both `--checkpoint` and `--prompt`, or provide both diagnostic groups.
+
 Capabilities include:
 
-- tokenizer metadata required for the diagnostic path;
 - shard token-count/unigram statistics;
 - prompt token IDs;
 - top-k next-token logits/probabilities;

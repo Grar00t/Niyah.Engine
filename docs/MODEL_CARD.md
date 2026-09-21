@@ -108,7 +108,8 @@ See [DATA.md](DATA.md) for the dataset evidence boundary.
 | Capability | Status |
 |---|---|
 | Generate tokens through the native runtime | Demonstrated |
-| Produce some coherent English/Arabic text | Observed in diagnostic runs |
+| Coherent English generation quality | Unestablished |
+| Coherent Arabic generation quality | Unestablished |
 | Held-out loss improvement on current validation distribution | Demonstrated |
 | Stable broad chat quality | Unestablished |
 | General reasoning | Unestablished |
