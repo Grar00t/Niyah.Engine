@@ -1,0 +1,69 @@
+name: Bug report
+description: Report a reproducible defect in the native runtime, training, persistence, evaluation, or tooling.
+title: "bug: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report observed behavior and evidence. Do not infer a root cause unless you have reproduced it.
+  - type: input
+    id: revision
+    attributes:
+      label: Repository revision
+      description: Exact commit SHA or tag.
+      placeholder: 40-character commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Build / CI
+        - Tokenizer
+        - Dataset / shard
+        - Training / backward
+        - Checkpoint / resume
+        - Evaluation
+        - CPU inference / generation
+        - CUDA
+        - CLI / tooling
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Exact commands, inputs, and exit codes needed to reproduce the defect.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed result
+      description: Include the smallest relevant output or error.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected contract
+      description: Point to the test, public API, or documented contract that establishes the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, compiler, CMake version, CPU/GPU, CUDA version when applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Additional evidence
+      description: Relevant hashes, sanitizer output, test names, or links. Do not include secrets.
