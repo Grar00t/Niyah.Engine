@@ -18,7 +18,8 @@
   <a href="docs/MODEL_CARD.md">Model Card</a> ·
   <a href="docs/DATA.md">Data</a> ·
   <a href="docs/CLI.md">CLI</a> ·
-  <a href="docs/VERIFICATION.md">Verification</a>
+  <a href="docs/VERIFICATION.md">Verification</a> ·
+  <a href="docs/FAQ.md">FAQ</a>
 </p>
 
 # Niyah.Engine
@@ -262,6 +263,8 @@ See [Verification](docs/VERIFICATION.md) for the exact evidence snapshot.
 | [Data](docs/DATA.md) | Provenance, quality risks, corpus acceptance requirements |
 | [CLI](docs/CLI.md) | Current source-backed command reference |
 | [Verification](docs/VERIFICATION.md) | Repository CI + local diagnostic evidence ledger |
+| [FAQ](docs/FAQ.md) | Common questions about architecture, training, quality, and scope |
+| [Contributing](CONTRIBUTING.md) | Patch scope, regression gates, and evidence requirements |
 
 ## Repository layout
 
