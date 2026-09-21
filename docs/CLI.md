@@ -60,7 +60,8 @@ Text mode:
 - reads the held-out file as raw bytes;
 - builds a tokenizer-bound evaluation shard in memory;
 - defaults `--sequence-length` to the checkpoint context length when omitted;
-- reports model cross-entropy/perplexity and a sparse add-1 bigram baseline on the same token stream;
+- evaluates the all-token objective;
+- reports model cross-entropy/perplexity and a sparse add-1 bigram baseline on the same scored sample geometry;
 - reports tokenizer, checkpoint, and held-out identities;
 - additionally reports bits per byte for the raw held-out bytes.
 
@@ -70,10 +71,24 @@ Shard mode:
 - uses the shard's stored sequence length;
 - rejects an explicit `--sequence-length`;
 - reports the shard semantic identity;
-- omits bits-per-byte metrics because no raw-text byte denominator is implied by the shard contract;
-- rejects V3 loss-masked/supervised shards until the evaluator has an explicit loss-mask-aware scoring path.
+- evaluates V1/V2 shards with the all-token objective;
+- evaluates V3 supervised shards with the persisted `loss_start` objective, preserving prompt tokens as causal context while scoring only response/EOS targets;
+- uses the same scored transitions for the add-1 bigram baseline;
+- omits bits-per-byte metrics because no raw-text byte denominator is implied by the shard contract.
 
-For record-based V2 shards, the add-1 bigram baseline excludes persisted `EOS -> BOS` adjacencies between records so its scored transitions match the record-bounded model evaluation geometry.
+Machine-readable output includes:
+
+```text
+objective=all_tokens
+```
+
+or, for a persisted supervised loss mask:
+
+```text
+objective=loss_masked
+```
+
+`token_count` is the number of targets that contribute to the reported loss. For a loss-masked shard it therefore excludes prompt-only targets before each sample's `loss_start`.
 
 Example:
 
