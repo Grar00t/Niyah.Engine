@@ -36,6 +36,11 @@ NiyahStatus niyah_checkpoint_load_with_tokenizer(
     NiyahAdamWState *out_optimizer_state,
     NiyahAdamWConfig *out_optimizer_config);
 
+NiyahStatus niyah_checkpoint_load_model_with_tokenizer(
+    const char *path,
+    const NiyahTokenizer *tokenizer,
+    NiyahModel *out_model);
+
 /* SHA-256 identity of the exact persisted checkpoint bytes. This provides
  * content identity for checkpoint/cursor pairing; it does not authenticate
  * the checkpoint or establish semantic truth.
