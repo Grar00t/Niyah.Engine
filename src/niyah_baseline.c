@@ -1,4 +1,5 @@
 #include "niyah/baseline.h"
+#include "niyah/tokenizer.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -11,6 +12,11 @@ static int niyah_u64_compare(const void *left, const void *right)
     return (a > b) - (a < b);
 }
 
+static int niyah_is_record_boundary(uint32_t previous, uint32_t next)
+{
+    return previous == NIYAH_TOKEN_EOS && next == NIYAH_TOKEN_BOS;
+}
+
 NiyahStatus niyah_add1_bigram_mean_nll(
     const uint32_t *tokens,
     size_t token_count,
@@ -18,7 +24,8 @@ NiyahStatus niyah_add1_bigram_mean_nll(
     double *out_mean_nll_nats)
 {
     uint64_t *pairs = NULL;
-    size_t transition_count;
+    size_t transition_count = 0U;
+    size_t write_index = 0U;
     size_t i;
     double total_nll = 0.0;
     double mean_nll;
@@ -33,7 +40,13 @@ NiyahStatus niyah_add1_bigram_mean_nll(
             return NIYAH_ERR_INVALID_ARGUMENT;
     }
 
-    transition_count = token_count - 1U;
+    for (i = 0U; i + 1U < token_count; ++i) {
+        if (!niyah_is_record_boundary(tokens[i], tokens[i + 1U]))
+            transition_count += 1U;
+    }
+
+    if (transition_count == 0U)
+        return NIYAH_ERR_INVALID_CONFIG;
     if (transition_count > SIZE_MAX / sizeof(*pairs))
         return NIYAH_ERR_OVERFLOW;
 
@@ -41,9 +54,18 @@ NiyahStatus niyah_add1_bigram_mean_nll(
     if (pairs == NULL)
         return NIYAH_ERR_OUT_OF_MEMORY;
 
-    for (i = 0U; i < transition_count; ++i) {
-        pairs[i] = ((uint64_t)tokens[i] << 32U) |
-                   (uint64_t)tokens[i + 1U];
+    for (i = 0U; i + 1U < token_count; ++i) {
+        if (niyah_is_record_boundary(tokens[i], tokens[i + 1U]))
+            continue;
+
+        pairs[write_index++] =
+            ((uint64_t)tokens[i] << 32U) |
+            (uint64_t)tokens[i + 1U];
+    }
+
+    if (write_index != transition_count) {
+        free(pairs);
+        return NIYAH_ERR_INVALID_CONFIG;
     }
 
     qsort(pairs, transition_count, sizeof(*pairs), niyah_u64_compare);
