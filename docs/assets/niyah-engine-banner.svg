@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Niyah.Engine</title>
+  <desc id="desc">Native C11 language-model runtime and training engine.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="0.55" stop-color="#111936"/>
+      <stop offset="1" stop-color="#1e1742"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="360" rx="28" fill="url(#bg)"/>
+  <g opacity="0.18" stroke="#8b9ccf" fill="none">
+    <path d="M0 70 H1200 M0 140 H1200 M0 210 H1200 M0 280 H1200"/>
+    <path d="M120 0 V360 M240 0 V360 M360 0 V360 M480 0 V360 M600 0 V360 M720 0 V360 M840 0 V360 M960 0 V360 M1080 0 V360"/>
+  </g>
+
+  <g transform="translate(105 72)">
+    <circle cx="108" cy="108" r="103" fill="#0c1329" stroke="#6270a5" stroke-width="2"/>
+    <circle cx="108" cy="108" r="78" fill="none" stroke="url(#accent)" stroke-width="4" opacity="0.85" filter="url(#glow)"/>
+    <path d="M59 154 V63 L157 154 V63" fill="none" stroke="url(#accent)" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="59" cy="63" r="7" fill="#7dd3fc"/>
+    <circle cx="157" cy="154" r="7" fill="#a78bfa"/>
+  </g>
+
+  <g font-family="Inter,Segoe UI,Arial,sans-serif">
+    <text x="355" y="130" fill="#f8fafc" font-size="64" font-weight="700" letter-spacing="-1.5">Niyah.Engine</text>
+    <text x="358" y="180" fill="#b8c1dd" font-size="25" font-weight="500">Native C11 language-model runtime &amp; training engine</text>
+    <text x="358" y="228" fill="#8ea0cb" font-size="19">Tokenizer • Transformer • Training • Checkpoint/Resume • Evaluation • Inference</text>
+
+    <g transform="translate(358 267)" font-size="15" font-weight="600">
+      <rect x="0" y="0" width="100" height="34" rx="17" fill="#18213d" stroke="#46537b"/>
+      <text x="50" y="22" fill="#cbd5e1" text-anchor="middle">C11 core</text>
+      <rect x="114" y="0" width="126" height="34" rx="17" fill="#18213d" stroke="#46537b"/>
+      <text x="177" y="22" fill="#cbd5e1" text-anchor="middle">CPU FP32 ref</text>
+      <rect x="254" y="0" width="130" height="34" rx="17" fill="#18213d" stroke="#46537b"/>
+      <text x="319" y="22" fill="#cbd5e1" text-anchor="middle">CUDA optional</text>
+      <rect x="398" y="0" width="154" height="34" rx="17" fill="#18213d" stroke="#46537b"/>
+      <text x="475" y="22" fill="#cbd5e1" text-anchor="middle">Research runtime</text>
+    </g>
+  </g>
+</svg>
