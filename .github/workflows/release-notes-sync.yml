@@ -1,0 +1,57 @@
+name: release-notes-sync
+
+on:
+  pull_request:
+    paths:
+      - "docs/releases/v0.1.0.md"
+      - ".github/workflows/release-notes-sync.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/releases/v0.1.0.md"
+
+concurrency:
+  group: release-notes-sync-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate release note source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s docs/releases/v0.1.0.md
+          grep -q '^# Niyah.Engine v0.1.0$' docs/releases/v0.1.0.md
+
+      - name: Verify published release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view v0.1.0 --repo "$GITHUB_REPOSITORY" >/dev/null
+
+  sync:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Update published v0.1.0 release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit v0.1.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --notes-file docs/releases/v0.1.0.md
