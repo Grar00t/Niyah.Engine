@@ -70,7 +70,10 @@ Shard mode:
 - uses the shard's stored sequence length;
 - rejects an explicit `--sequence-length`;
 - reports the shard semantic identity;
-- omits bits-per-byte metrics because no raw-text byte denominator is implied by the shard contract.
+- omits bits-per-byte metrics because no raw-text byte denominator is implied by the shard contract;
+- rejects V3 loss-masked/supervised shards until the evaluator has an explicit loss-mask-aware scoring path.
+
+For record-based V2 shards, the add-1 bigram baseline excludes persisted `EOS -> BOS` adjacencies between records so its scored transitions match the record-bounded model evaluation geometry.
 
 Example:
 
