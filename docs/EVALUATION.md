@@ -15,6 +15,45 @@ Lower values are better **for the same evaluation distribution and objective sem
 
 A lower perplexity value does not automatically mean that generated answers are factually correct, conversationally useful, safe, or better than another model evaluated on different data.
 
+## First-class evaluation CLI
+
+The repository exposes read-only evaluation through:
+
+```text
+niyah eval --tokenizer TOK --checkpoint CKPT --heldout FILE
+    [--format text|shard]
+    [--sequence-length N]
+```
+
+The command reports stable `key=value` output containing tokenizer, checkpoint, and held-out identities plus model metrics. Successful evaluation ends with `EVAL_EXIT=0`.
+
+Text mode hashes the supplied raw held-out bytes, builds an evaluation shard in memory, and can report bits per byte. Shard mode loads a tokenizer-compatible prepared shard, uses its stored sequence length, reports its semantic shard identity, and does not invent a raw-byte denominator.
+
+Evaluation does not update model parameters, optimizer state, or checkpoint bytes. The CLI integration test evaluates the same checkpoint repeatedly and verifies its file hash remains unchanged.
+
+## Add-1 bigram baseline
+
+`niyah eval` reports a sparse Laplace/add-1 bigram baseline on the **same token stream** used to build the evaluation shard. For each adjacent pair `(previous, next)`:
+
+```text
+P(next | previous)
+    = (pair_count(previous,next) + 1)
+      / (outgoing_count(previous) + vocab_size)
+```
+
+The baseline mean NLL is averaged across all adjacent transitions in that stream. The implementation sorts encoded observed token pairs and does not allocate a `vocab_size × vocab_size` table.
+
+The baseline is deliberately simple. Beating it is useful evidence that the model captures more predictive structure than a smoothed first-order token model on that stream; it is not a claim of broad language competence.
+
+For text mode:
+
+```text
+bits_per_token          = mean_loss / ln(2)
+baseline_bits_per_token = baseline_mean_loss / ln(2)
+```
+
+Bits per byte uses the raw held-out byte count as the denominator. Shard mode omits both bits-per-byte fields.
+
 ## Current pilot evaluation set
 
 The reported diagnostic run used:
@@ -27,7 +66,7 @@ sequence_length          = 64
 evaluated_target_tokens  = 17554
 ```
 
-All four checkpoints were evaluated against the same prepared held-out set using the same evaluation helper.
+All four checkpoints were evaluated against the same prepared held-out set using the same diagnostic evaluation helper. These historical measurements predate the first-class `niyah eval` CLI and are not retroactively represented as CLI output.
 
 ## Checkpoint trajectory
 
@@ -50,7 +89,7 @@ perplexity change  = 51.531547081 -> 38.242751050
 relative ppl drop  ≈ 25.79%
 ```
 
-The evaluation process exited successfully:
+The historical evaluation process exited successfully:
 
 ```text
 EVAL_EXIT=0
@@ -135,11 +174,12 @@ It is not evidence that the underlying corpus is suitable for a final assistant 
 
 ## Next rigorous gate
 
-After the next selected checkpoint, preserve the current evaluator unchanged and record:
+After the next selected checkpoint, preserve the evaluator unchanged and record:
 
 ```text
 checkpoint identity
 validation loss/perplexity
+add-1 bigram baseline on the same token stream
 untouched test loss/perplexity
 generation results on fixed unseen prompts
 exact repository revision
