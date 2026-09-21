@@ -27,15 +27,15 @@ niyah eval --tokenizer TOK --checkpoint CKPT --heldout FILE
 
 The command reports stable `key=value` output containing tokenizer, checkpoint, and held-out identities plus model metrics. Successful evaluation ends with `EVAL_EXIT=0`.
 
-Text mode hashes the supplied raw held-out bytes, builds an evaluation shard in memory, and can report bits per byte. Shard mode loads a tokenizer-compatible prepared shard, uses its stored sequence length, reports its semantic shard identity, and does not invent a raw-byte denominator.
+Text mode hashes the supplied raw held-out bytes, builds an evaluation shard in memory, and reports `objective=all_tokens`. It can also report bits per byte because the raw byte denominator is known.
 
-The current shard evaluator is intentionally fail-closed for V3 loss-masked/supervised shards. Those shards preserve prompt context while supervising only response/EOS targets through `loss_start`; the current `niyah_evaluate()` API has no loss-mask field. Reporting all-token loss for such a shard would be semantically wrong, so the CLI rejects it until a loss-aware evaluation path is added.
+Shard mode loads a tokenizer-compatible prepared shard, uses its stored sequence length, reports its semantic shard identity, and does not invent a raw-byte denominator. V1/V2 shards use `objective=all_tokens`. V3 supervised shards with persisted loss starts use `objective=loss_masked`: prompt targets before each sample's `loss_start` remain causal context but do not contribute to NLL, perplexity, or the reported evaluated `token_count`.
 
-Evaluation does not update model parameters, optimizer state, or checkpoint bytes. The CLI integration test evaluates the same checkpoint repeatedly and verifies its file hash remains unchanged.
+Evaluation does not update model parameters, optimizer state, or checkpoint bytes. CLI regression coverage hashes checkpoints before and after evaluation.
 
 ## Add-1 bigram baseline
 
-`niyah eval` reports a sparse Laplace/add-1 bigram baseline on the same evaluated token geometry. For each included adjacent pair `(previous, next)`:
+`niyah eval` reports a sparse Laplace/add-1 bigram baseline over the exact transitions scored by model evaluation. For each included `(previous, next)` pair:
 
 ```text
 P(next | previous)
@@ -43,7 +43,7 @@ P(next | previous)
       / (outgoing_count(previous) + vocab_size)
 ```
 
-For a continuous text shard, every adjacent transition is included. For record-based V2 shards, persisted `EOS -> BOS` adjacencies between independent records are excluded because the shard sample geometry does not expose those cross-record transitions to model evaluation.
+For all-token samples, all sample-local targets are included. Independent sample/record boundaries are not invented as model targets. For V3 supervised shards, only transitions at or after each sample's persisted `loss_start` contribute to baseline counts and NLL, matching the model objective.
 
 The baseline mean NLL is averaged across the included transitions. The implementation sorts encoded observed token pairs and does not allocate a `vocab_size × vocab_size` table.
 
@@ -57,6 +57,17 @@ baseline_bits_per_token = baseline_mean_loss / ln(2)
 ```
 
 Bits per byte uses the raw held-out byte count as the denominator. Shard mode omits both bits-per-byte fields.
+
+## Objective identity matters
+
+Do not compare losses without recording the objective. These are different measurements:
+
+```text
+objective=all_tokens
+objective=loss_masked
+```
+
+A loss-masked supervised evaluation can preserve the full prompt as causal input while scoring only response/EOS targets. Its `token_count` therefore represents scored targets, not the full context length.
 
 ## Current pilot evaluation set
 
@@ -182,6 +193,7 @@ After the next selected checkpoint, preserve the evaluator unchanged and record:
 
 ```text
 checkpoint identity
+evaluation objective
 validation loss/perplexity
 add-1 bigram baseline on the same evaluation geometry
 untouched test loss/perplexity
