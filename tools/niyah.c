@@ -1,9 +1,12 @@
+#include "niyah/baseline.h"
 #include "niyah/checkpoint.h"
 #include "niyah/dataset.h"
 #include "niyah/decode.h"
+#include "niyah/eval.h"
 #include "niyah/generate.h"
 #include "niyah/optimizer.h"
 #include "niyah/tokenizer.h"
+#include "niyah_sha256.h"
 
 #ifdef NIYAH_CLI_ENABLE_CUDA
 #include "niyah_cuda_matvec.h"
@@ -18,6 +21,8 @@
 
 #define NIYAH_PREPARE_RECORD_STREAM 0
 #define NIYAH_PREPARE_RECORD_BLANK_LINE 1
+#define NIYAH_EVAL_FORMAT_TEXT 0
+#define NIYAH_EVAL_FORMAT_SHARD 1
 
 typedef struct NiyahPrepareOptions {
     const char *corpus_path;
@@ -33,6 +38,15 @@ typedef struct NiyahPrepareOptions {
     int have_min_pair_frequency;
     int have_sequence_length;
 } NiyahPrepareOptions;
+
+typedef struct NiyahEvalOptions {
+    const char *tokenizer_path;
+    const char *checkpoint_path;
+    const char *heldout_path;
+    size_t sequence_length;
+    int format;
+    int have_sequence_length;
+} NiyahEvalOptions;
 
 typedef struct NiyahRunOptions {
     const char *tokenizer_path;
@@ -53,6 +67,10 @@ static void usage(FILE *stream)
         "      --target-vocab N --min-pair-frequency N --sequence-length N\n"
         "      [--record-mode stream|blank-line]\n"
         "      [--response-delimiter TEXT ...]\n"
+        "\n"
+        "  niyah eval --tokenizer TOK --checkpoint CKPT --heldout FILE\n"
+        "      [--format text|shard]\n"
+        "      [--sequence-length N]\n"
         "\n"
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
@@ -792,6 +810,421 @@ cleanup:
     return exit_code;
 }
 
+static int parse_eval_options(
+    int argc,
+    char **argv,
+    NiyahEvalOptions *options)
+{
+    int i;
+
+    memset(options, 0, sizeof(*options));
+    options->format = NIYAH_EVAL_FORMAT_TEXT;
+
+    for (i = 2; i < argc; ++i) {
+        const char *key = argv[i];
+        const char *value;
+
+        if (strcmp(key, "--tokenizer") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->tokenizer_path = value;
+        } else if (strcmp(key, "--checkpoint") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->checkpoint_path = value;
+        } else if (strcmp(key, "--heldout") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->heldout_path = value;
+        } else if (strcmp(key, "--format") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            if (strcmp(value, "text") == 0) {
+                options->format = NIYAH_EVAL_FORMAT_TEXT;
+            } else if (strcmp(value, "shard") == 0) {
+                options->format = NIYAH_EVAL_FORMAT_SHARD;
+            } else {
+                return 0;
+            }
+        } else if (strcmp(key, "--sequence-length") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL ||
+                !parse_size(value, &options->sequence_length)) {
+                return 0;
+            }
+            options->have_sequence_length = 1;
+        } else {
+            return 0;
+        }
+    }
+
+    return options->tokenizer_path != NULL &&
+           options->checkpoint_path != NULL &&
+           options->heldout_path != NULL;
+}
+
+static void sha256_to_hex(
+    const uint8_t digest[32],
+    char hex[65])
+{
+    static const char digits[] = "0123456789abcdef";
+    size_t i;
+
+    for (i = 0U; i < 32U; ++i) {
+        hex[i * 2U] = digits[(digest[i] >> 4U) & 0x0fU];
+        hex[i * 2U + 1U] = digits[digest[i] & 0x0fU];
+    }
+    hex[64] = '\0';
+}
+
+static NiyahStatus sha256_bytes(
+    const uint8_t *bytes,
+    size_t size,
+    uint8_t out_identity[32])
+{
+    NiyahSha256 sha256;
+
+    if (bytes == NULL || size == 0U || out_identity == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    niyah_sha256_init(&sha256);
+    if (!niyah_sha256_update(&sha256, bytes, size))
+        return NIYAH_ERR_OVERFLOW;
+    niyah_sha256_final(&sha256, out_identity);
+    return NIYAH_OK;
+}
+
+static int eval_command(int argc, char **argv)
+{
+    NiyahEvalOptions options;
+    NiyahTokenizer *tokenizer = NULL;
+    NiyahModel model;
+    NiyahAdamWState optimizer_state;
+    NiyahAdamWConfig optimizer_config;
+    NiyahDatasetShard shard;
+    NiyahEvaluationSample *samples = NULL;
+    NiyahEvaluationMetrics metrics;
+    uint8_t *heldout_bytes = NULL;
+    size_t heldout_byte_size = 0U;
+    size_t vocab_size = 0U;
+    size_t sequence_length = 0U;
+    size_t sample_index;
+    uint8_t tokenizer_identity[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
+    uint8_t checkpoint_identity[NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
+    uint8_t heldout_identity[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    char tokenizer_hex[65];
+    char checkpoint_hex[65];
+    char heldout_hex[65];
+    double baseline_mean_loss = 0.0;
+    double bits_per_token;
+    double baseline_bits_per_token;
+    double bits_per_byte = 0.0;
+    double baseline_bits_per_byte = 0.0;
+    const double ln2 = log(2.0);
+    NiyahStatus status;
+    int exit_code = 1;
+
+    memset(&model, 0, sizeof(model));
+    memset(&optimizer_state, 0, sizeof(optimizer_state));
+    memset(&optimizer_config, 0, sizeof(optimizer_config));
+    memset(&shard, 0, sizeof(shard));
+    memset(&metrics, 0, sizeof(metrics));
+
+    if (!parse_eval_options(argc, argv, &options)) {
+        usage(stderr);
+        return 2;
+    }
+
+    if (!path_exists(options.tokenizer_path))
+        return fail_status("tokenizer_path", NIYAH_ERR_IO);
+    if (!path_exists(options.checkpoint_path))
+        return fail_status("checkpoint_path", NIYAH_ERR_IO);
+    if (!path_exists(options.heldout_path))
+        return fail_status("heldout_path", NIYAH_ERR_IO);
+
+    if (options.format == NIYAH_EVAL_FORMAT_SHARD &&
+        options.have_sequence_length) {
+        return fail_status("sequence_length", NIYAH_ERR_INVALID_CONFIG);
+    }
+
+    status = niyah_tokenizer_load(
+        options.tokenizer_path,
+        &tokenizer);
+    if (status != NIYAH_OK)
+        return fail_status("tokenizer_load", status);
+
+    status = niyah_checkpoint_load_with_tokenizer(
+        options.checkpoint_path,
+        tokenizer,
+        &model,
+        &optimizer_state,
+        &optimizer_config);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("checkpoint_load", status);
+        goto cleanup;
+    }
+
+    vocab_size = niyah_tokenizer_vocab_size(tokenizer);
+    if (vocab_size == 0U ||
+        vocab_size != (size_t)model.config.vocab_size) {
+        exit_code = fail_status(
+            "eval_compatibility",
+            NIYAH_ERR_INVALID_CONFIG);
+        goto cleanup;
+    }
+
+    status = niyah_tokenizer_identity_sha256(
+        tokenizer,
+        tokenizer_identity);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("tokenizer_identity", status);
+        goto cleanup;
+    }
+
+    status = niyah_checkpoint_identity_sha256(
+        options.checkpoint_path,
+        checkpoint_identity);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("checkpoint_identity", status);
+        goto cleanup;
+    }
+
+    if (options.format == NIYAH_EVAL_FORMAT_TEXT) {
+        sequence_length = options.have_sequence_length
+            ? options.sequence_length
+            : (size_t)model.config.context_length;
+
+        if (sequence_length == 0U ||
+            sequence_length > (size_t)model.config.context_length) {
+            exit_code = fail_status(
+                "sequence_length",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
+        if (!read_file_bytes(
+                options.heldout_path,
+                &heldout_bytes,
+                &heldout_byte_size)) {
+            exit_code = fail_status("heldout_read", NIYAH_ERR_IO);
+            goto cleanup;
+        }
+
+        status = sha256_bytes(
+            heldout_bytes,
+            heldout_byte_size,
+            heldout_identity);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("heldout_identity", status);
+            goto cleanup;
+        }
+
+        status = niyah_dataset_shard_build_text(
+            tokenizer,
+            heldout_bytes,
+            heldout_byte_size,
+            sequence_length,
+            &shard);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("shard_build", status);
+            goto cleanup;
+        }
+    } else {
+        status = niyah_dataset_shard_load(
+            options.heldout_path,
+            tokenizer,
+            &shard);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("shard_load", status);
+            goto cleanup;
+        }
+
+        if (shard.has_loss_starts != 0) {
+            exit_code = fail_status(
+                "loss_masked_shard",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
+        if (shard.sequence_length == 0U ||
+            shard.sequence_length >
+                (size_t)model.config.context_length) {
+            exit_code = fail_status(
+                "sequence_length",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+        sequence_length = shard.sequence_length;
+
+        status = niyah_dataset_shard_identity_sha256(
+            &shard,
+            heldout_identity);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("heldout_identity", status);
+            goto cleanup;
+        }
+    }
+
+    status = niyah_add1_bigram_mean_nll(
+        shard.tokens,
+        shard.token_count,
+        vocab_size,
+        &baseline_mean_loss);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("baseline", status);
+        goto cleanup;
+    }
+
+    if (shard.sample_count == 0U) {
+        exit_code = fail_status(
+            "evaluation_samples",
+            NIYAH_ERR_INVALID_CONFIG);
+        goto cleanup;
+    }
+    if (shard.sample_count > SIZE_MAX / sizeof(*samples)) {
+        exit_code = fail_status(
+            "evaluation_samples",
+            NIYAH_ERR_OVERFLOW);
+        goto cleanup;
+    }
+
+    samples = (NiyahEvaluationSample *)calloc(
+        shard.sample_count,
+        sizeof(*samples));
+    if (samples == NULL) {
+        exit_code = fail_status(
+            "evaluation_samples",
+            NIYAH_ERR_OUT_OF_MEMORY);
+        goto cleanup;
+    }
+
+    for (sample_index = 0U;
+         sample_index < shard.sample_count;
+         ++sample_index) {
+        status = niyah_dataset_shard_sample(
+            &shard,
+            sample_index,
+            &samples[sample_index].tokens,
+            &samples[sample_index].targets,
+            &samples[sample_index].token_count);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("shard_sample", status);
+            goto cleanup;
+        }
+    }
+
+    status = niyah_evaluate(
+        &model,
+        samples,
+        shard.sample_count,
+        &metrics);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("evaluation", status);
+        goto cleanup;
+    }
+
+    if (!isfinite(ln2) || ln2 <= 0.0 ||
+        !isfinite(metrics.mean_loss) ||
+        !isfinite(metrics.perplexity) ||
+        !isfinite(baseline_mean_loss)) {
+        exit_code = fail_status(
+            "metric_conversion",
+            NIYAH_ERR_OVERFLOW);
+        goto cleanup;
+    }
+
+    bits_per_token = metrics.mean_loss / ln2;
+    baseline_bits_per_token = baseline_mean_loss / ln2;
+    if (!isfinite(bits_per_token) ||
+        !isfinite(baseline_bits_per_token)) {
+        exit_code = fail_status(
+            "metric_conversion",
+            NIYAH_ERR_OVERFLOW);
+        goto cleanup;
+    }
+
+    if (options.format == NIYAH_EVAL_FORMAT_TEXT) {
+        bits_per_byte =
+            (metrics.mean_loss * (double)metrics.token_count) /
+            ln2 /
+            (double)heldout_byte_size;
+        baseline_bits_per_byte =
+            (baseline_mean_loss *
+             (double)(shard.token_count - 1U)) /
+            ln2 /
+            (double)heldout_byte_size;
+        if (!isfinite(bits_per_byte) ||
+            !isfinite(baseline_bits_per_byte)) {
+            exit_code = fail_status(
+                "metric_conversion",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+    }
+
+    sha256_to_hex(tokenizer_identity, tokenizer_hex);
+    sha256_to_hex(checkpoint_identity, checkpoint_hex);
+    sha256_to_hex(heldout_identity, heldout_hex);
+
+    if (fprintf(
+            stdout,
+            "mode=eval\n"
+            "format=%s\n"
+            "tokenizer_sha256=%s\n"
+            "checkpoint_sha256=%s\n"
+            "heldout_sha256=%s\n"
+            "sequence_length=%zu\n"
+            "sample_count=%zu\n"
+            "token_count=%zu\n"
+            "mean_loss=%.8f\n"
+            "bits_per_token=%.8f\n"
+            "perplexity=%.8f\n"
+            "baseline_mean_loss=%.8f\n"
+            "baseline_bits_per_token=%.8f\n",
+            options.format == NIYAH_EVAL_FORMAT_TEXT ? "text" : "shard",
+            tokenizer_hex,
+            checkpoint_hex,
+            heldout_hex,
+            sequence_length,
+            metrics.sample_count,
+            metrics.token_count,
+            metrics.mean_loss,
+            bits_per_token,
+            metrics.perplexity,
+            baseline_mean_loss,
+            baseline_bits_per_token) < 0) {
+        exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    if (options.format == NIYAH_EVAL_FORMAT_TEXT &&
+        fprintf(
+            stdout,
+            "bits_per_byte=%.8f\n"
+            "baseline_bits_per_byte=%.8f\n",
+            bits_per_byte,
+            baseline_bits_per_byte) < 0) {
+        exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    if (fprintf(stdout, "EVAL_EXIT=0\n") < 0 ||
+        fflush(stdout) == EOF) {
+        exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+        goto cleanup;
+    }
+    exit_code = 0;
+
+cleanup:
+    free(samples);
+    niyah_dataset_shard_destroy(&shard);
+    free(heldout_bytes);
+    niyah_adamw_state_destroy(&optimizer_state);
+    niyah_model_destroy(&model);
+    niyah_tokenizer_destroy(tokenizer);
+    return exit_code;
+}
+
 static int parse_run_options(
     int argc,
     char **argv,
@@ -1213,6 +1646,11 @@ int main(int argc, char **argv)
     if (argc >= 2 &&
         strcmp(argv[1], "prepare") == 0) {
         return prepare_command(argc, argv);
+    }
+
+    if (argc >= 2 &&
+        strcmp(argv[1], "eval") == 0) {
+        return eval_command(argc, argv);
     }
 
     if (argc >= 2 &&

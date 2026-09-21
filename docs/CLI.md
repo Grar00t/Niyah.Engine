@@ -4,10 +4,11 @@ This page documents command surfaces present on the current repository `main` li
 
 ## `niyah`
 
-The primary CLI currently exposes two commands:
+The primary CLI exposes three commands:
 
 ```text
 niyah prepare
+niyah eval
 niyah run
 ```
 
@@ -20,7 +21,7 @@ niyah prepare --corpus FILE --tokenizer-out TOK --shard-out SHARD
     [--response-delimiter TEXT ...]
 ```
 
-`--response-delimiter` is accepted only when `--record-mode blank-line` is selected. Supplying a response delimiter in stream mode is rejected by the parser.
+`--response-delimiter` is accepted only with `--record-mode blank-line`.
 
 Purpose:
 
@@ -28,7 +29,7 @@ Purpose:
 - persist tokenizer state;
 - tokenize and persist a dataset shard;
 - optionally preserve record boundaries;
-- optionally split supervised prompt/response records using explicit delimiters in blank-line record mode.
+- optionally split supervised prompt/response records using explicit delimiters.
 
 Example:
 
@@ -43,6 +44,55 @@ niyah prepare \
   --record-mode blank-line \
   --response-delimiter "Assistant:"
 ```
+
+### `niyah eval`
+
+```text
+niyah eval --tokenizer TOK --checkpoint CKPT --heldout FILE
+    [--format text|shard]
+    [--sequence-length N]
+```
+
+`--format` defaults to `text`.
+
+Text mode:
+
+- reads the held-out file as raw bytes;
+- builds a tokenizer-bound evaluation shard in memory;
+- defaults `--sequence-length` to the checkpoint context length when omitted;
+- reports model cross-entropy/perplexity and a sparse add-1 bigram baseline on the same token stream;
+- reports tokenizer, checkpoint, and held-out identities;
+- additionally reports bits per byte for the raw held-out bytes.
+
+Shard mode:
+
+- loads an existing tokenizer-compatible dataset shard;
+- uses the shard's stored sequence length;
+- rejects an explicit `--sequence-length`;
+- reports the shard semantic identity;
+- omits bits-per-byte metrics because no raw-text byte denominator is implied by the shard contract;
+- rejects V3 loss-masked/supervised shards until the evaluator has an explicit loss-mask-aware scoring path.
+
+For record-based V2 shards, the add-1 bigram baseline excludes persisted `EOS -> BOS` adjacencies between records so its scored transitions match the record-bounded model evaluation geometry.
+
+Example:
+
+```sh
+niyah eval \
+  --tokenizer tok.bin \
+  --checkpoint model.ckpt \
+  --heldout heldout.txt \
+  --format text \
+  --sequence-length 64
+```
+
+Successful output is machine-readable `key=value` text and terminates with:
+
+```text
+EVAL_EXIT=0
+```
+
+Evaluation is read-only with respect to checkpoint bytes. The CLI rejects missing or incompatible tokenizer/checkpoint/shard inputs and returns non-zero on failure.
 
 ### `niyah run`
 
@@ -132,7 +182,7 @@ niyah_probe --tokenizer TOK
             [--checkpoint CKPT --prompt TEXT [--topk N] [--trace-steps N]]
 ```
 
-The tokenizer argument is required as shared input, but a tokenizer-only invocation currently emits no report. To obtain output, provide `--shard`, or provide both `--checkpoint` and `--prompt`, or provide both diagnostic groups.
+A tokenizer path is required for all modes, but tokenizer-only invocation currently emits no standalone report. At least `--shard`, or both `--checkpoint` and `--prompt`, are needed for useful output.
 
 Capabilities include:
 
@@ -154,14 +204,6 @@ niyah_probe \
   --topk 10 \
   --trace-steps 8
 ```
-
-## Evaluation CLI status
-
-The current documented `main` command parser exposes `prepare` and `run`. A first-class `niyah eval` CLI is **not** part of this documented revision.
-
-Evaluation exists as the native `niyah_evaluate()` API and has also been exercised through purpose-built diagnostic helpers.
-
-Do not document or automate `niyah eval` as a stable user-facing command until that interface is actually merged and verified.
 
 ## Exit handling
 

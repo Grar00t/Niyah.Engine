@@ -80,6 +80,7 @@ add_library(niyah STATIC
     src/niyah_generate.c
     src/niyah_train.c
     src/niyah_eval.c
+    src/niyah_baseline.c
     src/niyah_backward.c
     src/niyah_training_loop.c
     src/niyah_optimizer.c
@@ -148,10 +149,10 @@ endif()
 
 add_executable(niyah_cli tools/niyah.c)
 set_target_properties(niyah_cli PROPERTIES OUTPUT_NAME "niyah")
+target_include_directories(niyah_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(niyah_cli PRIVATE niyah)
 
 if(NIYAH_ENABLE_CUDA)
-    target_include_directories(niyah_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(niyah_cli PRIVATE niyah_cuda_backend)
     target_compile_definitions(niyah_cli PRIVATE NIYAH_CLI_ENABLE_CUDA=1)
 endif()
@@ -162,7 +163,6 @@ else()
     target_compile_options(niyah_cli PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-
 add_executable(niyah_probe tools/niyah_probe.c)
 target_link_libraries(niyah_probe PRIVATE niyah)
 if(MSVC)
@@ -170,6 +170,7 @@ if(MSVC)
 else()
     target_compile_options(niyah_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
+
 if(NIYAH_BUILD_TESTS)
     enable_testing()
 
@@ -363,6 +364,9 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_eval_test tests/test_eval.c)
     target_link_libraries(niyah_eval_test PRIVATE niyah)
 
+    add_executable(niyah_baseline_test tests/test_baseline.c)
+    target_link_libraries(niyah_baseline_test PRIVATE niyah)
+
     add_executable(niyah_training_loop_test tests/test_training_loop.c)
     target_link_libraries(niyah_training_loop_test PRIVATE niyah)
 
@@ -395,6 +399,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_generation_test PRIVATE /W4 /WX)
         target_compile_options(niyah_train_test PRIVATE /W4 /WX)
         target_compile_options(niyah_eval_test PRIVATE /W4 /WX)
+        target_compile_options(niyah_baseline_test PRIVATE /W4 /WX)
         target_compile_options(niyah_training_loop_test PRIVATE /W4 /WX)
         target_compile_options(niyah_backward_test PRIVATE /W4 /WX)
         target_compile_options(niyah_text_pipeline_test PRIVATE /W4 /WX)
@@ -413,6 +418,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_generation_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_train_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_eval_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(niyah_baseline_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_training_loop_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_backward_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_text_pipeline_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -432,6 +438,7 @@ if(NIYAH_BUILD_TESTS)
     add_test(NAME niyah_generation_test COMMAND niyah_generation_test)
     add_test(NAME niyah_train_test COMMAND niyah_train_test)
     add_test(NAME niyah_eval_test COMMAND niyah_eval_test)
+    add_test(NAME niyah_baseline_test COMMAND niyah_baseline_test)
     add_test(NAME niyah_training_loop_test COMMAND niyah_training_loop_test)
     add_test(NAME niyah_backward_test COMMAND niyah_backward_test)
     add_test(NAME niyah_text_pipeline_test COMMAND niyah_text_pipeline_test)
@@ -496,6 +503,14 @@ if(NIYAH_BUILD_TESTS)
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -DBACKEND=cpu
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_run.cmake)
+
+    add_test(NAME niyah_cli_eval_test
+        COMMAND ${CMAKE_COMMAND}
+            -DNIYAH_FIXTURE=$<TARGET_FILE:niyah_training_fixture>
+            -DNIYAH_TRAIN=$<TARGET_FILE:niyah_train>
+            -DNIYAH_CLI=$<TARGET_FILE:niyah_cli>
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_eval.cmake)
 
     if(NIYAH_ENABLE_CUDA)
         add_test(NAME niyah_cli_cuda_run_test
