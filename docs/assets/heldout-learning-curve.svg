@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="520" viewBox="0 0 1100 520" role="img" aria-labelledby="title desc">
+  <title id="title">Niyah.Engine held-out learning curve</title>
+  <desc id="desc">Held-out mean loss decreases from 5.581 at step 200 to 3.644 at step 1905; perplexity decreases from 265.36 to 38.24.</desc>
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0b1020"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <rect width="1100" height="520" rx="24" fill="url(#panel)"/>
+
+  <g font-family="Inter,Segoe UI,Arial,sans-serif">
+    <text x="62" y="58" fill="#f8fafc" font-size="28" font-weight="700">Diagnostic held-out trajectory</text>
+    <text x="62" y="86" fill="#94a3b8" font-size="15">30 records • 292 samples • 17,554 evaluated tokens • lower is better</text>
+
+    <g stroke="#334155" stroke-width="1">
+      <line x1="90" y1="130" x2="1025" y2="130"/>
+      <line x1="90" y1="205" x2="1025" y2="205"/>
+      <line x1="90" y1="280" x2="1025" y2="280"/>
+      <line x1="90" y1="355" x2="1025" y2="355"/>
+    </g>
+    <g fill="#94a3b8" font-size="13" text-anchor="end">
+      <text x="78" y="135">6.0</text>
+      <text x="78" y="210">5.0</text>
+      <text x="78" y="285">4.0</text>
+      <text x="78" y="360">3.0</text>
+    </g>
+
+    <polyline points="150,161 410,235 680,284 950,307" fill="none" stroke="url(#line)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <g>
+      <circle cx="150" cy="161" r="8" fill="#38bdf8"/>
+      <circle cx="410" cy="235" r="8" fill="#60a5fa"/>
+      <circle cx="680" cy="284" r="8" fill="#818cf8"/>
+      <circle cx="950" cy="307" r="9" fill="#a78bfa"/>
+    </g>
+
+    <g fill="#e2e8f0" font-size="14" text-anchor="middle">
+      <text x="150" y="397" font-weight="700">200</text>
+      <text x="410" y="397" font-weight="700">635</text>
+      <text x="680" y="397" font-weight="700">1270</text>
+      <text x="950" y="397" font-weight="700">1905</text>
+    </g>
+    <text x="555" y="430" fill="#94a3b8" font-size="14" text-anchor="middle">optimizer step</text>
+
+    <g font-size="13">
+      <g transform="translate(106 112)">
+        <rect width="150" height="42" rx="9" fill="#172033" stroke="#334155"/>
+        <text x="75" y="18" fill="#f8fafc" text-anchor="middle" font-weight="700">loss 5.581078</text>
+        <text x="75" y="34" fill="#94a3b8" text-anchor="middle">ppl 265.358</text>
+      </g>
+      <g transform="translate(335 184)">
+        <rect width="150" height="42" rx="9" fill="#172033" stroke="#334155"/>
+        <text x="75" y="18" fill="#f8fafc" text-anchor="middle" font-weight="700">loss 4.589546</text>
+        <text x="75" y="34" fill="#94a3b8" text-anchor="middle">ppl 98.450</text>
+      </g>
+      <g transform="translate(605 233)">
+        <rect width="150" height="42" rx="9" fill="#172033" stroke="#334155"/>
+        <text x="75" y="18" fill="#f8fafc" text-anchor="middle" font-weight="700">loss 3.942194</text>
+        <text x="75" y="34" fill="#94a3b8" text-anchor="middle">ppl 51.532</text>
+      </g>
+      <g transform="translate(865 316)">
+        <rect width="160" height="42" rx="9" fill="#172033" stroke="#334155"/>
+        <text x="80" y="18" fill="#f8fafc" text-anchor="middle" font-weight="700">loss 3.643954</text>
+        <text x="80" y="34" fill="#94a3b8" text-anchor="middle">ppl 38.243</text>
+      </g>
+    </g>
+
+    <line x1="62" y1="463" x2="1038" y2="463" stroke="#253047"/>
+    <text x="62" y="490" fill="#94a3b8" font-size="13">Scope: diagnostic corpus evaluation, not a public benchmark or proof of broad conversational/reasoning capability.</text>
+  </g>
+</svg>
