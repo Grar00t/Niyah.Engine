@@ -1,0 +1,21 @@
+id	language	category	prompt
+H001	ar-MSA	concept	اكتب جملة واحدة تشرح الفرق بين التعلّم والتذكّر.
+H002	ar-MSA	arithmetic	معك 12 كتابًا وأعطيت 5 كتب لصديقك. كم كتابًا بقي معك؟ أجب بالعدد فقط.
+H003	ar-MSA	pattern	أكمل النمط بالعدد التالي فقط: 2، 4، 8، 16، ...
+H004	ar-MSA	editing	صحح الجملة لغويًا دون تغيير معناها: الطالب ذهبو إلى المكتبة أمس.
+H005	ar-MSA	definition	عرّف الشبكة المحلية LAN بجملة عربية واحدة بسيطة.
+H006	ar-MSA	reasoning	أحمد أطول من سالم، وسالم أطول من فهد. من الأطول بينهم؟ أجب بالاسم فقط.
+H007	ar-MSA	format-following	اذكر ثلاثة ألوان شائعة، كل لون في سطر مستقل، دون أي شرح إضافي.
+H008	ar-MSA	exact-copy	لا تغيّر هذا الرقم ولا تضف شيئًا. أعده فقط: 410016
+H009	ar-MSA	summarization	لخّص هذه العبارة في خمس كلمات أو أقل: يعمل النظام محليًا على الجهاز ولا يحتاج إلى إرسال البيانات إلى خدمة سحابية أثناء التنفيذ.
+H010	ar-MSA	arithmetic	ما قيمة 15 بالمئة من 200؟ أجب بالعدد فقط.
+H011	ar-SA	colloquial-explanation	وش الفرق ببساطة بين تشغيل نموذج محلي على جهازك وبين استخدامه عن طريق خدمة سحابية؟ جاوب بسطرين كحد أقصى.
+H012	ar-SA	instruction-following	إذا سألتك عن شيء ما عندك عنه معلومات كافية، وش الأفضل: تخمّن أو تقول إن المعلومات غير كافية؟ جاوب بجملة قصيرة.
+H013	ar-MSA	transformation	حوّل العبارة التالية إلى سؤال واضح دون إضافة معلومة جديدة: يعمل الخادم على المنفذ 8080.
+H014	ar-MSA	factual	ما عاصمة المملكة العربية السعودية؟ أجب باسم المدينة فقط.
+H015	en	definition	Explain in one sentence what a local language model is.
+H016	en	pattern	Give only the next number in this sequence: 1, 4, 9, 16, ...
+H017	en	format-following	Reply with exactly one word naming a common fruit.
+H018	en	paraphrase	Paraphrase without changing the meaning: The service runs entirely on the local machine.
+H019	ar-en	translation	ترجم إلى الإنجليزية فقط: البيانات تبقى على الجهاز.
+H020	ar-MSA	insufficient-information	س مجهول ولم تُعطَ أي معادلة أو قيمة تربطه بشيء آخر. ما قيمة س؟ إذا لم يمكن تحديدها، قل إن المعلومات غير كافية.
