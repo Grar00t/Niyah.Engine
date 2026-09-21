@@ -361,7 +361,7 @@ static NiyahStatus niyah_read_float_array(FILE *file,
 {
     const size_t floats_per_chunk = buffer_size / sizeof(uint32_t);
     size_t offset = 0U;
-    if (values == NULL || floats_per_chunk == 0U) {
+    if (floats_per_chunk == 0U) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
     while (offset < count) {
@@ -380,7 +380,9 @@ static NiyahStatus niyah_read_float_array(FILE *file,
                 (kind == NIYAH_CHECKPOINT_TENSOR_V && value < 0.0f)) {
                 return NIYAH_ERR_CORRUPT_DATA;
             }
-            values[offset + i] = value;
+            if (values != NULL) {
+                values[offset + i] = value;
+            }
         }
         offset += chunk_count;
     }
@@ -976,7 +978,8 @@ static NiyahStatus niyah_checkpoint_load_impl(
     const NiyahTokenizer *tokenizer,
     NiyahModel *out_model,
     NiyahAdamWState *out_optimizer_state,
-    NiyahAdamWConfig *out_optimizer_config)
+    NiyahAdamWConfig *out_optimizer_config,
+    int load_optimizer)
 {
     FILE *file;
     NiyahCheckpointScan first;
@@ -988,12 +991,20 @@ static NiyahStatus niyah_checkpoint_load_impl(
     uint32_t required_version;
     NiyahStatus status;
 
-    if (path == NULL || path[0] == '\0' || out_model == NULL ||
-        out_optimizer_state == NULL || out_optimizer_config == NULL) {
+    if (path == NULL || path[0] == '\0' || out_model == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    if (load_optimizer != 0 &&
+        (out_optimizer_state == NULL || out_optimizer_config == NULL)) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    if (load_optimizer == 0 &&
+        (out_optimizer_state != NULL || out_optimizer_config != NULL)) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
     if (!niyah_model_output_is_empty(out_model) ||
-        !niyah_optimizer_output_is_empty(out_optimizer_state)) {
+        (load_optimizer != 0 &&
+         !niyah_optimizer_output_is_empty(out_optimizer_state))) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
 
@@ -1040,19 +1051,21 @@ static NiyahStatus niyah_checkpoint_load_impl(
         (void)fclose(file);
         return status;
     }
-    status = niyah_adamw_state_create(&temp_state, &temp_model);
-    if (status != NIYAH_OK) {
-        niyah_model_destroy(&temp_model);
-        (void)fclose(file);
-        return status;
+    if (load_optimizer != 0) {
+        status = niyah_adamw_state_create(&temp_state, &temp_model);
+        if (status != NIYAH_OK) {
+            niyah_model_destroy(&temp_model);
+            (void)fclose(file);
+            return status;
+        }
     }
 
     targets.weights = temp_model.weights;
-    targets.m = temp_state.m;
-    targets.v = temp_state.v;
+    targets.m = load_optimizer != 0 ? temp_state.m : NULL;
+    targets.v = load_optimizer != 0 ? temp_state.v : NULL;
     targets.count = temp_model.weight_count;
     status = niyah_scan_checkpoint(file, required_version, &first, &targets, &second);
-    if (status == NIYAH_OK) {
+    if (status == NIYAH_OK && load_optimizer != 0) {
         temp_state.step = second.meta.step;
         temp_state.model_config = temp_model.config;
         temp_state.model_layout = temp_model.layout;
@@ -1071,14 +1084,16 @@ static NiyahStatus niyah_checkpoint_load_impl(
     }
 
     *out_model = temp_model;
-    *out_optimizer_state = temp_state;
-    *out_optimizer_config = second.meta.optimizer_config;
-    out_optimizer_state->bound_model = out_model;
-    out_optimizer_state->bound_weights = out_model->weights;
-    out_optimizer_state->model_config = out_model->config;
-    out_optimizer_state->model_layout = out_model->layout;
+    if (load_optimizer != 0) {
+        *out_optimizer_state = temp_state;
+        *out_optimizer_config = second.meta.optimizer_config;
+        out_optimizer_state->bound_model = out_model;
+        out_optimizer_state->bound_weights = out_model->weights;
+        out_optimizer_state->model_config = out_model->config;
+        out_optimizer_state->model_layout = out_model->layout;
+        memset(&temp_state, 0, sizeof(temp_state));
+    }
     memset(&temp_model, 0, sizeof(temp_model));
-    memset(&temp_state, 0, sizeof(temp_state));
     return NIYAH_OK;
 }
 
@@ -1121,7 +1136,7 @@ NiyahStatus niyah_checkpoint_load(const char *path,
                                   NiyahAdamWConfig *out_optimizer_config)
 {
     return niyah_checkpoint_load_impl(
-        path, NULL, out_model, out_optimizer_state, out_optimizer_config);
+        path, NULL, out_model, out_optimizer_state, out_optimizer_config, 1);
 }
 
 NiyahStatus niyah_checkpoint_load_with_tokenizer(
@@ -1136,5 +1151,17 @@ NiyahStatus niyah_checkpoint_load_with_tokenizer(
     }
     return niyah_checkpoint_load_impl(
         path, tokenizer, out_model, out_optimizer_state,
-        out_optimizer_config);
+        out_optimizer_config, 1);
+}
+
+NiyahStatus niyah_checkpoint_load_model_with_tokenizer(
+    const char *path,
+    const NiyahTokenizer *tokenizer,
+    NiyahModel *out_model)
+{
+    if (tokenizer == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    return niyah_checkpoint_load_impl(
+        path, tokenizer, out_model, NULL, NULL, 0);
 }
