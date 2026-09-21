@@ -899,8 +899,6 @@ static int eval_command(int argc, char **argv)
     NiyahEvalOptions options;
     NiyahTokenizer *tokenizer = NULL;
     NiyahModel model;
-    NiyahAdamWState optimizer_state;
-    NiyahAdamWConfig optimizer_config;
     NiyahDatasetShard shard;
     NiyahEvaluationSample *samples = NULL;
     NiyahEvaluationMetrics metrics;
@@ -925,8 +923,6 @@ static int eval_command(int argc, char **argv)
     int exit_code = 1;
 
     memset(&model, 0, sizeof(model));
-    memset(&optimizer_state, 0, sizeof(optimizer_state));
-    memset(&optimizer_config, 0, sizeof(optimizer_config));
     memset(&shard, 0, sizeof(shard));
     memset(&metrics, 0, sizeof(metrics));
 
@@ -953,12 +949,10 @@ static int eval_command(int argc, char **argv)
     if (status != NIYAH_OK)
         return fail_status("tokenizer_load", status);
 
-    status = niyah_checkpoint_load_with_tokenizer(
+    status = niyah_checkpoint_load_model_with_tokenizer(
         options.checkpoint_path,
         tokenizer,
-        &model,
-        &optimizer_state,
-        &optimizer_config);
+        &model);
     if (status != NIYAH_OK) {
         exit_code = fail_status("checkpoint_load", status);
         goto cleanup;
@@ -1219,7 +1213,6 @@ cleanup:
     free(samples);
     niyah_dataset_shard_destroy(&shard);
     free(heldout_bytes);
-    niyah_adamw_state_destroy(&optimizer_state);
     niyah_model_destroy(&model);
     niyah_tokenizer_destroy(tokenizer);
     return exit_code;
@@ -1301,8 +1294,6 @@ static int run_command(int argc, char **argv)
     NiyahRunOptions options;
     NiyahTokenizer *tokenizer = NULL;
     NiyahModel model;
-    NiyahAdamWState optimizer_state;
-    NiyahAdamWConfig optimizer_config;
     NiyahKVCache cache;
     NiyahGenerationConfig generation_config;
     NiyahGenerationResult generation_result;
@@ -1327,8 +1318,6 @@ static int run_command(int argc, char **argv)
     int exit_code = 1;
 
     memset(&model, 0, sizeof(model));
-    memset(&optimizer_state, 0, sizeof(optimizer_state));
-    memset(&optimizer_config, 0, sizeof(optimizer_config));
     memset(&cache, 0, sizeof(cache));
     memset(&generation_config, 0, sizeof(generation_config));
     memset(&generation_result, 0, sizeof(generation_result));
@@ -1356,12 +1345,10 @@ static int run_command(int argc, char **argv)
         return fail_status("tokenizer_load", status);
     }
 
-    status = niyah_checkpoint_load_with_tokenizer(
+    status = niyah_checkpoint_load_model_with_tokenizer(
         options.checkpoint_path,
         tokenizer,
-        &model,
-        &optimizer_state,
-        &optimizer_config);
+        &model);
     if (status != NIYAH_OK) {
         exit_code = fail_status("checkpoint_load", status);
         goto cleanup;
@@ -1629,7 +1616,6 @@ cleanup:
     free(generated_tokens);
     free(prompt_tokens);
     niyah_kv_cache_destroy(&cache);
-    niyah_adamw_state_destroy(&optimizer_state);
     niyah_model_destroy(&model);
     niyah_tokenizer_destroy(tokenizer);
     return exit_code;
