@@ -23,10 +23,64 @@ jobs:
         if: runner.os != 'Windows'
         run: bash scripts/verify.sh release
 
+      - name: Install/package smoke (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$PWD/build/install-smoke"
+          cmake --install build/verify-posix-release --prefix "$prefix"
+          test -x "$prefix/bin/niyah"
+          test -x "$prefix/bin/niyah-train"
+          test -x "$prefix/bin/niyah_probe"
+          test -f "$prefix/lib/libniyah.a"
+          test -f "$prefix/include/niyah/niyah.h"
+          "$prefix/bin/niyah" --help
+          (
+            cd build/verify-posix-release
+            cpack -G TGZ
+            ls -1 Niyah.Engine-*.tar.gz
+          )
+
       - name: Verify (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: pwsh -NoProfile -File scripts/verify.ps1 -Configuration Release -Jobs 2
+
+      - name: Install/package smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = Join-Path $PWD 'build\install-smoke'
+          cmake --install build/verify-windows-release --config Release --prefix $prefix
+          if ($LASTEXITCODE -ne 0) { throw 'cmake --install failed' }
+
+          $required = @(
+            (Join-Path $prefix 'bin\niyah.exe'),
+            (Join-Path $prefix 'bin\niyah-train.exe'),
+            (Join-Path $prefix 'bin\niyah_probe.exe'),
+            (Join-Path $prefix 'lib\niyah.lib'),
+            (Join-Path $prefix 'include\niyah\niyah.h')
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) { throw "missing installed file: $path" }
+          }
+
+          & (Join-Path $prefix 'bin\niyah.exe') --help
+          if ($LASTEXITCODE -ne 0) { throw 'installed niyah --help failed' }
+
+          Push-Location build/verify-windows-release
+          try {
+            cpack -C Release -G ZIP
+            if ($LASTEXITCODE -ne 0) { throw 'cpack failed' }
+            $packages = @(Get-ChildItem -Filter 'Niyah.Engine-*.zip')
+            if ($packages.Count -eq 0) { throw 'release package zip not produced' }
+            $packages | ForEach-Object { $_.FullName }
+          }
+          finally {
+            Pop-Location
+          }
 
   sanitizers:
     runs-on: ubuntu-latest

@@ -589,3 +589,34 @@ if(NIYAH_BUILD_TESTS)
     set_tests_properties(niyah_train_pair_mismatch_test PROPERTIES
         FIXTURES_REQUIRED niyah_train_files)
 endif()
+
+include(GNUInstallDirs)
+
+install(TARGETS niyah
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+)
+
+install(TARGETS niyah_cli niyah_train niyah_probe
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/niyah"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    FILES_MATCHING PATTERN "*.h"
+)
+
+install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+    "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
+    DESTINATION "${CMAKE_INSTALL_DOCDIR}"
+)
+
+set(CPACK_PACKAGE_NAME "Niyah.Engine")
+set(CPACK_PACKAGE_VENDOR "Niyah.Engine")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Native C11 autoregressive language-model runtime and training engine")
+set(CPACK_PACKAGE_FILE_NAME
+    "Niyah.Engine-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+include(CPack)
