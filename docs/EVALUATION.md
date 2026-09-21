@@ -29,11 +29,13 @@ The command reports stable `key=value` output containing tokenizer, checkpoint, 
 
 Text mode hashes the supplied raw held-out bytes, builds an evaluation shard in memory, and can report bits per byte. Shard mode loads a tokenizer-compatible prepared shard, uses its stored sequence length, reports its semantic shard identity, and does not invent a raw-byte denominator.
 
+The current shard evaluator is intentionally fail-closed for V3 loss-masked/supervised shards. Those shards preserve prompt context while supervising only response/EOS targets through `loss_start`; the current `niyah_evaluate()` API has no loss-mask field. Reporting all-token loss for such a shard would be semantically wrong, so the CLI rejects it until a loss-aware evaluation path is added.
+
 Evaluation does not update model parameters, optimizer state, or checkpoint bytes. The CLI integration test evaluates the same checkpoint repeatedly and verifies its file hash remains unchanged.
 
 ## Add-1 bigram baseline
 
-`niyah eval` reports a sparse Laplace/add-1 bigram baseline on the **same token stream** used to build the evaluation shard. For each adjacent pair `(previous, next)`:
+`niyah eval` reports a sparse Laplace/add-1 bigram baseline on the same evaluated token geometry. For each included adjacent pair `(previous, next)`:
 
 ```text
 P(next | previous)
@@ -41,9 +43,11 @@ P(next | previous)
       / (outgoing_count(previous) + vocab_size)
 ```
 
-The baseline mean NLL is averaged across all adjacent transitions in that stream. The implementation sorts encoded observed token pairs and does not allocate a `vocab_size × vocab_size` table.
+For a continuous text shard, every adjacent transition is included. For record-based V2 shards, persisted `EOS -> BOS` adjacencies between independent records are excluded because the shard sample geometry does not expose those cross-record transitions to model evaluation.
 
-The baseline is deliberately simple. Beating it is useful evidence that the model captures more predictive structure than a smoothed first-order token model on that stream; it is not a claim of broad language competence.
+The baseline mean NLL is averaged across the included transitions. The implementation sorts encoded observed token pairs and does not allocate a `vocab_size × vocab_size` table.
+
+The baseline is deliberately simple. Beating it is useful evidence that the model captures more predictive structure than a smoothed first-order token model on that evaluation geometry; it is not a claim of broad language competence.
 
 For text mode:
 
@@ -179,7 +183,7 @@ After the next selected checkpoint, preserve the evaluator unchanged and record:
 ```text
 checkpoint identity
 validation loss/perplexity
-add-1 bigram baseline on the same token stream
+add-1 bigram baseline on the same evaluation geometry
 untouched test loss/perplexity
 generation results on fixed unseen prompts
 exact repository revision
