@@ -4,6 +4,10 @@ Niyah.Engine is a native C11 language-model implementation that owns its tokeniz
 
 This documentation is organized to separate **how the system works** from **what has actually been demonstrated**.
 
+<p align="center">
+  <img src="assets/documentation-map.svg" alt="Niyah.Engine documentation map" width="100%" />
+</p>
+
 ## Start here
 
 | Guide | Purpose |
