@@ -24,7 +24,7 @@ function Invoke-Checked {
         [Parameter(Mandatory = $true)]
         [string]$Command,
 
-        [Parameter(ValueFromRemainingArguments = $true)]
+        [Parameter(Mandatory = $true)]
         [string[]]$Arguments
     )
 
@@ -34,17 +34,20 @@ function Invoke-Checked {
     }
 }
 
-Invoke-Checked cmake `
-    -S $RootDir `
-    -B $BuildDir `
+Invoke-Checked -Command 'cmake' -Arguments @(
+    '-S', $RootDir,
+    '-B', $BuildDir,
     '-DNIYAH_BUILD_TESTS=ON'
+)
 
-Invoke-Checked cmake `
-    --build $BuildDir `
-    --config $Configuration `
-    --parallel $Jobs
+Invoke-Checked -Command 'cmake' -Arguments @(
+    '--build', $BuildDir,
+    '--config', $Configuration,
+    '--parallel', [string]$Jobs
+)
 
-Invoke-Checked ctest `
-    --test-dir $BuildDir `
-    -C $Configuration `
-    --output-on-failure
+Invoke-Checked -Command 'ctest' -Arguments @(
+    '--test-dir', $BuildDir,
+    '-C', $Configuration,
+    '--output-on-failure'
+)
