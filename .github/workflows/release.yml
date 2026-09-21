@@ -1,0 +1,146 @@
+name: release-build
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "CMakeLists.txt"
+      - "scripts/**"
+      - "src/**"
+      - "include/**"
+      - "tools/**"
+      - "LICENSE"
+      - "README.md"
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify Release build
+        run: bash scripts/verify.sh release
+
+      - name: Build and smoke-test TGZ package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist smoke
+
+          (
+            cd build/verify-posix-release
+            cpack -G TGZ
+          )
+
+          package="$(find build/verify-posix-release -maxdepth 1 -type f -name 'Niyah.Engine-*.tar.gz' -print -quit)"
+          test -n "$package"
+
+          artifact="dist/Niyah.Engine-0.1.0-linux-x86_64.tar.gz"
+          cp "$package" "$artifact"
+          sha256sum "$artifact" > "$artifact.sha256"
+
+          tar -xzf "$artifact" -C smoke
+          exe="$(find smoke -type f -path '*/bin/niyah' -print -quit)"
+          test -n "$exe"
+          "$exe" --help
+
+      - name: Upload Linux release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: niyah-release-linux-x86_64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  package-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify Release build
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/verify.ps1 -Configuration Release -Jobs 2
+
+      - name: Build and smoke-test ZIP package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $dist = Join-Path $PWD 'dist'
+          $smoke = Join-Path $PWD 'smoke'
+          New-Item -ItemType Directory -Force -Path $dist, $smoke | Out-Null
+
+          Push-Location build/verify-windows-release
+          try {
+            cpack -C Release -G ZIP
+            if ($LASTEXITCODE -ne 0) { throw 'cpack failed' }
+            $package = Get-ChildItem -Filter 'Niyah.Engine-*.zip' | Select-Object -First 1
+            if (-not $package) { throw 'CPack ZIP was not produced' }
+            $packagePath = $package.FullName
+          }
+          finally {
+            Pop-Location
+          }
+
+          $artifact = Join-Path $dist 'Niyah.Engine-0.1.0-windows-x86_64.zip'
+          Copy-Item $packagePath $artifact
+
+          $hash = (Get-FileHash $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($artifact))" |
+            Set-Content -Path "$artifact.sha256" -Encoding ascii
+
+          Expand-Archive -Path $artifact -DestinationPath $smoke -Force
+          $exe = Get-ChildItem $smoke -Recurse -Filter 'niyah.exe' |
+            Where-Object { $_.FullName -match '[\\/]bin[\\/]niyah\.exe$' } |
+            Select-Object -First 1
+          if (-not $exe) { throw 'extracted niyah.exe not found' }
+
+          & $exe.FullName --help
+          if ($LASTEXITCODE -ne 0) { throw 'extracted niyah.exe --help failed' }
+
+      - name: Upload Windows release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: niyah-release-windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release-bundle:
+    needs: [package-linux, package-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download package artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: niyah-release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Build checksum manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat dist/*.sha256 | sort > dist/SHA256SUMS.txt
+          cat dist/SHA256SUMS.txt
+          test -s dist/SHA256SUMS.txt
+          test -f dist/Niyah.Engine-0.1.0-linux-x86_64.tar.gz
+          test -f dist/Niyah.Engine-0.1.0-windows-x86_64.zip
+
+      - name: Upload combined release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: niyah-release-bundle
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
