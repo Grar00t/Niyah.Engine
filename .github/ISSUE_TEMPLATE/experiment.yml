@@ -1,0 +1,65 @@
+name: Model experiment / evaluation
+description: Record a reproducible training or evaluation result without turning it into a broader capability claim.
+title: "experiment: "
+labels: []
+body:
+  - type: input
+    id: revision
+    attributes:
+      label: Repository revision
+      placeholder: Exact commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What single question does this experiment answer?
+    validations:
+      required: true
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Artifact identities / provenance
+      description: Tokenizer, dataset/shard, checkpoint, held-out/test identities or provenance.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Model shape, seeds, optimizer settings, sequence length, and relevant runtime options.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: commands
+    attributes:
+      label: Commands
+      description: Exact commands used to produce the result.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: Raw key metrics and process exit status.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: conclusion
+    attributes:
+      label: Evidence-supported conclusion
+      description: State only what the measurements establish.
+    validations:
+      required: true
+  - type: textarea
+    id: nonclaims
+    attributes:
+      label: Non-claims / limitations
+      description: What does this experiment not establish?
+    validations:
+      required: true
