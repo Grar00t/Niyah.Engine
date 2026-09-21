@@ -53,14 +53,20 @@ NiyahStatus niyah_evaluate(
     if (status != NIYAH_OK) return status;
 
     for (i = 0U; i < sample_count; ++i) {
+        size_t scored_tokens;
+
         if (samples[i].tokens == NULL ||
             samples[i].targets == NULL ||
             samples[i].token_count == 0U)
             return NIYAH_ERR_INVALID_ARGUMENT;
-        if (samples[i].token_count > (size_t)model->config.context_length)
+        if (samples[i].token_count > (size_t)model->config.context_length ||
+            samples[i].loss_start >= samples[i].token_count)
             return NIYAH_ERR_INVALID_CONFIG;
+
+        scored_tokens =
+            samples[i].token_count - samples[i].loss_start;
         if (!niyah_size_add_ok(
-                total_tokens, samples[i].token_count, &total_tokens))
+                total_tokens, scored_tokens, &total_tokens))
             return NIYAH_ERR_OVERFLOW;
         if (samples[i].token_count > max_tokens)
             max_tokens = samples[i].token_count;
@@ -91,6 +97,8 @@ NiyahStatus niyah_evaluate(
     for (i = 0U; i < sample_count; ++i) {
         float sample_loss = 0.0f;
         size_t sample_logits_count = 0U;
+        size_t scored_tokens =
+            samples[i].token_count - samples[i].loss_start;
         double contribution;
 
         if (!niyah_size_mul_ok(
@@ -102,12 +110,10 @@ NiyahStatus niyah_evaluate(
             return NIYAH_ERR_OVERFLOW;
         }
 
-        status = niyah_train_loss(
+        status = niyah_transformer_forward(
             model,
             samples[i].tokens,
-            samples[i].targets,
             samples[i].token_count,
-            &sample_loss,
             logits,
             sample_logits_count,
             workspace,
@@ -118,8 +124,23 @@ NiyahStatus niyah_evaluate(
             return status;
         }
 
+        status = niyah_cross_entropy_loss_masked(
+            logits,
+            samples[i].targets,
+            samples[i].token_count,
+            (size_t)model->config.vocab_size,
+            samples[i].loss_start,
+            &sample_loss,
+            NULL,
+            0U);
+        if (status != NIYAH_OK) {
+            free(workspace);
+            free(logits);
+            return status;
+        }
+
         contribution =
-            (double)sample_loss * (double)samples[i].token_count;
+            (double)sample_loss * (double)scored_tokens;
         if (!isfinite(contribution) ||
             !isfinite(weighted_loss + contribution)) {
             free(workspace);
