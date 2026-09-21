@@ -16,7 +16,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootDir = (Resolve-Path (Join-Path $ScriptDir '..')).Path
 
 if ([string]::IsNullOrWhiteSpace($BuildDir)) {
-    $BuildDir = Join-Path $RootDir ("build\verify-{0}" -f $Configuration.ToLowerInvariant())
+    $BuildDir = Join-Path $RootDir ("build\verify-windows-{0}" -f $Configuration.ToLowerInvariant())
 }
 
 function Invoke-Checked {
