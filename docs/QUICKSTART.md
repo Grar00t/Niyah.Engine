@@ -141,7 +141,30 @@ niyah-train resume \
 
 Resume output paths must be new paths. The CLI does not overwrite resume inputs.
 
-## 6. Run inference
+## 6. Evaluate on held-out text
+
+Use the same tokenizer and a checkpoint against a held-out text file:
+
+```sh
+niyah eval \
+  --tokenizer tok.bin \
+  --checkpoint model-0200.ckpt \
+  --heldout heldout.txt \
+  --format text \
+  --sequence-length 64
+```
+
+The command reports model mean loss, perplexity, bits per token, and a sparse add-1 bigram baseline on the same token stream. Text mode also reports bits per byte. Successful output ends with:
+
+```text
+EVAL_EXIT=0
+```
+
+Evaluation is read-only with respect to checkpoint bytes. For an already prepared compatible shard, use `--format shard` and omit `--sequence-length`.
+
+For metric interpretation and the current pilot trajectory, see [EVALUATION.md](EVALUATION.md).
+
+## 7. Run inference
 
 ```sh
 niyah run \
@@ -158,7 +181,7 @@ niyah run \
 
 When the project is built with CUDA support, `--backend cuda` is also available.
 
-## 7. Inspect data or a checkpoint with `niyah_probe`
+## 8. Inspect data or a checkpoint with `niyah_probe`
 
 `niyah_probe` always requires a tokenizer path, but a tokenizer-only invocation currently emits no report. Use it with a shard and/or with a checkpoint plus prompt.
 
@@ -181,12 +204,6 @@ niyah_probe \
 
 The trace repeatedly samples through the same decode/sampler path used by generation and reports cache movement, selected token, logit/probability, and decoded bytes.
 
-## 8. Evaluation
-
-The repository exposes the read-only `niyah_evaluate()` API. The current documented `main` CLI exposes `prepare` and `run`; it does **not** currently expose a first-class `niyah eval` command.
-
-For the current evaluation methodology and pilot results, see [EVALUATION.md](EVALUATION.md).
-
 ## 9. What a successful quickstart proves
 
 A successful end-to-end run establishes that the selected repository revision can:
@@ -197,6 +214,7 @@ corpus
   → train
   → checkpoint + cursor
   → resume
+  → held-out evaluation + baseline
   → load
   → generate
 ```
