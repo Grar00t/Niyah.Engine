@@ -1,191 +1,214 @@
 # Verification Status
 
-This document separates **demonstrated behavior** from **unestablished capability claims**.
+This document separates repository-backed implementation evidence from local diagnostic model-quality evidence.
 
-Verification snapshot date: **2026-09-20**  
-Repository base: **`14d3ae6c2ef3136deea1dbe9d93297dfaabde2e4`**
+**Documentation snapshot:** 2026-09-21  
+**Documentation branch base:** `732f84fc34b2b5cad2ac40b4195e293fc2fad9aa`
 
-## 1. Demonstrated repository/runtime behavior
+## 1. Current repository/CI evidence
 
-The following behaviors have been exercised against the current native pipeline.
-
-| Gate | Status | Evidence |
-|---|---|---|
-| Source/build recovery | PASS | Fresh repository build from the stated base SHA |
-| CPU Release build | PASS | CMake + MSVC Release build completed |
-| Native regression suite | PASS | 27/27 tests passed repeatedly in the exercised build |
-| Corpus preparation | PASS | Native `niyah prepare` created tokenizer + shard |
-| Real training execution | PASS | 100-update native training run completed |
-| Checkpoint persistence | PASS | Model checkpoint created and SHA-256 recorded |
-| Cursor persistence | PASS | Dataset cursor created and SHA-256 recorded |
-| Resume | PASS | One additional optimizer update resumed from persisted checkpoint/cursor |
-| CPU inference | PASS | Resumed checkpoint loaded and generated output through `niyah run` |
-| Evaluation primitive | PASS | `NIYAH_EVAL_P6_G=PASS`, exit 0 |
-
-These results establish an executable native lifecycle. They do not by themselves establish production readiness or useful language capability.
-
-## 2. Preparation evidence
-
-An exercised corpus preparation run reported:
+The documentation branch was created from `main` at commit:
 
 ```text
-P8C_PREPARE=PASS
-vocab=269
-merges=11
-tokens=1417854
-samples=22154
+732f84fc34b2b5cad2ac40b4195e293fc2fad9aa
+Merge pull request #57
 ```
 
-This establishes that the current tokenizer-to-shard path can process a real corpus into native persisted artifacts.
+For that exact `main` commit, GitHub Actions reports:
 
-## 3. Training evidence
+| Gate | Result |
+|---|---|
+| `core-ci` push workflow | PASS |
+| Ubuntu Release configure/build/test job | PASS through successful workflow completion |
+| Windows Release configure/build/test job | PASS through successful workflow completion |
+| Ubuntu ASan/UBSan configure/build/test job | PASS through successful workflow completion |
+| GitHub CodeQL push analysis | PASS |
 
-The exercised small-model configuration used:
+The repository workflow defines Ubuntu and Windows Release build/test matrix jobs plus an Ubuntu sanitizer job. Successful workflow completion establishes that those configured jobs completed successfully for this commit.
+
+## 2. Implemented native lifecycle
+
+On the documented `main` lineage, the repository contains native code for:
 
 ```text
-context_length      = 64
-embedding_dim       = 128
-layers              = 4
-heads               = 4
-kv_heads            = 2
-ffn_hidden_dim      = 512
-batch_size          = 32
-accumulation_steps  = 4
-learning_rate       = 0.0005
-model_seed          = 42
-data_seed           = 42
+corpus preparation
+  → tokenizer persistence/identity
+  → tokenizer-bound dataset shard
+  → fresh training
+  → checkpoint + dataset cursor
+  → resume
+  → incremental inference
+  → diagnostic probing
 ```
 
-Observed training loss decreased during the bounded run. Example observations included:
+The model core includes Transformer forward execution, explicit backward gradients, AdamW optimization, KV-cache decode, sampling, and read-only evaluation APIs.
+
+## 3. CLI surface verified from source
+
+The current `tools/niyah.c` usage contract exposes:
 
 ```text
-update=1/100  loss=5.60521841
-update=20/100 loss=4.24649668
-update=35/100 loss=3.78623343
+niyah prepare
+niyah run
 ```
 
-A falling training loss is evidence that the exercised forward/backward/update path is changing the model in a direction that reduces the observed training objective. It is **not** evidence of held-out generalization.
-
-## 4. Persistence evidence
-
-The completed 100-update run produced:
+The current `tools/niyah_train.c` usage contract exposes:
 
 ```text
-model-0100.ckpt
-size   = 12,223,712 bytes
-SHA256 = 7F91995692172CE0E9D84935E608C4BFCD9C87E792184CC2A5991AFF6A02A54D
-
-cursor-0100.bin
-size   = 120 bytes
-SHA256 = 011D4EE53D9293152344E55264274D5536D46BC5778431AC10B781FC2E3CB084
+niyah-train new
+niyah-train resume
 ```
 
-## 5. Resume evidence
-
-A one-update resume from the exact persisted pair completed successfully:
+The current standalone diagnostic tool exposes:
 
 ```text
-update=1/1 loss=2.95031023
+niyah_probe --tokenizer TOK
+            [--shard SHARD]
+            [--checkpoint CKPT --prompt TEXT [--topk N] [--trace-steps N]]
+```
+
+A first-class `niyah eval` CLI is not part of this documented `main` revision. Evaluation exists as a native API and has been exercised through diagnostic helpers.
+
+## 4. Training/resume diagnostic evidence
+
+A supplied local diagnostic run resumed from optimizer step 1270 to 1905 for 635 requested updates.
+
+Observed completion record:
+
+```text
 mode=resume
-updates=1
-batch_size=32
-accumulation_steps=4
-optimizer_step=101
-cursor_epoch=0
-cursor_position=12928
-mean_loss=2.95031023
+shards=1
+samples=10157
+updates=635
+batch_size=8
+accumulation_steps=2
+optimizer_step=1905
+cursor_epoch=3
+cursor_position=9
+mean_loss=3.74314785
 RESUME_EXIT=0
 ```
 
-The cursor position is internally consistent with the exercised update geometry:
+Produced artifacts:
 
 ```text
-101 optimizer steps × 32 batch size × 4 accumulation steps
-= 12,928 sample consumptions
+model-1905.ckpt  = 13,383,392 bytes
+cursor-1905.bin  = 120 bytes
 ```
 
-The resumed run produced new artifacts:
+This establishes successful continuation and persistence for the supplied run. It does not establish corpus quality or broad model capability.
+
+> [!IMPORTANT]
+> The pasted local diagnostic transcript does not include the exact repository SHA used to build that training binary. Therefore the model-quality numbers below must not be represented as reproduced specifically at `732f84f` unless that SHA is independently recorded for the run.
+
+## 5. Held-out diagnostic evidence
+
+A persistent evaluation helper was built successfully and evaluated four checkpoints against the same held-out records:
 
 ```text
-model-0101-verify.ckpt
-size   = 12,223,712 bytes
-SHA256 = 28B712388C824613A920525DECD1FDE360B60F1C9E58468AED114474E3722BAD
-
-cursor-0101-verify.bin
-size   = 120 bytes
-SHA256 = 1ED88C34FB5B71D383054CEA96D7C06A0DA5B33D16413F3F75F848E0E4043C1A
+BUILD_EVAL_EXIT=0
+HELDOUT records=30 tokens=17584 samples=292 sequence_length=64
 ```
 
-This demonstrates checkpoint load, optimizer-state continuity, dataset-cursor continuity, continued training, and persistence to new output paths for the exercised run.
+Measured checkpoint results:
 
-## 6. Inference evidence
-
-The resumed checkpoint was loaded using the current tokenizer and CPU backend:
+| Checkpoint | Samples | Evaluated tokens | Mean loss | Perplexity |
+|---|---:|---:|---:|---:|
+| `model-0200.ckpt` | 292 | 17,554 | 5.581078354 | 265.357600904 |
+| `model-0635.ckpt` | 292 | 17,554 | 4.589545587 | 98.449683132 |
+| `model-1270.ckpt` | 292 | 17,554 | 3.942194185 | 51.531547081 |
+| `model-1905.ckpt` | 292 | 17,554 | 3.643954027 | 38.242751050 |
 
 ```text
-prompt: Hello
-max_new_tokens: 16
-temperature: 0
-seed: 42
-backend: cpu
+EVAL_EXIT=0
 ```
 
-Observed generated text:
+The measured trajectory is monotonically improving across these four checkpoints.
+
+<p align="center">
+  <img src="assets/heldout-learning-curve.svg" alt="Held-out learning trajectory" width="100%" />
+</p>
+
+## 6. Evidence-supported interpretation
+
+The held-out trajectory establishes that later checkpoints predict the supplied held-out distribution better than earlier checkpoints under the measured objective.
+
+From step 1270 to 1905:
 
 ```text
-r the the the the sent th
+mean_loss:   3.942194185 -> 3.643954027
+perplexity: 51.531547081 -> 38.242751050
+relative perplexity reduction ≈ 25.79%
 ```
 
-The process exited successfully:
+This provides direct evidence of learning beyond training-loss reduction alone.
+
+## 7. Validation-set boundary
+
+The same 30-record set has been used to make continuation decisions. It should therefore be treated as a **validation set** for future reporting, not a pristine final test set.
+
+A final quality characterization requires an additional untouched test set evaluated only after training/checkpoint-selection decisions are frozen.
+
+## 8. Corpus-quality boundary
+
+The current v6 pilot corpus is recorded as web/Hugging Face sourced and known to contain quality defects. Therefore the observed loss/perplexity improvement does not establish:
+
+- factual correctness of the learned content;
+- high-quality conversational behavior;
+- strong Arabic or English fluency across domains;
+- reasoning capability;
+- suitability of the corpus for a final assistant model.
+
+The engine can optimize against a low-quality distribution successfully.
+
+## 9. Diagnostic generation evidence
+
+The repository includes `niyah_probe`, added through PR #57, to inspect next-token logits and autoregressive cache movement without modifying generation/training behavior.
+
+The PR's documented representative diagnostic showed:
 
 ```text
-INFERENCE_EXIT=0
+prompt: A sequence is
+first top token: byte-space token (id 32)
+subsequent greedy trace: repeated id 32
+KV cache: advanced on every step
 ```
 
-This demonstrates load + generation path execution. The generated text is not presented as evidence of useful model quality.
+This established that the repeated-space behavior was produced by the model's changing next-token distribution while the incremental decode path continued to advance. It did not establish the ultimate cause of the model preference.
 
-## 7. Evaluation evidence and current limitation
+## 10. Explicit non-claims
 
-The native evaluation regression executable passed:
-
-```text
-NIYAH_EVAL_P6_G=PASS
-EXIT=0
-```
-
-Historical validation files were also inspected. Files such as `val-windows-clean.bin` are raw `uint32` token windows rather than current `NIYAHSRD` shards. Their token IDs fall within the numeric range of the current vocabulary, but numeric range compatibility does **not** prove that historical token IDs carry the same tokenizer semantics as the current `tok.bin`.
-
-A raw-window diagnostic therefore must not be promoted to authoritative held-out quality evidence until tokenizer provenance is established or a validation set is rebuilt from held-out text using the current tokenizer semantics.
-
-## 8. Current established chain
-
-The following native path is demonstrated end-to-end for the exercised configuration:
-
-```text
-corpus
-  → tokenizer
-  → dataset shard
-  → fresh training
-  → checkpoint + cursor
-  → resume
-  → new checkpoint + cursor
-  → CPU inference
-```
-
-## 9. Explicit non-claims
-
-The evidence above does **not** establish:
+Current evidence does **not** establish:
 
 - production readiness;
-- production-scale convergence;
-- useful Arabic language capability;
-- useful English language capability;
-- held-out generalization under a currently proven validation corpus;
-- CUDA training parity;
-- mixed-precision correctness;
+- broad conversational competence;
+- broad reasoning capability;
+- factual reliability;
+- safety/alignment quality;
 - distributed training behavior;
-- compatibility between legacy K11 raw weights and the current checkpoint/tokenizer contract.
+- mixed-precision training correctness;
+- CPU/CUDA bitwise equivalence;
+- superiority or parity with Qwen, Llama, GPT-family, or another established model family;
+- legal/regulatory compliance.
 
-## 10. Verification rule
+## 11. Open evidence boundary
 
-Future status changes should be tied to reproducible evidence: repository SHA, exact command, artifact identities, test/evaluation output, and clearly scoped conclusions. Documentation should distinguish implementation facts from quality claims.
+PR #56 (`feat: extract evidence v1 core from P9 chain`) remains an open draft at the time of this documentation snapshot. Its IR/receipt/evidence-v1 additions must not be described as merged `main` functionality until that PR is actually merged.
+
+## 12. Verification rule
+
+Future capability/status changes should attach, where applicable:
+
+```text
+repository SHA
+exact command
+build/test workflow result
+model/tokenizer/dataset identities
+training configuration and seeds
+checkpoint identity
+evaluation-set identity
+metric output
+exit status
+```
+
+Documentation should distinguish implementation facts, reproduced evidence, local diagnostic evidence, inference, and unestablished claims.
