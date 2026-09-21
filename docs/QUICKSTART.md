@@ -154,13 +154,13 @@ niyah eval \
   --sequence-length 64
 ```
 
-The command reports model mean loss, perplexity, bits per token, and a sparse add-1 bigram baseline on the same token stream. Text mode also reports bits per byte. Successful output ends with:
+The command reports model mean loss, perplexity, bits per token, and a sparse add-1 bigram baseline on the same evaluation geometry. Text mode also reports bits per byte. Successful output ends with:
 
 ```text
 EVAL_EXIT=0
 ```
 
-Evaluation is read-only with respect to checkpoint bytes. For an already prepared compatible shard, use `--format shard` and omit `--sequence-length`.
+Evaluation is read-only with respect to checkpoint bytes. For an already prepared compatible non-loss-masked shard, use `--format shard` and omit `--sequence-length`. V3 supervised/loss-masked shards are currently rejected rather than scored with the wrong all-token objective.
 
 For metric interpretation and the current pilot trajectory, see [EVALUATION.md](EVALUATION.md).
 
