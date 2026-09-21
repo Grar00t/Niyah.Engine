@@ -20,7 +20,7 @@ JOBS="${NIYAH_BUILD_JOBS:-2}"
 
 case "$MODE" in
     release)
-        BUILD_DIR="${NIYAH_BUILD_DIR:-$ROOT_DIR/build/verify-release}"
+        BUILD_DIR="${NIYAH_BUILD_DIR:-$ROOT_DIR/build/verify-posix-release}"
         cmake -S "$ROOT_DIR" -B "$BUILD_DIR" \
             -DNIYAH_BUILD_TESTS=ON \
             -DCMAKE_BUILD_TYPE=Release
@@ -28,7 +28,7 @@ case "$MODE" in
         ctest --test-dir "$BUILD_DIR" -C Release --output-on-failure
         ;;
     sanitize)
-        BUILD_DIR="${NIYAH_BUILD_DIR:-$ROOT_DIR/build/verify-sanitize}"
+        BUILD_DIR="${NIYAH_BUILD_DIR:-$ROOT_DIR/build/verify-posix-sanitize}"
         cmake -S "$ROOT_DIR" -B "$BUILD_DIR" \
             -DNIYAH_BUILD_TESTS=ON \
             -DNIYAH_ENABLE_SANITIZERS=ON \
