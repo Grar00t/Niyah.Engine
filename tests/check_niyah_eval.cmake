@@ -13,6 +13,11 @@ set(CKPT "${PREFIX}.ckpt")
 set(CURSOR "${PREFIX}.cursor")
 set(HELDOUT "${PREFIX}_heldout.txt")
 set(MISSING_TOK "${PREFIX}_missing.tok")
+set(SUP_CORPUS "${PREFIX}_supervised.txt")
+set(SUP_TOK "${PREFIX}_supervised.tok")
+set(SUP_SHARD "${PREFIX}_supervised.srd")
+set(SUP_CKPT "${PREFIX}_supervised.ckpt")
+set(SUP_CURSOR "${PREFIX}_supervised.cursor")
 
 file(REMOVE
     "${TOK}"
@@ -21,7 +26,12 @@ file(REMOVE
     "${CKPT}"
     "${CURSOR}"
     "${HELDOUT}"
-    "${MISSING_TOK}")
+    "${MISSING_TOK}"
+    "${SUP_CORPUS}"
+    "${SUP_TOK}"
+    "${SUP_SHARD}"
+    "${SUP_CKPT}"
+    "${SUP_CURSOR}")
 
 execute_process(
     COMMAND "${NIYAH_FIXTURE}"
@@ -197,6 +207,76 @@ execute_process(
 )
 if(shard_sequence_result EQUAL 0)
     message(FATAL_ERROR "shard eval accepted explicit --sequence-length")
+endif()
+
+file(WRITE "${SUP_CORPUS}" "User: q\nAssistant: a\n")
+execute_process(
+    COMMAND "${NIYAH_CLI}" prepare
+        --corpus "${SUP_CORPUS}"
+        --tokenizer-out "${SUP_TOK}"
+        --shard-out "${SUP_SHARD}"
+        --target-vocab 258
+        --min-pair-frequency 2
+        --sequence-length 32
+        --record-mode blank-line
+        --response-delimiter "Assistant:"
+    RESULT_VARIABLE supervised_prepare_result
+    OUTPUT_QUIET
+    ERROR_VARIABLE supervised_prepare_error
+)
+if(NOT supervised_prepare_result EQUAL 0)
+    message(FATAL_ERROR "supervised eval fixture prepare failed: ${supervised_prepare_result}: ${supervised_prepare_error}")
+endif()
+
+execute_process(
+    COMMAND "${NIYAH_TRAIN}" new
+        --tokenizer "${SUP_TOK}"
+        --shard "${SUP_SHARD}"
+        --checkpoint-out "${SUP_CKPT}"
+        --cursor-out "${SUP_CURSOR}"
+        --updates 1
+        --batch-size 1
+        --accumulation-steps 1
+        --model-seed 42
+        --data-seed 7
+        --context-length 32
+        --embedding-dim 8
+        --layers 1
+        --heads 2
+        --kv-heads 1
+        --ffn-hidden-dim 16
+        --rms-norm-eps 0.00001
+        --tie-word-embeddings 1
+        --learning-rate 0.001
+        --beta1 0.9
+        --beta2 0.999
+        --epsilon 0.00000001
+        --weight-decay 0.0
+        --max-grad-norm 1.0
+    RESULT_VARIABLE supervised_train_result
+    OUTPUT_QUIET
+    ERROR_VARIABLE supervised_train_error
+)
+if(NOT supervised_train_result EQUAL 0)
+    message(FATAL_ERROR "supervised eval checkpoint training failed: ${supervised_train_result}: ${supervised_train_error}")
+endif()
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" eval
+        --tokenizer "${SUP_TOK}"
+        --checkpoint "${SUP_CKPT}"
+        --heldout "${SUP_SHARD}"
+        --format shard
+    RESULT_VARIABLE supervised_eval_result
+    OUTPUT_QUIET
+    ERROR_VARIABLE supervised_eval_error
+)
+if(supervised_eval_result EQUAL 0)
+    message(FATAL_ERROR "loss-masked supervised shard unexpectedly succeeded")
+endif()
+string(FIND "${supervised_eval_error}" "error_stage=loss_masked_shard" supervised_error_index)
+if(supervised_error_index EQUAL -1)
+    message(FATAL_ERROR "supervised shard did not fail at loss_masked_shard: ${supervised_eval_error}")
 endif()
 
 message("EVAL_CLI=PASS")
