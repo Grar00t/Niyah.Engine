@@ -19,14 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Configure
-        run: cmake -S . -B build -DNIYAH_BUILD_TESTS=ON
+      - name: Verify (POSIX)
+        if: runner.os != 'Windows'
+        run: bash scripts/verify.sh release
 
-      - name: Build
-        run: cmake --build build --config Release --parallel 2
-
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Verify (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/verify.ps1 -Configuration Release -Jobs 2
 
   sanitizers:
     runs-on: ubuntu-latest
@@ -34,14 +34,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Configure
-        run: cmake -S . -B build-sanitize -DNIYAH_BUILD_TESTS=ON -DNIYAH_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
-
-      - name: Build
-        run: cmake --build build-sanitize --parallel 2
-
-      - name: Test
+      - name: Verify sanitizers
         env:
           ASAN_OPTIONS: halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: ctest --test-dir build-sanitize --output-on-failure
+        run: bash scripts/verify.sh sanitize
