@@ -16,6 +16,8 @@ This documentation is organized to separate **how the system works** from **what
 | [Data](DATA.md) | Dataset contracts, provenance requirements, quality risks, and current diagnostic-corpus caveats |
 | [CLI Reference](CLI.md) | `niyah`, `niyah-train`, and `niyah_probe` command surfaces currently present in the repository |
 | [Verification](VERIFICATION.md) | Evidence ledger: what has passed, what is locally observed, and what remains unestablished |
+| [FAQ](FAQ.md) | Direct answers to common architecture, training, data, and capability questions |
+| [Contributing](../CONTRIBUTING.md) | Patch scope, regression gates, platform evidence, and claim discipline |
 
 ## Documentation rule
 
@@ -40,6 +42,10 @@ Implementation does not automatically imply model quality. A successful training
 | Broad conversational quality | Unestablished |
 | Broad reasoning capability | Unestablished |
 | Production readiness | Unestablished |
+
+## Evidence sources
+
+Repository behavior should be grounded in source, tests, and CI for a named commit. Local model experiments should separately identify their model/data/evaluation artifacts. When the exact repository SHA used for a local experiment is missing from the available transcript, the documentation states that limitation rather than assigning a SHA retroactively.
 
 ## Repository documentation philosophy
 
