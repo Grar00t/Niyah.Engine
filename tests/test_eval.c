@@ -45,8 +45,8 @@ static void test_uniform_model_perplexity(void)
     static const uint32_t t1[] = {1U, 2U, 3U};
     static const uint32_t y1[] = {2U, 3U, 4U};
     const NiyahEvaluationSample samples[] = {
-        {t0, y0, 1U},
-        {t1, y1, 3U}
+        {t0, y0, 1U, 0U},
+        {t1, y1, 3U, 0U}
     };
     NiyahModelConfig config = test_config();
     NiyahModel model;
@@ -76,8 +76,8 @@ static void test_weighted_mean_matches_direct_losses(void)
     static const uint32_t t1[] = {1U, 2U, 3U};
     static const uint32_t y1[] = {2U, 3U, 4U};
     const NiyahEvaluationSample samples[] = {
-        {t0, y0, 1U},
-        {t1, y1, 3U}
+        {t0, y0, 1U, 0U},
+        {t1, y1, 3U, 0U}
     };
     NiyahModelConfig config = test_config();
     NiyahModel model;
@@ -122,11 +122,60 @@ static void test_weighted_mean_matches_direct_losses(void)
     niyah_model_destroy(&model);
 }
 
+static void test_masked_targets_and_token_count(void)
+{
+    static const uint32_t tokens[] = {1U, 2U, 3U, 4U};
+    static const uint32_t targets_a[] = {2U, 3U, 4U, 5U};
+    static const uint32_t targets_prompt_changed[] = {7U, 0U, 4U, 5U};
+    static const uint32_t targets_response_changed[] = {2U, 3U, 6U, 5U};
+    const NiyahEvaluationSample sample_a = {
+        tokens, targets_a, 4U, 2U
+    };
+    const NiyahEvaluationSample sample_prompt_changed = {
+        tokens, targets_prompt_changed, 4U, 2U
+    };
+    const NiyahEvaluationSample sample_response_changed = {
+        tokens, targets_response_changed, 4U, 2U
+    };
+    NiyahModelConfig config = test_config();
+    NiyahModel model;
+    NiyahEvaluationMetrics a;
+    NiyahEvaluationMetrics prompt_changed;
+    NiyahEvaluationMetrics response_changed;
+
+    memset(&model, 0, sizeof(model));
+    memset(&a, 0, sizeof(a));
+    memset(&prompt_changed, 0, sizeof(prompt_changed));
+    memset(&response_changed, 0, sizeof(response_changed));
+
+    CHECK(niyah_model_create(&model, &config) == NIYAH_OK);
+    CHECK(niyah_model_reset_parameters(
+              &model, UINT64_C(20260921)) == NIYAH_OK);
+
+    CHECK(niyah_evaluate(
+              &model, &sample_a, 1U, &a) == NIYAH_OK);
+    CHECK(niyah_evaluate(
+              &model, &sample_prompt_changed, 1U,
+              &prompt_changed) == NIYAH_OK);
+    CHECK(niyah_evaluate(
+              &model, &sample_response_changed, 1U,
+              &response_changed) == NIYAH_OK);
+
+    CHECK(a.token_count == 2U);
+    CHECK(prompt_changed.token_count == 2U);
+    CHECK(response_changed.token_count == 2U);
+    CHECK(a.mean_loss == prompt_changed.mean_loss);
+    CHECK(a.perplexity == prompt_changed.perplexity);
+    CHECK(fabs(a.mean_loss - response_changed.mean_loss) > 1.0e-8);
+
+    niyah_model_destroy(&model);
+}
+
 static void test_evaluation_is_read_only_and_deterministic(void)
 {
     static const uint32_t tokens[] = {1U, 2U, 3U};
     static const uint32_t targets[] = {2U, 3U, 4U};
-    const NiyahEvaluationSample sample = {tokens, targets, 3U};
+    const NiyahEvaluationSample sample = {tokens, targets, 3U, 0U};
     NiyahModelConfig config = test_config();
     NiyahModel model;
     NiyahEvaluationMetrics a;
@@ -169,7 +218,10 @@ static void test_failure_does_not_publish_metrics(void)
     static const uint32_t tokens[] = {1U, 2U, 3U};
     static const uint32_t bad_targets[] = {2U, 3U, 99U};
     const NiyahEvaluationSample sample = {
-        tokens, bad_targets, 3U
+        tokens, bad_targets, 3U, 0U
+    };
+    const NiyahEvaluationSample bad_mask = {
+        tokens, bad_targets, 3U, 3U
     };
     NiyahModelConfig config = test_config();
     NiyahModel model;
@@ -193,6 +245,14 @@ static void test_failure_does_not_publish_metrics(void)
     CHECK(metrics.mean_loss == 333.0);
     CHECK(metrics.perplexity == 444.0);
 
+    CHECK(niyah_evaluate(
+              &model, &bad_mask, 1U, &metrics) ==
+          NIYAH_ERR_INVALID_CONFIG);
+    CHECK(metrics.sample_count == 111U);
+    CHECK(metrics.token_count == 222U);
+    CHECK(metrics.mean_loss == 333.0);
+    CHECK(metrics.perplexity == 444.0);
+
     niyah_model_destroy(&model);
 }
 
@@ -200,6 +260,7 @@ int main(void)
 {
     test_uniform_model_perplexity();
     test_weighted_mean_matches_direct_losses();
+    test_masked_targets_and_token_count();
     test_evaluation_is_read_only_and_deterministic();
     test_failure_does_not_publish_metrics();
 

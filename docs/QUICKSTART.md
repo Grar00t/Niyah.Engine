@@ -141,7 +141,7 @@ niyah-train resume \
 
 Resume output paths must be new paths. The CLI does not overwrite resume inputs.
 
-## 6. Evaluate on held-out text
+## 6. Evaluate held-out data
 
 Use the same tokenizer and a checkpoint against a held-out text file:
 
@@ -154,13 +154,25 @@ niyah eval \
   --sequence-length 64
 ```
 
-The command reports model mean loss, perplexity, bits per token, and a sparse add-1 bigram baseline on the same evaluation geometry. Text mode also reports bits per byte. Successful output ends with:
+Text evaluation reports `objective=all_tokens`, model mean loss, perplexity, bits per token, and a sparse add-1 bigram baseline over the same scored sample geometry. Text mode also reports bits per byte. Successful output ends with:
 
 ```text
 EVAL_EXIT=0
 ```
 
-Evaluation is read-only with respect to checkpoint bytes. For an already prepared compatible non-loss-masked shard, use `--format shard` and omit `--sequence-length`. V3 supervised/loss-masked shards are currently rejected rather than scored with the wrong all-token objective.
+For an already prepared compatible shard, use `--format shard` and omit `--sequence-length`:
+
+```sh
+niyah eval \
+  --tokenizer tok.bin \
+  --checkpoint model-0200.ckpt \
+  --heldout shard.bin \
+  --format shard
+```
+
+V1/V2 shards report `objective=all_tokens`. V3 supervised shards preserve the prompt as causal context and report `objective=loss_masked`; only persisted response/EOS targets from each sample's `loss_start` onward contribute to loss, perplexity, `token_count`, and the baseline. Shard mode does not report bits per byte.
+
+Evaluation is read-only with respect to checkpoint bytes.
 
 For metric interpretation and the current pilot trajectory, see [EVALUATION.md](EVALUATION.md).
 

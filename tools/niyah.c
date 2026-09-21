@@ -919,6 +919,7 @@ static int eval_command(int argc, char **argv)
     double bits_per_byte = 0.0;
     double baseline_bits_per_byte = 0.0;
     const double ln2 = log(2.0);
+    const char *objective_mode = "all_tokens";
     NiyahStatus status;
     int exit_code = 1;
 
@@ -1033,13 +1034,6 @@ static int eval_command(int argc, char **argv)
             goto cleanup;
         }
 
-        if (shard.has_loss_starts != 0) {
-            exit_code = fail_status(
-                "loss_masked_shard",
-                NIYAH_ERR_INVALID_CONFIG);
-            goto cleanup;
-        }
-
         if (shard.sequence_length == 0U ||
             shard.sequence_length >
                 (size_t)model.config.context_length) {
@@ -1049,6 +1043,8 @@ static int eval_command(int argc, char **argv)
             goto cleanup;
         }
         sequence_length = shard.sequence_length;
+        if (shard.has_loss_starts != 0)
+            objective_mode = "loss_masked";
 
         status = niyah_dataset_shard_identity_sha256(
             &shard,
@@ -1057,16 +1053,6 @@ static int eval_command(int argc, char **argv)
             exit_code = fail_status("heldout_identity", status);
             goto cleanup;
         }
-    }
-
-    status = niyah_add1_bigram_mean_nll(
-        shard.tokens,
-        shard.token_count,
-        vocab_size,
-        &baseline_mean_loss);
-    if (status != NIYAH_OK) {
-        exit_code = fail_status("baseline", status);
-        goto cleanup;
     }
 
     if (shard.sample_count == 0U) {
@@ -1095,16 +1081,27 @@ static int eval_command(int argc, char **argv)
     for (sample_index = 0U;
          sample_index < shard.sample_count;
          ++sample_index) {
-        status = niyah_dataset_shard_sample(
+        status = niyah_dataset_shard_sample_with_loss(
             &shard,
             sample_index,
             &samples[sample_index].tokens,
             &samples[sample_index].targets,
-            &samples[sample_index].token_count);
+            &samples[sample_index].token_count,
+            &samples[sample_index].loss_start);
         if (status != NIYAH_OK) {
             exit_code = fail_status("shard_sample", status);
             goto cleanup;
         }
+    }
+
+    status = niyah_add1_bigram_samples_mean_nll(
+        samples,
+        shard.sample_count,
+        vocab_size,
+        &baseline_mean_loss);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status("baseline", status);
+        goto cleanup;
     }
 
     status = niyah_evaluate(
@@ -1143,8 +1140,7 @@ static int eval_command(int argc, char **argv)
             ln2 /
             (double)heldout_byte_size;
         baseline_bits_per_byte =
-            (baseline_mean_loss *
-             (double)(shard.token_count - 1U)) /
+            (baseline_mean_loss * (double)metrics.token_count) /
             ln2 /
             (double)heldout_byte_size;
         if (!isfinite(bits_per_byte) ||
@@ -1164,6 +1160,7 @@ static int eval_command(int argc, char **argv)
             stdout,
             "mode=eval\n"
             "format=%s\n"
+            "objective=%s\n"
             "tokenizer_sha256=%s\n"
             "checkpoint_sha256=%s\n"
             "heldout_sha256=%s\n"
@@ -1176,6 +1173,7 @@ static int eval_command(int argc, char **argv)
             "baseline_mean_loss=%.8f\n"
             "baseline_bits_per_token=%.8f\n",
             options.format == NIYAH_EVAL_FORMAT_TEXT ? "text" : "shard",
+            objective_mode,
             tokenizer_hex,
             checkpoint_hex,
             heldout_hex,

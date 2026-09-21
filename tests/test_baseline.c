@@ -23,9 +23,33 @@ int main(void)
     };
     static const uint32_t short_tokens[] = {0U};
     static const uint32_t bad_tokens[] = {0U, 4U};
+    static const uint32_t sample0_tokens[] = {0U, 1U, 0U};
+    static const uint32_t sample0_targets[] = {1U, 0U, 1U};
+    static const uint32_t sample0_prompt_changed[] = {99U, 0U, 1U};
+    static const uint32_t sample0_response_changed[] = {1U, 2U, 1U};
+    static const uint32_t sample1_tokens[] = {2U, 1U};
+    static const uint32_t sample1_targets[] = {1U, 2U};
+    const NiyahEvaluationSample samples[] = {
+        {sample0_tokens, sample0_targets, 3U, 1U},
+        {sample1_tokens, sample1_targets, 2U, 1U}
+    };
+    const NiyahEvaluationSample prompt_changed_samples[] = {
+        {sample0_tokens, sample0_prompt_changed, 3U, 1U},
+        {sample1_tokens, sample1_targets, 2U, 1U}
+    };
+    const NiyahEvaluationSample response_changed_samples[] = {
+        {sample0_tokens, sample0_response_changed, 3U, 1U},
+        {sample1_tokens, sample1_targets, 2U, 1U}
+    };
+    const NiyahEvaluationSample bad_mask = {
+        sample0_tokens, sample0_targets, 3U, 3U
+    };
     double got = 0.0;
+    double got_prompt_changed = 0.0;
+    double got_response_changed = 0.0;
     double expected;
     double record_expected;
+    double sample_expected;
 
     /* vocab=4, stream 0,1,0,1 gives transitions 0->1 twice and 1->0 once.
      * P(1|0)=(2+1)/(2+4)=1/2 and P(0|1)=(1+1)/(1+4)=2/5.
@@ -48,6 +72,31 @@ int main(void)
               NIYAH_TOKENIZER_BASE_VOCAB_SIZE,
               &got) == NIYAH_OK);
     CHECK(fabs(got - record_expected) <= 1.0e-12);
+
+    /* Masked sample geometry scores exactly:
+     *   sample0: 1->0, 0->1
+     *   sample1: 1->2
+     * For previous=1, the two observed successors each have probability 1/3.
+     * For previous=0, successor=1 has probability 2/5.
+     */
+    sample_expected = (2.0 * log(3.0) + log(2.5)) / 3.0;
+    CHECK(niyah_add1_bigram_samples_mean_nll(
+              samples, 2U, 4U, &got) == NIYAH_OK);
+    CHECK(fabs(got - sample_expected) <= 1.0e-12);
+
+    CHECK(niyah_add1_bigram_samples_mean_nll(
+              prompt_changed_samples, 2U, 4U,
+              &got_prompt_changed) == NIYAH_OK);
+    CHECK(got_prompt_changed == got);
+
+    CHECK(niyah_add1_bigram_samples_mean_nll(
+              response_changed_samples, 2U, 4U,
+              &got_response_changed) == NIYAH_OK);
+    CHECK(fabs(got_response_changed - got) > 1.0e-12);
+
+    CHECK(niyah_add1_bigram_samples_mean_nll(
+              &bad_mask, 1U, 4U, &got) ==
+          NIYAH_ERR_INVALID_CONFIG);
 
     CHECK(niyah_add1_bigram_mean_nll(
               short_tokens, 1U, 4U, &got) ==
