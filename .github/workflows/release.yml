@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
+      - ".release/**"
       - "CMakeLists.txt"
       - "scripts/**"
       - "src/**"
@@ -13,6 +14,10 @@ on:
       - "README.md"
   workflow_dispatch:
   push:
+    branches:
+      - main
+    paths:
+      - ".release/v0.1.0"
     tags:
       - "v*"
 
@@ -115,11 +120,27 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  release-bundle:
-    needs: [package-linux, package-windows]
+  verify-sanitizers:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify ASan/UBSan
+        env:
+          ASAN_OPTIONS: halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: bash scripts/verify.sh sanitize
+
+  release-bundle:
+    needs: [package-linux, package-windows, verify-sanitizers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Download package artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -144,3 +165,65 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 14
+
+      - name: Verify GitHub CLI
+        if: github.event_name == 'push'
+        run: gh --version
+
+      - name: Create immutable v0.1.0 tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(tr -d '\r\n' < .release/v0.1.0)"
+          test "$tag" = "v0.1.0"
+
+          if existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null)"; then
+            if [ "$existing" != "$GITHUB_SHA" ]; then
+              echo "tag $tag already exists at $existing, expected $GITHUB_SHA" >&2
+              exit 1
+            fi
+            echo "TAG_ALREADY_EXISTS=$tag@$existing"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$tag" \
+              -f sha="$GITHUB_SHA" >/dev/null
+            echo "TAG_CREATED=$tag@$GITHUB_SHA"
+          fi
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            tag="$(tr -d '\r\n' < .release/v0.1.0)"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+
+          test "$tag" = "v0.1.0"
+          notes="docs/releases/$tag.md"
+          test -f "$notes"
+
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --verify-tag \
+              --draft \
+              --title "Niyah.Engine $tag" \
+              --notes-file "$notes"
+          fi
+
+          gh release upload "$tag" \
+            dist/Niyah.Engine-0.1.0-linux-x86_64.tar.gz \
+            dist/Niyah.Engine-0.1.0-windows-x86_64.zip \
+            dist/SHA256SUMS.txt \
+            --clobber
+
+          gh release edit "$tag" --draft=false
+          echo "RELEASE_PUBLISHED=$tag@$GITHUB_SHA"
