@@ -13,7 +13,29 @@ Do not add infrastructure, frameworks, databases, services, or model features me
 
 ## Build and test
 
-CPU reference build:
+The preferred verification entrypoints are the same ones used by GitHub Actions.
+
+POSIX / Linux CPU reference:
+
+```sh
+bash scripts/verify.sh release
+```
+
+Windows PowerShell CPU reference:
+
+```powershell
+pwsh -NoProfile -File scripts/verify.ps1 -Configuration Release -Jobs 2
+```
+
+Supported non-MSVC sanitizer verification:
+
+```sh
+bash scripts/verify.sh sanitize
+```
+
+The scripts use isolated build directories under `build/` by default. Override the POSIX build directory with `NIYAH_BUILD_DIR` and build parallelism with `NIYAH_BUILD_JOBS`; PowerShell exposes `-BuildDir` and `-Jobs`.
+
+Equivalent manual CPU reference build:
 
 ```sh
 cmake -S . -B build -DNIYAH_BUILD_TESTS=ON
@@ -21,7 +43,7 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Sanitizer build on supported non-MSVC configurations:
+Equivalent sanitizer build on supported non-MSVC configurations:
 
 ```sh
 cmake -S . -B build-sanitize \
@@ -89,6 +111,6 @@ Keep [docs/VERIFICATION.md](docs/VERIFICATION.md), [docs/EVALUATION.md](docs/EVA
 
 ## Style
 
-The C core targets C11. Existing project warning/error policy and local file style take precedence over unrelated formatting churn.
+The C core targets C11. `.editorconfig` defines repository text defaults and `.clang-format` records the intended C formatting baseline for new or intentionally reformatted code. Existing local style takes precedence over unrelated formatting churn.
 
 Prefer small patches with explicit behavior over broad refactors without a proven requirement.
