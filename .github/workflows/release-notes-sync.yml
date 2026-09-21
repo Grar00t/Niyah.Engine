@@ -11,6 +11,10 @@ on:
     paths:
       - "docs/releases/v0.1.0.md"
 
+concurrency:
+  group: release-notes-sync-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest
