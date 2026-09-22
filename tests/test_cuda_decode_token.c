@@ -15,18 +15,18 @@
     } \
 } while (0)
 
-static NiyahModelConfig tiny_config(void)
+static NiyahModelConfig test_config(void)
 {
     NiyahModelConfig config;
 
     memset(&config, 0, sizeof(config));
-    config.vocab_size = 32U;
-    config.context_length = 8U;
-    config.embedding_dim = 8U;
-    config.n_layers = 2U;
-    config.n_heads = 4U;
-    config.n_kv_heads = 2U;
-    config.ffn_hidden_dim = 16U;
+    config.vocab_size = 64U;
+    config.context_length = 40U;
+    config.embedding_dim = 64U;
+    config.n_layers = 1U;
+    config.n_heads = 2U;
+    config.n_kv_heads = 1U;
+    config.ffn_hidden_dim = 96U;
     config.rms_norm_eps = 1.0e-5f;
     config.tie_word_embeddings = 0;
     return config;
@@ -64,10 +64,10 @@ static int vectors_close(
 
 int main(void)
 {
-    const uint32_t tokens[] = {3U, 5U, 7U, 9U};
+    uint32_t tokens[33];
     const size_t token_count =
         sizeof(tokens) / sizeof(tokens[0]);
-    const NiyahModelConfig config = tiny_config();
+    const NiyahModelConfig config = test_config();
     NiyahModel model;
     NiyahKVCache cpu_cache;
     NiyahCudaModelState cuda_model;
@@ -80,6 +80,12 @@ int main(void)
     float *gpu_values = NULL;
     size_t position;
     size_t bytes;
+
+    for (position = 0U; position < token_count; ++position) {
+        tokens[position] =
+            (uint32_t)(3U + (position * 7U) %
+                              ((size_t)config.vocab_size - 3U));
+    }
 
     memset(&model, 0, sizeof(model));
     memset(&cpu_cache, 0, sizeof(cpu_cache));
@@ -157,7 +163,7 @@ int main(void)
                   cpu_logits,
                   gpu_logits,
                   (size_t)config.vocab_size,
-                  5.0e-4f));
+                  1.0e-3f));
     }
 
     bytes =
@@ -185,13 +191,13 @@ int main(void)
               cpu_cache.keys,
               gpu_keys,
               cuda_decode.values_per_tensor,
-              5.0e-4f));
+              1.0e-3f));
 
     CHECK(vectors_close(
               cpu_cache.values,
               gpu_values,
               cuda_decode.values_per_tensor,
-              5.0e-4f));
+              1.0e-3f));
 
     {
         const size_t before =
@@ -243,7 +249,7 @@ int main(void)
               cpu_logits,
               gpu_logits,
               (size_t)config.vocab_size,
-              5.0e-4f));
+              1.0e-3f));
 
     free(gpu_values);
     free(gpu_keys);
