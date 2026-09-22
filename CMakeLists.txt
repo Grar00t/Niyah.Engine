@@ -43,6 +43,6 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DNIYAH_EXE=$<TARGET_FILE:niyah-cli>
             -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-            -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR>
+            -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_smoke.cmake)
 endif()
