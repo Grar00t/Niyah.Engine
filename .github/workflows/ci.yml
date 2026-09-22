@@ -1,5 +1,4 @@
 name: ci
-
 on:
   push:
   pull_request:
@@ -9,20 +8,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-      - name: Build
-        run: cmake --build build --parallel
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIYAH_WARNINGS_AS_ERRORS=ON
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build --output-on-failure
 
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake -S . -B build -A x64
-      - name: Build
-        run: cmake --build build --config Release --parallel
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+      - run: cmake -S . -B build -DNIYAH_WARNINGS_AS_ERRORS=ON
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build -C Release --output-on-failure

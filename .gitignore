@@ -1,13 +1,9 @@
-/build/
-/out/
+build/
+out/
+*.nyh
 *.ckpt
-*.srd
-*.tok
+*.cursor
 *.bin
 *.log
-*.tmp
-.vs/
 .vscode/
 .idea/
-CMakeUserPresets.json
-/build-asan/

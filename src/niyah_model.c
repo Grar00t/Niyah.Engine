@@ -1,311 +1,173 @@
 #include "niyah/niyah.h"
-
+#include "niyah_io.h"
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static int niyah_checked_add(size_t a, size_t b, size_t *out)
-{
-    if (out == NULL || a > SIZE_MAX - b) {
-        return 0;
-    }
-    *out = a + b;
-    return 1;
-}
+static const uint8_t k_magic[8] = {'N','I','Y','A','H','B','G','1'};
 
-static int niyah_checked_mul(size_t a, size_t b, size_t *out)
-{
-    if (out == NULL || (a != 0U && b > SIZE_MAX / a)) {
-        return 0;
-    }
-    *out = a * b;
-    return 1;
-}
+typedef struct model_header {
+    uint8_t magic[8];
+    uint32_t version;
+    uint32_t alphabet;
+    uint64_t bytes_seen;
+} model_header;
 
-static NiyahStatus niyah_advance(size_t *cursor, size_t count, size_t *offset)
-{
-    size_t next = 0U;
-    if (cursor == NULL || offset == NULL) {
-        return NIYAH_ERR_INVALID_ARGUMENT;
-    }
-    *offset = *cursor;
-    if (!niyah_checked_add(*cursor, count, &next)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-    *cursor = next;
-    return NIYAH_OK;
-}
-
-NiyahStatus niyah_model_config_validate(const NiyahModelConfig *config)
-{
-    size_t head_dim;
-
-    if (config == NULL) {
-        return NIYAH_ERR_INVALID_ARGUMENT;
-    }
-    if (config->vocab_size < 2U ||
-        config->context_length == 0U ||
-        config->embedding_dim == 0U ||
-        config->n_layers == 0U ||
-        config->n_heads == 0U ||
-        config->n_kv_heads == 0U ||
-        config->ffn_hidden_dim == 0U ||
-        !isfinite(config->rms_norm_eps) ||
-        config->rms_norm_eps <= 0.0f) {
-        return NIYAH_ERR_INVALID_CONFIG;
-    }
-    if ((config->embedding_dim % config->n_heads) != 0U ||
-        (config->n_heads % config->n_kv_heads) != 0U ||
-        config->n_kv_heads > config->n_heads) {
-        return NIYAH_ERR_INVALID_CONFIG;
-    }
-
-    head_dim = (size_t)config->embedding_dim / (size_t)config->n_heads;
-    if (head_dim < 2U || (head_dim % 2U) != 0U) {
-        return NIYAH_ERR_INVALID_CONFIG;
-    }
-    return NIYAH_OK;
-}
-
-NiyahStatus niyah_model_layout_compute(const NiyahModelConfig *config,
-                                       NiyahModelLayout *layout)
-{
-    NiyahModelLayout tmp;
-    size_t cursor = 0U;
-    size_t token_embedding_count = 0U;
-    size_t segment_embedding_count = 0U;
-    size_t q_count = 0U;
-    size_t kv_count = 0U;
-    size_t ffn_up_count = 0U;
-    size_t ffn_down_count = 0U;
-    size_t layer_stride = 0U;
-    size_t all_layers_count = 0U;
-    size_t lm_head_count = 0U;
-    size_t dim = 0U;
-    size_t ffn = 0U;
-    size_t vocab = 0U;
-    NiyahStatus status;
-
-    if (layout == NULL) {
-        return NIYAH_ERR_INVALID_ARGUMENT;
-    }
-    status = niyah_model_config_validate(config);
-    if (status != NIYAH_OK) {
-        return status;
-    }
-
-    memset(&tmp, 0, sizeof(tmp));
-    dim = (size_t)config->embedding_dim;
-    ffn = (size_t)config->ffn_hidden_dim;
-    vocab = (size_t)config->vocab_size;
-    tmp.head_dim = dim / (size_t)config->n_heads;
-    if (!niyah_checked_mul(tmp.head_dim, (size_t)config->n_kv_heads, &tmp.kv_dim)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-
-    if (!niyah_checked_mul(vocab, dim, &token_embedding_count) ||
-        !niyah_checked_mul((size_t)config->n_segments, dim, &segment_embedding_count) ||
-        !niyah_checked_mul(dim, dim, &q_count) ||
-        !niyah_checked_mul(tmp.kv_dim, dim, &kv_count) ||
-        !niyah_checked_mul(ffn, dim, &ffn_up_count) ||
-        !niyah_checked_mul(dim, ffn, &ffn_down_count)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-
-    tmp.token_embedding = cursor;
-    if (!niyah_checked_add(cursor, token_embedding_count, &cursor)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-
-    tmp.segment_embedding = cursor;
-    if (!niyah_checked_add(cursor, segment_embedding_count, &cursor)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-
-    tmp.layers = cursor;
-    layer_stride = 0U;
-    if (!niyah_checked_add(layer_stride, dim, &layer_stride) ||
-        !niyah_checked_add(layer_stride, q_count, &layer_stride) ||
-        !niyah_checked_add(layer_stride, kv_count, &layer_stride) ||
-        !niyah_checked_add(layer_stride, kv_count, &layer_stride) ||
-        !niyah_checked_add(layer_stride, q_count, &layer_stride) ||
-        !niyah_checked_add(layer_stride, dim, &layer_stride) ||
-        !niyah_checked_add(layer_stride, ffn_up_count, &layer_stride) ||
-        !niyah_checked_add(layer_stride, ffn_up_count, &layer_stride) ||
-        !niyah_checked_add(layer_stride, ffn_down_count, &layer_stride)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-    tmp.layer_stride = layer_stride;
-
-    if (!niyah_checked_mul(layer_stride, (size_t)config->n_layers, &all_layers_count) ||
-        !niyah_checked_add(cursor, all_layers_count, &cursor)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-
-    tmp.final_norm = cursor;
-    if (!niyah_checked_add(cursor, dim, &cursor)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-
-    if (config->tie_word_embeddings != 0) {
-        tmp.lm_head = tmp.token_embedding;
-    } else {
-        tmp.lm_head = cursor;
-        if (!niyah_checked_mul(vocab, dim, &lm_head_count) ||
-            !niyah_checked_add(cursor, lm_head_count, &cursor)) {
-            return NIYAH_ERR_OVERFLOW;
-        }
-    }
-
-    tmp.total_floats = cursor;
-    *layout = tmp;
-    return NIYAH_OK;
-}
-
-NiyahStatus niyah_model_layer_layout(const NiyahModelConfig *config,
-                                     const NiyahModelLayout *layout,
-                                     uint32_t layer_index,
-                                     NiyahLayerLayout *layer)
-{
-    size_t cursor = 0U;
-    size_t layer_delta = 0U;
-    size_t dim = 0U;
-    size_t q_count = 0U;
-    size_t kv_count = 0U;
-    size_t ffn_up_count = 0U;
-    size_t ffn_down_count = 0U;
-    NiyahStatus status;
-
-    if (config == NULL || layout == NULL || layer == NULL) {
-        return NIYAH_ERR_INVALID_ARGUMENT;
-    }
-    status = niyah_model_config_validate(config);
-    if (status != NIYAH_OK) {
-        return status;
-    }
-    if (layer_index >= config->n_layers) {
-        return NIYAH_ERR_INVALID_ARGUMENT;
-    }
-
-    dim = (size_t)config->embedding_dim;
-    if (!niyah_checked_mul(dim, dim, &q_count) ||
-        !niyah_checked_mul(layout->kv_dim, dim, &kv_count) ||
-        !niyah_checked_mul((size_t)config->ffn_hidden_dim, dim, &ffn_up_count) ||
-        !niyah_checked_mul(dim, (size_t)config->ffn_hidden_dim, &ffn_down_count) ||
-        !niyah_checked_mul((size_t)layer_index, layout->layer_stride, &layer_delta) ||
-        !niyah_checked_add(layout->layers, layer_delta, &cursor)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-
-    status = niyah_advance(&cursor, dim, &layer->attn_norm);
-    if (status != NIYAH_OK) return status;
-    status = niyah_advance(&cursor, q_count, &layer->wq);
-    if (status != NIYAH_OK) return status;
-    status = niyah_advance(&cursor, kv_count, &layer->wk);
-    if (status != NIYAH_OK) return status;
-    status = niyah_advance(&cursor, kv_count, &layer->wv);
-    if (status != NIYAH_OK) return status;
-    status = niyah_advance(&cursor, q_count, &layer->wo);
-    if (status != NIYAH_OK) return status;
-    status = niyah_advance(&cursor, dim, &layer->ffn_norm);
-    if (status != NIYAH_OK) return status;
-    status = niyah_advance(&cursor, ffn_up_count, &layer->w_gate);
-    if (status != NIYAH_OK) return status;
-    status = niyah_advance(&cursor, ffn_up_count, &layer->w_up);
-    if (status != NIYAH_OK) return status;
-    status = niyah_advance(&cursor, ffn_down_count, &layer->w_down);
-    if (status != NIYAH_OK) return status;
-
-    if (cursor != layout->layers + ((size_t)layer_index + 1U) * layout->layer_stride) {
-        return NIYAH_ERR_INVALID_CONFIG;
-    }
-    return NIYAH_OK;
-}
-
-NiyahStatus niyah_model_create(NiyahModel *model, const NiyahModelConfig *config)
-{
-    NiyahModelLayout layout;
-    size_t bytes = 0U;
-    NiyahStatus status;
-
-    if (model == NULL || config == NULL) {
-        return NIYAH_ERR_INVALID_ARGUMENT;
-    }
-    memset(model, 0, sizeof(*model));
-
-    status = niyah_model_layout_compute(config, &layout);
-    if (status != NIYAH_OK) {
-        return status;
-    }
-    if (!niyah_checked_mul(layout.total_floats, sizeof(float), &bytes)) {
-        return NIYAH_ERR_OVERFLOW;
-    }
-
-    model->weights = (float *)calloc(1U, bytes);
-    if (model->weights == NULL) {
-        return NIYAH_ERR_OUT_OF_MEMORY;
-    }
-    model->config = *config;
-    model->layout = layout;
-    model->weight_count = layout.total_floats;
-    return NIYAH_OK;
-}
-
-void niyah_model_destroy(NiyahModel *model)
-{
-    if (model == NULL) {
-        return;
-    }
-    free(model->weights);
-    memset(model, 0, sizeof(*model));
-}
-
-static uint64_t niyah_rng_next(uint64_t *state)
-{
+static uint64_t rng_next(uint64_t *state) {
     uint64_t x = *state;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
+    if (x == 0) x = 0x9E3779B97F4A7C15ULL;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
     *state = x;
-    return x * UINT64_C(2685821657736338717);
+    return x;
 }
 
-static float niyah_random_weight(uint64_t *state)
-{
-    const uint64_t bits = (niyah_rng_next(state) >> 40) & UINT64_C(0xFFFFFF);
-    const float unit = (float)bits / 16777215.0f;
-    return (unit * 2.0f - 1.0f) * 0.02f;
+void niyah_model_init(niyah_model *model) {
+    if (model) memset(model, 0, sizeof(*model));
 }
 
-NiyahStatus niyah_model_reset_parameters(NiyahModel *model, uint64_t seed)
-{
-    uint64_t state;
-    uint32_t layer_index;
+niyah_status niyah_model_train_bytes(niyah_model *model, const uint8_t *data, size_t size) {
     size_t i;
-    NiyahLayerLayout layer;
-    NiyahStatus status;
-
-    if (model == NULL || model->weights == NULL || model->weight_count == 0U) {
-        return NIYAH_ERR_INVALID_ARGUMENT;
+    if (!model || (!data && size != 0)) return NIYAH_ERR_INVALID_ARGUMENT;
+    for (i = 0; i < size; ++i) {
+        model->unigram[data[i]]++;
+        if (i > 0) model->bigram[data[i - 1]][data[i]]++;
     }
-
-    state = seed != 0U ? seed : UINT64_C(0x4e495941485f4c4d);
-    for (i = 0U; i < model->weight_count; ++i) {
-        model->weights[i] = niyah_random_weight(&state);
-    }
-
-    for (layer_index = 0U; layer_index < model->config.n_layers; ++layer_index) {
-        status = niyah_model_layer_layout(&model->config, &model->layout, layer_index, &layer);
-        if (status != NIYAH_OK) {
-            return status;
-        }
-        for (i = 0U; i < (size_t)model->config.embedding_dim; ++i) {
-            model->weights[layer.attn_norm + i] = 1.0f;
-            model->weights[layer.ffn_norm + i] = 1.0f;
-        }
-    }
-    for (i = 0U; i < (size_t)model->config.embedding_dim; ++i) {
-        model->weights[model->layout.final_norm + i] = 1.0f;
-    }
+    model->bytes_seen += (uint64_t)size;
     return NIYAH_OK;
+}
+
+niyah_status niyah_model_train_file(niyah_model *model, const char *path) {
+    uint8_t *data = NULL;
+    size_t size = 0;
+    niyah_status s = niyah_read_file(path, &data, &size);
+    if (s != NIYAH_OK) return s;
+    s = niyah_model_train_bytes(model, data, size);
+    free(data);
+    return s;
+}
+
+niyah_status niyah_model_save(const niyah_model *model, const char *path) {
+    FILE *f;
+    model_header h;
+    size_t n;
+    if (!model || !path) return NIYAH_ERR_INVALID_ARGUMENT;
+    memcpy(h.magic, k_magic, sizeof(k_magic));
+    h.version = NIYAH_MODEL_VERSION;
+    h.alphabet = NIYAH_ALPHABET_SIZE;
+    h.bytes_seen = model->bytes_seen;
+
+    f = fopen(path, "wb");
+    if (!f) return NIYAH_ERR_IO;
+    n = fwrite(&h, 1, sizeof(h), f);
+    if (n != sizeof(h)) { fclose(f); return NIYAH_ERR_IO; }
+    n = fwrite(model->unigram, sizeof(uint64_t), NIYAH_ALPHABET_SIZE, f);
+    if (n != NIYAH_ALPHABET_SIZE) { fclose(f); return NIYAH_ERR_IO; }
+    n = fwrite(model->bigram, sizeof(uint64_t), NIYAH_ALPHABET_SIZE * NIYAH_ALPHABET_SIZE, f);
+    if (n != NIYAH_ALPHABET_SIZE * NIYAH_ALPHABET_SIZE) { fclose(f); return NIYAH_ERR_IO; }
+    return fclose(f) == 0 ? NIYAH_OK : NIYAH_ERR_IO;
+}
+
+niyah_status niyah_model_load(niyah_model *model, const char *path) {
+    FILE *f;
+    model_header h;
+    size_t n;
+    if (!model || !path) return NIYAH_ERR_INVALID_ARGUMENT;
+    f = fopen(path, "rb");
+    if (!f) return NIYAH_ERR_IO;
+    n = fread(&h, 1, sizeof(h), f);
+    if (n != sizeof(h) || memcmp(h.magic, k_magic, sizeof(k_magic)) != 0 ||
+        h.version != NIYAH_MODEL_VERSION || h.alphabet != NIYAH_ALPHABET_SIZE) {
+        fclose(f);
+        return NIYAH_ERR_FORMAT;
+    }
+    niyah_model_init(model);
+    n = fread(model->unigram, sizeof(uint64_t), NIYAH_ALPHABET_SIZE, f);
+    if (n != NIYAH_ALPHABET_SIZE) { fclose(f); return NIYAH_ERR_FORMAT; }
+    n = fread(model->bigram, sizeof(uint64_t), NIYAH_ALPHABET_SIZE * NIYAH_ALPHABET_SIZE, f);
+    if (n != NIYAH_ALPHABET_SIZE * NIYAH_ALPHABET_SIZE) { fclose(f); return NIYAH_ERR_FORMAT; }
+    model->bytes_seen = h.bytes_seen;
+    if (fgetc(f) != EOF) { fclose(f); return NIYAH_ERR_FORMAT; }
+    fclose(f);
+    return NIYAH_OK;
+}
+
+niyah_status niyah_model_eval_bytes(const niyah_model *model, const uint8_t *data, size_t size,
+                                    double *out_bits_per_byte, double *out_perplexity) {
+    size_t i;
+    double nll_bits = 0.0;
+    if (!model || !data || size < 2 || !out_bits_per_byte || !out_perplexity)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    for (i = 1; i < size; ++i) {
+        uint8_t prev = data[i - 1];
+        uint8_t cur = data[i];
+        uint64_t row_total = 0;
+        unsigned j;
+        double p;
+        for (j = 0; j < NIYAH_ALPHABET_SIZE; ++j) row_total += model->bigram[prev][j];
+        p = ((double)model->bigram[prev][cur] + 1.0) /
+            ((double)row_total + (double)NIYAH_ALPHABET_SIZE);
+        nll_bits += -log(p) / log(2.0);
+    }
+    *out_bits_per_byte = nll_bits / (double)(size - 1);
+    *out_perplexity = pow(2.0, *out_bits_per_byte);
+    return NIYAH_OK;
+}
+
+niyah_status niyah_model_eval_file(const niyah_model *model, const char *path,
+                                   double *out_bits_per_byte, double *out_perplexity) {
+    uint8_t *data = NULL;
+    size_t size = 0;
+    niyah_status s = niyah_read_file(path, &data, &size);
+    if (s != NIYAH_OK) return s;
+    if (size < 2) { free(data); return NIYAH_ERR_INVALID_ARGUMENT; }
+    s = niyah_model_eval_bytes(model, data, size, out_bits_per_byte, out_perplexity);
+    free(data);
+    return s;
+}
+
+niyah_status niyah_model_generate(const niyah_model *model,
+                                  const uint8_t *prompt, size_t prompt_size,
+                                  size_t tokens, uint64_t seed,
+                                  uint8_t *out, size_t out_capacity,
+                                  size_t *out_size) {
+    size_t k;
+    uint8_t prev;
+    uint64_t state = seed;
+    if (!model || !out || !out_size || tokens > out_capacity) return NIYAH_ERR_INVALID_ARGUMENT;
+    if (prompt_size > 0 && !prompt) return NIYAH_ERR_INVALID_ARGUMENT;
+
+    prev = prompt_size ? prompt[prompt_size - 1] : (uint8_t)' ';
+    for (k = 0; k < tokens; ++k) {
+        uint64_t total = NIYAH_ALPHABET_SIZE;
+        uint64_t r;
+        uint64_t acc = 0;
+        unsigned j;
+        for (j = 0; j < NIYAH_ALPHABET_SIZE; ++j) total += model->bigram[prev][j];
+        r = rng_next(&state) % total;
+        for (j = 0; j < NIYAH_ALPHABET_SIZE; ++j) {
+            acc += model->bigram[prev][j] + 1u;
+            if (r < acc) {
+                out[k] = (uint8_t)j;
+                prev = (uint8_t)j;
+                break;
+            }
+        }
+    }
+    *out_size = tokens;
+    return NIYAH_OK;
+}
+
+const char *niyah_status_string(niyah_status status) {
+    switch (status) {
+        case NIYAH_OK: return "ok";
+        case NIYAH_ERR_INVALID_ARGUMENT: return "invalid_argument";
+        case NIYAH_ERR_IO: return "io_error";
+        case NIYAH_ERR_FORMAT: return "format_error";
+        case NIYAH_ERR_NOMEM: return "out_of_memory";
+        default: return "unknown_error";
+    }
 }

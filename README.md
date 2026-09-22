@@ -1,80 +1,58 @@
 # Niyah.Engine
 
-Clean-room native C11 baseline for a deterministic, local-first language-model runtime.
+A clean-room, local-first C11 language-model foundation. This repository intentionally starts with a small deterministic baseline that can actually be built, trained, evaluated, saved, loaded, and tested without external model weights or cloud services.
 
-This repository intentionally has **no dependency on Qwen, llama.cpp, cloud inference, Python training frameworks, or external model weights**. It is a new baseline, not a byte-for-byte recovery of any deleted repository.
+## Current implemented baseline
 
-## What is implemented
+- Pure C11 static library and CLI.
+- Byte-level 256-symbol bigram language model.
+- UTF-8-safe at the byte level: Arabic text is accepted as raw UTF-8 bytes without an external tokenizer.
+- Add-one-smoothed evaluation with bits-per-byte and perplexity.
+- Seeded deterministic generation.
+- Versioned binary model format (`NIYAHBG1`).
+- Linux and Windows CI.
+- Unit and CLI smoke tests.
 
-- portable SHA-256 with a known-answer test;
-- deterministic UTF-8 byte tokenizer (256-token vocabulary);
-- checksummed binary dataset shard format (`NIYDS1`);
-- deterministic add-1 byte-bigram model;
-- dataset-bound, checksummed checkpoint format (`NIYCK1`);
-- new/resume training with byte-equivalent state evolution;
-- evaluation with NLL / average NLL / perplexity;
-- greedy local generation;
-- CLI tools (`niyah`, `niyah-train`);
-- Linux and Windows CMake/CTest CI;
-- seven regression tests, including resume equivalence and dataset-binding rejection.
-
-## Explicit non-claims
-
-This baseline does **not** claim to be a transformer, neural-network replacement, CUDA trainer, GGUF runtime, or reconstruction of historical Niyah.Engine behavior. It is a small deterministic engine that establishes file formats, identities, training state, CLI contracts, and tests from a clean source tree.
+This is a verified bootstrap engine, not a claim of transformer-scale capability. It provides a stable executable training/evaluation contract on which tokenizer, tensor, checkpoint, optimizer, and GPU work can be added deliberately.
 
 ## Build
 
-### Linux / WSL
-
-```bash
+```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
-```
-
-### Windows PowerShell + Visual Studio
-
-```powershell
-cmake -S . -B build -A x64
-cmake --build build --config Release
+cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-## Minimal end-to-end run
+## Train
 
-```powershell
-Set-Content .\sample.txt 'مرحبا من نياه. Niyah is local.' -Encoding utf8NoBOM
-
-.\build\Release\niyah.exe prepare `
-  --input .\sample.txt `
-  --output .\sample.srd
-
-.\build\Release\niyah-train.exe new `
-  --shard .\sample.srd `
-  --checkpoint-out .\model.ckpt `
-  --updates 10000
-
-.\build\Release\niyah.exe eval `
-  --shard .\sample.srd `
-  --checkpoint .\model.ckpt
-
-.\build\Release\niyah.exe run `
-  --checkpoint .\model.ckpt `
-  --prompt 'Niyah' `
-  --max-tokens 64
+```sh
+./build/niyah train --input corpus.txt --model model.nyh
 ```
 
-## Repository layout
+Windows multi-config generators usually place the executable under `build/Release/niyah.exe`.
 
-```text
-include/niyah/   public C11 API
-src/             implementation
-tools/           command-line programs
-tests/           regression tests
-docs/            format and architecture notes
-.github/          CI
+## Evaluate
+
+```sh
+./build/niyah eval --input heldout.txt --model model.nyh
 ```
 
-## Evidence rule
+## Generate
 
-A successful build or documentation statement is not runtime evidence by itself. Use CTest results, exact command outputs, hashes, and reproduced artifacts when making claims about a specific build.
+```sh
+./build/niyah generate --model model.nyh --prompt "الرياضيات " --tokens 128 --seed 42
+```
+
+## Inspect
+
+```sh
+./build/niyah inspect --model model.nyh
+```
+
+## Evidence contract
+
+A claim is accepted only when the corresponding command exits successfully and its output is preserved. Documentation, filenames, or prior runs are not substitutes for current execution evidence.
+
+## Scope boundary
+
+No external pretrained model is embedded or required. No Qwen, Llama, cloud API, telemetry SDK, or network dependency is part of the runtime.
