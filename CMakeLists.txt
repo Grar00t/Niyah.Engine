@@ -6,6 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 option(NIYAH_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
+option(NIYAH_BUILD_NATIVE_FULL "Build recovered native Transformer target" OFF)
 
 add_library(niyah STATIC
     src/niyah_model.c
@@ -31,6 +32,10 @@ if(NOT MSVC)
     target_link_libraries(niyah-cli PRIVATE m)
 endif()
 set_target_properties(niyah-cli PROPERTIES OUTPUT_NAME niyah)
+
+if(NIYAH_BUILD_NATIVE_FULL)
+    include(cmake/NiyahNativeFull.cmake)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
