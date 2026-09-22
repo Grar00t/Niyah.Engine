@@ -58,7 +58,7 @@ jobs:
           "$exe" --help
 
       - name: Upload Linux release artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: niyah-release-linux-x86_64
           path: dist/*
@@ -113,7 +113,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'extracted niyah.exe --help failed' }
 
       - name: Upload Windows release artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: niyah-release-windows-x86_64
           path: dist/*
@@ -159,7 +159,7 @@ jobs:
           test -f dist/Niyah.Engine-0.1.0-windows-x86_64.zip
 
       - name: Upload combined release bundle
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: niyah-release-bundle
           path: dist/*
