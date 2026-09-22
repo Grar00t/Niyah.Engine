@@ -25,6 +25,9 @@ typedef struct NiyahAdamWState {
     size_t count;
     uint64_t step;
 
+    /* Persisted LR schedule state. Zero selects the constant schedule. */
+    uint64_t warmup_steps;
+
     /* In-process compatibility binding. Pointer identity is not a persisted
      * checkpoint identity and must be re-established after future loading.
      */

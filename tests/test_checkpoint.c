@@ -363,8 +363,10 @@ static void test_resume_equivalence(void)
 
     memset(&b, 0, sizeof(b)); memset(&sb, 0, sizeof(sb)); memset(&cb, 0, sizeof(cb));
     CHECK(create_training_state(0, &a, &sa, &ca));
+    sa.warmup_steps = UINT64_C(4);
     CHECK(niyah_checkpoint_save(path, &a, &sa, &ca) == NIYAH_OK);
     CHECK(niyah_checkpoint_load(path, &b, &sb, &cb) == NIYAH_OK);
+    CHECK(sb.warmup_steps == sa.warmup_steps);
     ga.count = a.weight_count; gb.count = b.weight_count;
     ga.values = (float *)calloc(ga.count, sizeof(float));
     gb.values = (float *)calloc(gb.count, sizeof(float));
@@ -662,6 +664,7 @@ static void test_tokenizer_identity_binding(void)
     if (state.m == NULL || state.v == NULL) {
         goto cleanup;
     }
+    state.warmup_steps = UINT64_C(7);
 
     CHECK(niyah_checkpoint_save_with_tokenizer(
               v2_path, &model, &state, &config,
@@ -678,6 +681,7 @@ static void test_tokenizer_identity_binding(void)
         CHECK(memcmp(model.weights, loaded.weights, bytes) == 0);
         CHECK(memcmp(state.m, loaded_state.m, bytes) == 0);
         CHECK(memcmp(state.v, loaded_state.v, bytes) == 0);
+        CHECK(state.warmup_steps == loaded_state.warmup_steps);
         CHECK(optimizer_config_equal(&config, &loaded_config));
     }
     destroy_loaded(&loaded, &loaded_state);

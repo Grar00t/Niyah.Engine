@@ -31,12 +31,14 @@ _Static_assert(FLT_MAX_EXP == 128, "checkpoint v1 requires IEEE-754 binary32 exp
 #define NIYAH_CHECKPOINT_IO_BUFFER_SIZE 65536U
 #define NIYAH_CHECKPOINT_ADAMW_META_BYTES UINT64_C(32)
 #define NIYAH_CHECKPOINT_TOKENIZER_IDENTITY_BYTES UINT64_C(32)
+#define NIYAH_CHECKPOINT_LR_SCHEDULE_BYTES UINT64_C(8)
 
 #define NIYAH_CHECKPOINT_SECTION_MODEL_WEIGHTS UINT32_C(1)
 #define NIYAH_CHECKPOINT_SECTION_ADAMW_M UINT32_C(2)
 #define NIYAH_CHECKPOINT_SECTION_ADAMW_V UINT32_C(3)
 #define NIYAH_CHECKPOINT_SECTION_ADAMW_META UINT32_C(4)
 #define NIYAH_CHECKPOINT_SECTION_TOKENIZER_IDENTITY UINT32_C(5)
+#define NIYAH_CHECKPOINT_SECTION_LR_SCHEDULE UINT32_C(6)
 
 static const unsigned char NIYAH_CHECKPOINT_MAGIC[8] = {
     'N', 'I', 'Y', 'A', 'H', 'C', 'K', 'P'
@@ -65,6 +67,8 @@ typedef struct NiyahCheckpointScan {
     NiyahCheckpointMeta meta;
     uint8_t tokenizer_identity[NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE];
     int has_tokenizer_identity;
+    uint64_t warmup_steps;
+    int has_lr_schedule;
     uint32_t crc32;
 } NiyahCheckpointScan;
 
@@ -577,6 +581,10 @@ static NiyahStatus niyah_checkpoint_save_impl(
         section_count = NIYAH_CHECKPOINT_SECTION_COUNT_V2;
     }
 
+    if (optimizer_state->warmup_steps != UINT64_C(0)) {
+        section_count += UINT32_C(1);
+    }
+
     file = niyah_checkpoint_fopen(path, "wb");
     if (file == NULL) {
         return NIYAH_ERR_IO;
@@ -629,6 +637,18 @@ static NiyahStatus niyah_checkpoint_save_impl(
         status = niyah_write_crc(
             file, &crc, tokenizer_identity,
             NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE);
+    }
+    if (status == NIYAH_OK &&
+        optimizer_state->warmup_steps != UINT64_C(0)) {
+        status = niyah_write_section_header(
+            file, &crc,
+            NIYAH_CHECKPOINT_SECTION_LR_SCHEDULE,
+            NIYAH_CHECKPOINT_LR_SCHEDULE_BYTES);
+    }
+    if (status == NIYAH_OK &&
+        optimizer_state->warmup_steps != UINT64_C(0)) {
+        status = niyah_write_u64_crc(
+            file, &crc, optimizer_state->warmup_steps);
     }
     if (status == NIYAH_OK) {
         niyah_store_u32_le(footer + 0U, NIYAH_CHECKPOINT_CHECKSUM_CRC32);
@@ -914,6 +934,29 @@ static NiyahStatus niyah_scan_checkpoint(
                     out->has_tokenizer_identity = 1;
                 }
                 break;
+            case NIYAH_CHECKPOINT_SECTION_LR_SCHEDULE:
+                bit = UINT32_C(1) << 5;
+                if ((seen & bit) != 0U ||
+                    (section_flags & NIYAH_CHECKPOINT_SECTION_REQUIRED) == 0U ||
+                    payload_bytes != NIYAH_CHECKPOINT_LR_SCHEDULE_BYTES) {
+                    return NIYAH_ERR_CORRUPT_DATA;
+                }
+                seen |= bit;
+                {
+                    unsigned char schedule_bytes[8];
+                    status = niyah_read_exact(
+                        file, schedule_bytes, sizeof(schedule_bytes),
+                        &crc, 1);
+                    if (status == NIYAH_OK) {
+                        out->warmup_steps =
+                            niyah_load_u64_le(schedule_bytes);
+                        if (out->warmup_steps == UINT64_C(0)) {
+                            return NIYAH_ERR_CORRUPT_DATA;
+                        }
+                        out->has_lr_schedule = 1;
+                    }
+                }
+                break;
             default:
                 if ((section_flags & NIYAH_CHECKPOINT_SECTION_REQUIRED) != 0U) {
                     return NIYAH_ERR_UNSUPPORTED_VERSION;
@@ -927,9 +970,11 @@ static NiyahStatus niyah_scan_checkpoint(
     }
 
     if ((required_version == NIYAH_CHECKPOINT_VERSION_V1 &&
-         seen != UINT32_C(0x0f)) ||
+         seen != UINT32_C(0x0f) &&
+         seen != UINT32_C(0x2f)) ||
         (required_version == NIYAH_CHECKPOINT_VERSION_V2 &&
-         seen != UINT32_C(0x1f))) {
+         seen != UINT32_C(0x1f) &&
+         seen != UINT32_C(0x3f))) {
         return NIYAH_ERR_CORRUPT_DATA;
     }
     status = niyah_read_exact(file, footer, sizeof(footer), &crc, 0);
@@ -955,6 +1000,8 @@ static NiyahStatus niyah_scan_checkpoint(
     if (expected != NULL &&
         (out->crc32 != expected->crc32 ||
          out->meta.step != expected->meta.step ||
+         out->warmup_steps != expected->warmup_steps ||
+         out->has_lr_schedule != expected->has_lr_schedule ||
          !niyah_optimizer_config_equal(&out->meta.optimizer_config,
                                        &expected->meta.optimizer_config))) {
         return NIYAH_ERR_CORRUPT_DATA;
@@ -1067,6 +1114,10 @@ static NiyahStatus niyah_checkpoint_load_impl(
     status = niyah_scan_checkpoint(file, required_version, &first, &targets, &second);
     if (status == NIYAH_OK && load_optimizer != 0) {
         temp_state.step = second.meta.step;
+        temp_state.warmup_steps =
+            second.has_lr_schedule != 0
+                ? second.warmup_steps
+                : UINT64_C(0);
         temp_state.model_config = temp_model.config;
         temp_state.model_layout = temp_model.layout;
     }

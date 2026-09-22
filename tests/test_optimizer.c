@@ -133,6 +133,7 @@ static void test_state_initialization_and_identity(void)
     CHECK(niyah_adamw_state_create(&state, &a) == NIYAH_OK);
     CHECK(state.count == a.weight_count);
     CHECK(state.step == 0U);
+    CHECK(state.warmup_steps == UINT64_C(0));
     CHECK(state.bound_model == &a);
     CHECK(state.bound_weights == a.weights);
     for (i = 0U; i < state.count; ++i) {
