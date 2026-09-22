@@ -1,21 +1,15 @@
 # Niyah.Engine
 
-A clean-room, local-first C11 language-model foundation. This repository intentionally starts with a small deterministic baseline that can actually be built, trained, evaluated, saved, loaded, and tested without external model weights or cloud services.
+Local-first Arabic technical language-model engine and training workspace.
 
-## Current implemented baseline
+The repository contains two deliberately separate layers:
 
-- Pure C11 static library and CLI.
-- Byte-level 256-symbol bigram language model.
-- UTF-8-safe at the byte level: Arabic text is accepted as raw UTF-8 bytes without an external tokenizer.
-- Add-one-smoothed evaluation with bits-per-byte and perplexity.
-- Seeded deterministic generation.
-- Versioned binary model format (`NIYAHBG1`).
-- Linux and Windows CI.
-- Unit and CLI smoke tests.
+1. **Native C11 runtime baseline** — buildable CLI/library with deterministic byte-level training/evaluation/generation contracts.
+2. **Reference Transformer training path** — a small PyTorch causal Transformer used to prove end-to-end dataset, checkpoint, resume, evaluation, and generation behavior without depending on external pretrained weights.
 
-This is a verified bootstrap engine, not a claim of transformer-scale capability. It provides a stable executable training/evaluation contract on which tokenizer, tensor, checkpoint, optimizer, and GPU work can be added deliberately.
+No Qwen, Llama, hosted API, telemetry SDK, or downloaded model weight is required by either path.
 
-## Build
+## Native build
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -23,36 +17,91 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-## Train
+Native baseline commands:
 
 ```sh
 ./build/niyah train --input corpus.txt --model model.nyh
+./build/niyah eval --input heldout.txt --model model.nyh
+./build/niyah generate --model model.nyh --prompt "الرياضيات " --tokens 128 --seed 42
+./build/niyah inspect --model model.nyh
 ```
 
 Windows multi-config generators usually place the executable under `build/Release/niyah.exe`.
 
-## Evaluate
+## Verified Arabic math dataset
+
+Generate 10,000 deterministic records:
 
 ```sh
-./build/niyah eval --input heldout.txt --model model.nyh
+python tools/generate_verified_math.py \
+  --out data/generated/verified_math_v1.jsonl \
+  --records 10000 \
+  --seed 1448
+
+python tools/validate_verified_math.py \
+  data/generated/verified_math_v1.jsonl \
+  --expect-records 10000
 ```
 
-## Generate
+Create a stable record-level train/validation split:
 
 ```sh
-./build/niyah generate --model model.nyh --prompt "الرياضيات " --tokens 128 --seed 42
+python tools/split_jsonl.py data/generated/verified_math_v1.jsonl \
+  --train data/generated/train.jsonl \
+  --validation data/generated/validation.jsonl \
+  --validation-percent 5 \
+  --seed 1448
 ```
 
-## Inspect
+The generator currently covers exact integer arithmetic, rational arithmetic, linear equations, GCD, modular inverses, and combinations. Answers are recomputed by an independent verifier. Generated corpora are reproducible and intentionally excluded from Git; the generator, seed corpus, validation code, and CI gate are committed.
+
+## Reference Transformer
+
+Install the training dependency:
 
 ```sh
-./build/niyah inspect --model model.nyh
+python -m pip install -r requirements-train.txt
 ```
 
-## Evidence contract
+Train from scratch:
 
-A claim is accepted only when the corresponding command exits successfully and its output is preserved. Documentation, filenames, or prior runs are not substitutes for current execution evidence.
+```sh
+python python/niyah_ref.py train \
+  --data data/generated/verified_math_v1.jsonl \
+  --out artifacts/verified-math-v1/niyah-ref.pt \
+  --steps 2000 \
+  --batch 16 \
+  --context 256 \
+  --seed 1448
+```
 
-## Scope boundary
+Generate from the resulting checkpoint:
 
-No external pretrained model is embedded or required. No Qwen, Llama, cloud API, telemetry SDK, or network dependency is part of the runtime.
+```sh
+python python/niyah_ref.py generate \
+  --model artifacts/verified-math-v1/niyah-ref.pt \
+  --prompt "حل المعادلة" \
+  --tokens 128 \
+  --temperature 0.8 \
+  --top-k 40
+```
+
+Windows end-to-end entrypoint:
+
+```powershell
+pwsh -File scripts/train_verified_math.ps1 -Records 10000 -Steps 2000
+```
+
+That script records dataset SHA256, checkpoint SHA256, Git HEAD, Python/Torch version, and detected device after a successful run.
+
+## Data evidence contract
+
+A dataset claim is accepted only when provenance and verification are explicit. `SYNTHETIC_UNVERIFIED` is not silently promoted to training-approved data. The deterministic math generator emits `MECHANICALLY_VERIFIABLE` records, and CI regenerates, validates, splits, and compares them for reproducibility.
+
+## Runtime evidence contract
+
+A runtime claim is accepted only when the corresponding command exits successfully and its output is preserved. Documentation, filenames, previous chat output, or a prior run are not substitutes for current execution evidence.
+
+## Current boundary
+
+The reference Transformer is a training implementation, not a claim that the native C11 runtime already executes those Transformer checkpoints. Native Transformer export/import is a separate compatibility gate and must be proven before that claim is made.
