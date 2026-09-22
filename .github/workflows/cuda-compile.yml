@@ -1,0 +1,60 @@
+name: cuda-compile
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cuda-compile.yml"
+      - "CMakeLists.txt"
+      - "src/niyah_cuda_*"
+      - "tests/test_cuda_*"
+      - "tools/niyah_cuda_*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cuda-12-4-build:
+    runs-on: ubuntu-24.04
+    container:
+      image: nvidia/cuda:12.4.1-devel-ubuntu22.04
+
+    steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates \
+            cmake \
+            git \
+            make \
+            g++
+          rm -rf /var/lib/apt/lists/*
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configure CUDA 12.4 / SM86 compile gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          nvcc --version
+          cmake -S . -B build/verify-cuda-12-4 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNIYAH_ENABLE_CUDA=ON \
+            -DNIYAH_BUILD_TESTS=ON \
+            -DCMAKE_CUDA_ARCHITECTURES=86
+
+      - name: Build all CUDA targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build/verify-cuda-12-4 --parallel 2
+
+      - name: Enumerate CUDA tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build/verify-cuda-12-4 -N | grep -E 'cuda|CUDA'
+          echo "CUDA_COMPILE_GATE=PASS"
