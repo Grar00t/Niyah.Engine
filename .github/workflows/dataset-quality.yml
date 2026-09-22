@@ -8,6 +8,7 @@ on:
       - 'tools/validate_verified_math.py'
       - 'tools/split_jsonl.py'
       - 'python/niyah_ref.py'
+      - 'python/train_verified.py'
       - 'data/**'
       - '.github/workflows/dataset-quality.yml'
   workflow_dispatch:
@@ -26,6 +27,12 @@ jobs:
           python -m py_compile tools/validate_verified_math.py
           python -m py_compile tools/split_jsonl.py
           python -m py_compile python/niyah_ref.py
+          python -m py_compile python/train_verified.py
+      - name: Validate committed seed
+        run: |
+          python tools/validate_verified_math.py \
+            data/seed/verified_math_seed_v1.jsonl \
+            --expect-records 6 | tee seed-validate.txt
       - name: Generate deterministic corpus
         run: |
           mkdir -p build-data
@@ -68,6 +75,7 @@ jobs:
         with:
           name: verified-math-receipts
           path: |
+            seed-validate.txt
             build-data/generate.txt
             build-data/validate.txt
             build-data/split.txt
