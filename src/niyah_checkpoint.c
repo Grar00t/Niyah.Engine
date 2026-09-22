@@ -928,7 +928,7 @@ static NiyahStatus niyah_scan_checkpoint(
                 seen |= bit;
                 status = niyah_read_exact(
                     file, out->tokenizer_identity,
-                    NIYAH_CHECKPOINT_TOKENIZER_IDENTITY_SHA256_SIZE,
+                    NIYAH_TOKENIZER_IDENTITY_SHA256_SIZE,
                     &crc, 1);
                 if (status == NIYAH_OK) {
                     out->has_tokenizer_identity = 1;
