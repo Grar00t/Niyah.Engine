@@ -5,7 +5,8 @@ param(
     [int]$Steps = 2000,
     [int]$Seed = 1448,
     [int]$Batch = 16,
-    [int]$Context = 256
+    [int]$Context = 256,
+    [double]$ValidationPercent = 5.0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,8 @@ $Repo = (Resolve-Path $Root).Path
 $DataDir = Join-Path $Repo 'data\generated'
 $ArtifactDir = Join-Path $Repo 'artifacts\verified-math-v1'
 $Data = Join-Path $DataDir 'verified_math_v1.jsonl'
+$Train = Join-Path $DataDir 'train.jsonl'
+$Validation = Join-Path $DataDir 'validation.jsonl'
 $Model = Join-Path $ArtifactDir 'niyah-ref.pt'
 $Receipt = Join-Path $ArtifactDir 'receipt.txt'
 
@@ -28,10 +31,26 @@ try {
     & $Python tools/validate_verified_math.py $Data --expect-records $Records
     if ($LASTEXITCODE -ne 0) { throw "dataset validation failed: $LASTEXITCODE" }
 
-    $DataHash = (Get-FileHash $Data -Algorithm SHA256).Hash
+    & $Python tools/split_jsonl.py $Data `
+        --train $Train `
+        --validation $Validation `
+        --validation-percent $ValidationPercent `
+        --seed $Seed
+    if ($LASTEXITCODE -ne 0) { throw "dataset split failed: $LASTEXITCODE" }
 
-    & $Python python/niyah_ref.py train `
-        --data $Data `
+    & $Python tools/validate_verified_math.py $Train
+    if ($LASTEXITCODE -ne 0) { throw "train split validation failed: $LASTEXITCODE" }
+
+    & $Python tools/validate_verified_math.py $Validation
+    if ($LASTEXITCODE -ne 0) { throw "validation split validation failed: $LASTEXITCODE" }
+
+    $DataHash = (Get-FileHash $Data -Algorithm SHA256).Hash
+    $TrainHash = (Get-FileHash $Train -Algorithm SHA256).Hash
+    $ValidationHash = (Get-FileHash $Validation -Algorithm SHA256).Hash
+
+    & $Python python/train_verified.py `
+        --train $Train `
+        --validation $Validation `
         --out $Model `
         --steps $Steps `
         --batch $Batch `
@@ -50,7 +69,10 @@ try {
         "RECORDS=$Records"
         "STEPS=$Steps"
         "SEED=$Seed"
+        "VALIDATION_PERCENT=$ValidationPercent"
         "DATA_SHA256=$DataHash"
+        "TRAIN_SHA256=$TrainHash"
+        "VALIDATION_SHA256=$ValidationHash"
         "MODEL_SHA256=$ModelHash"
         "PYTHON=$(& $Python --version 2>&1)"
         "TORCH=$Torch"
