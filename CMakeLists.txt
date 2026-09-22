@@ -13,6 +13,7 @@ add_library(niyah STATIC
 )
 target_include_directories(niyah PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 if(MSVC)
+    target_compile_definitions(niyah PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_compile_options(niyah PRIVATE /W4)
     if(NIYAH_WARNINGS_AS_ERRORS)
         target_compile_options(niyah PRIVATE /WX)
@@ -42,6 +43,6 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DNIYAH_EXE=$<TARGET_FILE:niyah-cli>
             -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-            -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_smoke.cmake)
 endif()
