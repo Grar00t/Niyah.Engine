@@ -213,17 +213,20 @@ jobs:
 
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" \
-              --verify-tag \
+              dist/Niyah.Engine-0.1.0-linux-x86_64.tar.gz \
+              dist/Niyah.Engine-0.1.0-windows-x86_64.zip \
+              dist/SHA256SUMS.txt \
               --draft \
+              --verify-tag \
               --title "Niyah.Engine $tag" \
               --notes-file "$notes"
+          else
+            gh release upload "$tag" \
+              dist/Niyah.Engine-0.1.0-linux-x86_64.tar.gz \
+              dist/Niyah.Engine-0.1.0-windows-x86_64.zip \
+              dist/SHA256SUMS.txt \
+              --clobber
           fi
-
-          gh release upload "$tag" \
-            dist/Niyah.Engine-0.1.0-linux-x86_64.tar.gz \
-            dist/Niyah.Engine-0.1.0-windows-x86_64.zip \
-            dist/SHA256SUMS.txt \
-            --clobber
 
           gh release edit "$tag" --draft=false
           echo "RELEASE_PUBLISHED=$tag@$GITHUB_SHA"
