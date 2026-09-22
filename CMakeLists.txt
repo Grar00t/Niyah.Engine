@@ -26,13 +26,19 @@ else()
 endif()
 
 add_executable(niyah-cli tools/niyah.c)
-target_link_libraries(niyah-cli PRIVATE niyah m)
+target_link_libraries(niyah-cli PRIVATE niyah)
+if(NOT MSVC)
+    target_link_libraries(niyah-cli PRIVATE m)
+endif()
 set_target_properties(niyah-cli PROPERTIES OUTPUT_NAME niyah)
 
 include(CTest)
 if(BUILD_TESTING)
     add_executable(test_model tests/test_model.c)
-    target_link_libraries(test_model PRIVATE niyah m)
+    target_link_libraries(test_model PRIVATE niyah)
+    if(NOT MSVC)
+        target_link_libraries(test_model PRIVATE m)
+    endif()
     add_test(NAME model_unit COMMAND test_model)
 
     add_test(NAME cli_smoke
