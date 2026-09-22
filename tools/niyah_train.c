@@ -49,6 +49,7 @@ typedef struct NiyahTrainOptions {
     int have_epsilon;
     int have_weight_decay;
     int have_max_grad_norm;
+    int progress_details;
 } NiyahTrainOptions;
 
 static void train_options_destroy(NiyahTrainOptions *options)
@@ -68,12 +69,12 @@ static void usage(FILE *stream)
         "      --layers N --heads N --kv-heads N --ffn-hidden-dim N\n"
         "      --rms-norm-eps F --tie-word-embeddings 0|1\n"
         "      --learning-rate F --beta1 F --beta2 F --epsilon F\n"
-        "      --weight-decay F --max-grad-norm F\n"
+        "      --weight-decay F --max-grad-norm F [--progress-details]\n"
         "\n"
         "  niyah-train resume --tokenizer TOK --shard SHARD [--shard SHARD ...]\n"
         "      --checkpoint-in CKPT --cursor-in CURSOR\n"
         "      --checkpoint-out CKPT --cursor-out CURSOR\n"
-        "      --updates N --batch-size N --accumulation-steps N\n"
+        "      --updates N --batch-size N --accumulation-steps N [--progress-details]\n"
         "\n"
         "Outputs are required to be new paths. Resume inputs are never overwritten.\n");
 }
@@ -101,12 +102,36 @@ static int fail_status(const char *stage, NiyahStatus status)
     return 1;
 }
 
+typedef struct NiyahTrainProgressContext {
+    const NiyahAdamWState *optimizer_state;
+    const NiyahAdamWConfig *optimizer_config;
+    const NiyahDatasetCursor *cursor;
+    int details;
+} NiyahTrainProgressContext;
+
 static void print_training_progress(size_t update_index, size_t updates,
                                      float loss, void *user_data)
 {
-    (void)user_data;
-    fprintf(stderr, "update=%zu/%zu loss=%.9g\n",
+    const NiyahTrainProgressContext *context =
+        (const NiyahTrainProgressContext *)user_data;
+
+    fprintf(stderr, "update=%zu/%zu loss=%.9g",
             update_index + 1U, updates, (double)loss);
+
+    if (context != NULL && context->details != 0) {
+        fprintf(
+            stderr,
+            " optimizer_step=%" PRIu64
+            " learning_rate=%.9g"
+            " cursor_epoch=%" PRIu64
+            " cursor_position=%zu",
+            context->optimizer_state->step,
+            (double)context->optimizer_config->learning_rate,
+            context->cursor->epoch,
+            context->cursor->position);
+    }
+
+    fputc('\n', stderr);
     fflush(stderr);
 }
 
@@ -273,6 +298,8 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
             value = next_value(argc, argv, &i);
             if (value == NULL || !parse_float_value(value, &options->optimizer_config.max_grad_norm)) return 0;
             options->have_max_grad_norm = 1;
+        } else if (strcmp(key, "--progress-details") == 0) {
+            options->progress_details = 1;
         } else {
             return 0;
         }
@@ -358,6 +385,7 @@ int main(int argc, char **argv)
     NiyahModel model;
     NiyahAdamWState optimizer_state;
     NiyahAdamWConfig optimizer_config;
+    NiyahTrainProgressContext progress_context;
     size_t sample_count = 0U;
     size_t sample_bytes = 0U;
     size_t shard_index;
@@ -374,6 +402,7 @@ int main(int argc, char **argv)
     memset(&model, 0, sizeof(model));
     memset(&optimizer_state, 0, sizeof(optimizer_state));
     memset(&optimizer_config, 0, sizeof(optimizer_config));
+    memset(&progress_context, 0, sizeof(progress_context));
 
     parsed = parse_options(argc, argv, &options);
     if (parsed == 2) {
@@ -551,11 +580,17 @@ int main(int argc, char **argv)
         }
     }
 
+    progress_context.optimizer_state = &optimizer_state;
+    progress_context.optimizer_config = &optimizer_config;
+    progress_context.cursor = &cursor;
+    progress_context.details = options.progress_details;
+
     status = niyah_training_run_updates_with_progress(
         &model, samples, sample_count, &cursor,
         &optimizer_state, &optimizer_config,
         options.batch_size, options.accumulation_steps,
-        options.updates, print_training_progress, NULL, &mean_loss);
+        options.updates, print_training_progress,
+        &progress_context, &mean_loss);
     if (status != NIYAH_OK) {
         exit_code = fail_status("training", status);
         goto cleanup;

@@ -566,6 +566,16 @@ if(NIYAH_BUILD_TESTS)
     set_tests_properties(niyah_train_resume_equivalence_test PROPERTIES
         FIXTURES_REQUIRED niyah_train_files)
 
+    add_test(NAME niyah_train_progress_details_test
+        COMMAND ${CMAKE_COMMAND}
+            -DNIYAH_TRAIN=$<TARGET_FILE:niyah_train>
+            -DTOKENIZER=${_NIYAH_TRAIN_TOK}
+            -DSHARD=${_NIYAH_TRAIN_SHARD}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_train_progress_details.cmake)
+    set_tests_properties(niyah_train_progress_details_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
+
     add_test(NAME niyah_train_resume_dataset_mismatch_test
         COMMAND ${CMAKE_COMMAND}
             "-DNIYAH_TRAIN_EXE=$<TARGET_FILE:niyah_train>"
