@@ -1,0 +1,16 @@
+D:\Projects\Niyah.Engine\src\niyah_model.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_model.obj
+D:\Projects\Niyah.Engine\src\niyah_math.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_math.obj
+D:\Projects\Niyah.Engine\src\niyah_sha256.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_sha256.obj
+D:\Projects\Niyah.Engine\src\niyah_tokenizer.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_tokenizer.obj
+D:\Projects\Niyah.Engine\src\niyah_dataset.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_dataset.obj
+D:\Projects\Niyah.Engine\src\niyah_dataset_shard.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_dataset_shard.obj
+D:\Projects\Niyah.Engine\src\niyah_transformer.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_transformer.obj
+D:\Projects\Niyah.Engine\src\niyah_decode.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_decode.obj
+D:\Projects\Niyah.Engine\src\niyah_sampler.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_sampler.obj
+D:\Projects\Niyah.Engine\src\niyah_generate.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_generate.obj
+D:\Projects\Niyah.Engine\src\niyah_train.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_train.obj
+D:\Projects\Niyah.Engine\src\niyah_eval.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_eval.obj
+D:\Projects\Niyah.Engine\src\niyah_backward.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_backward.obj
+D:\Projects\Niyah.Engine\src\niyah_training_loop.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_training_loop.obj
+D:\Projects\Niyah.Engine\src\niyah_optimizer.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_optimizer.obj
+D:\Projects\Niyah.Engine\src\niyah_checkpoint.c;D:\Projects\Niyah.Engine\build-cuda86\niyah.dir\Release\niyah_checkpoint.obj

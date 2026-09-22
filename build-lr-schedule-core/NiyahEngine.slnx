@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Solution>
+	<Configurations>
+		<BuildType Name="Debug"/>
+		<BuildType Name="Release"/>
+		<BuildType Name="MinSizeRel"/>
+		<BuildType Name="RelWithDebInfo"/>
+		<Platform Name="x64"/>
+	</Configurations>
+	<Project Path="ALL_BUILD.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="45b379ea-2a67-3107-88c4-2a355d8c4e58" DefaultStartup="true">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+		<BuildDependency Project="niyah_backward_test.vcxproj"/>
+		<BuildDependency Project="niyah_baseline_test.vcxproj"/>
+		<BuildDependency Project="niyah_checkpoint_model_only_test.vcxproj"/>
+		<BuildDependency Project="niyah_checkpoint_test.vcxproj"/>
+		<BuildDependency Project="niyah_cli.vcxproj"/>
+		<BuildDependency Project="niyah_dataset_collection_test.vcxproj"/>
+		<BuildDependency Project="niyah_dataset_shard_test.vcxproj"/>
+		<BuildDependency Project="niyah_dataset_test.vcxproj"/>
+		<BuildDependency Project="niyah_decode_test.vcxproj"/>
+		<BuildDependency Project="niyah_eval_test.vcxproj"/>
+		<BuildDependency Project="niyah_generation_test.vcxproj"/>
+		<BuildDependency Project="niyah_lr_schedule_test.vcxproj"/>
+		<BuildDependency Project="niyah_model_test.vcxproj"/>
+		<BuildDependency Project="niyah_optimizer_test.vcxproj"/>
+		<BuildDependency Project="niyah_probe.vcxproj"/>
+		<BuildDependency Project="niyah_segment_embeddings_test.vcxproj"/>
+		<BuildDependency Project="niyah_text_pipeline_test.vcxproj"/>
+		<BuildDependency Project="niyah_tokenizer_test.vcxproj"/>
+		<BuildDependency Project="niyah_train.vcxproj"/>
+		<BuildDependency Project="niyah_train_test.vcxproj"/>
+		<BuildDependency Project="niyah_training_fixture.vcxproj"/>
+		<BuildDependency Project="niyah_training_loop_test.vcxproj"/>
+		<BuildDependency Project="niyah_transformer_test.vcxproj"/>
+	</Project>
+	<Project Path="INSTALL.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="642df763-c565-3191-853e-9b256fc08b95">
+		<BuildDependency Project="ALL_BUILD.vcxproj"/>
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="PACKAGE.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="f20ed75f-fa82-3b3e-86a1-b9dfd7c0944c">
+		<BuildDependency Project="ALL_BUILD.vcxproj"/>
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="RUN_TESTS.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e8795a0b-4e56-3049-8e28-a096f2dc6df1">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="ZERO_CHECK.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="c655aa1a-020b-3600-8d39-3d3e6b230d35"/>
+	<Project Path="niyah.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="66b8ee35-17ab-3dcb-91b3-1534a3f7ca73">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="niyah_backward_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="1efd55e0-9238-362b-8717-03e2ebdf08dc">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_baseline_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="df48cccc-bd6f-3e8e-964e-1b11bcdf52ef">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_checkpoint_model_only_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="ab3ea3ae-4781-305f-9a8d-16d3b62a1073">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_checkpoint_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="3ccc4d2b-3161-3bdb-929e-e1c1f1e62f35">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_cli.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="79f7ce88-9a1f-3de1-acf6-7648f06dbe2b">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_dataset_collection_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="64a2c676-2b95-3681-9bee-7146a4cb24ac">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_dataset_shard_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="ba2b35ca-1934-32eb-8c5e-e261f3a112c3">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_dataset_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="658ef6d3-4223-339a-a319-a298e7dffa55">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_decode_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="571089dc-9e19-3be0-aa3c-2757cb104495">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_eval_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="af79dd5b-e782-3df8-bc63-a236b3234896">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_generation_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d3bae875-2c87-365f-bb60-21334cd280de">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_lr_schedule_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="ddc146d2-dff5-3915-a8d4-fda93597ec6d">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_model_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="7cc52abc-2211-3eee-9ff9-00d33206332b">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_optimizer_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="89fee59f-0558-3f62-9a3a-2745ff39a46d">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_probe.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="440da4fc-7b77-3406-b0ce-e4f56e0288fc">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_segment_embeddings_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="6adf822c-1821-357d-9c2d-89a4d00bd80f">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_text_pipeline_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d6cd21e5-5dca-33da-b8bd-6ec394053e61">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_tokenizer_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="bec9be6d-a718-3c80-adf8-31d224a577dc">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_train.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="22e74133-1a72-34e9-aa2b-2b94619cc0db">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_train_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="179e4cb9-ebb3-35bd-aa22-81a7cfbd9653">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_training_fixture.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e59363f5-26aa-35ae-a012-6d2dac627ea8">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_training_loop_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="28971d14-e66c-3524-9849-f75d35a22adf">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+	<Project Path="niyah_transformer_test.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="196115f1-3cc2-3752-9857-06ae5a14593a">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="niyah.vcxproj"/>
+	</Project>
+</Solution>

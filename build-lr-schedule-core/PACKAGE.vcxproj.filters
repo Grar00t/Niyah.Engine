@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Projects\Niyah.Engine\build-lr-schedule-core\CMakeFiles\b6f94f6ed2eb9711088f455746e4a464\PACKAGE_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{613E5C7F-7C54-3B01-BDFC-236C12092D64}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

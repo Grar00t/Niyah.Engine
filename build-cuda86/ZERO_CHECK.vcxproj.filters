@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Projects\Niyah.Engine\build-cuda86\CMakeFiles\c42cb1e015bc7d3a1222cf5d946745b7\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{9390B775-99F2-3EB9-80C3-7B38877A50FC}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,104 @@
+
+---
+events:
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.4/Modules/CMakeDetermineSystem.cmake:218 (message)"
+      - "CMakeLists.txt:13 (project)"
+    message: |
+      The system is: Windows - 10.0.26200 - AMD64
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.4/Modules/CMakeDetermineCompilerId.cmake:501 (find_file)"
+      - "C:/Program Files/CMake/share/cmake-4.4/Modules/CMakeDetermineCompilerId.cmake:538 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "C:/Program Files/CMake/share/cmake-4.4/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "C:/Program Files/CMake/share/cmake-4.4/Modules/CMakeDetermineCompilerId.cmake:53 (__determine_compiler_id_test)"
+      - "C:/Program Files/CMake/share/cmake-4.4/Modules/CMakeDetermineCUDACompiler.cmake:163 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCUDACompilerId.cu.in"
+    candidate_directories:
+      - "C:/Program Files/CMake/share/cmake-4.4/Modules/"
+    found: "C:/Program Files/CMake/share/cmake-4.4/Modules/CMakeCUDACompilerId.cu.in"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4\\bin"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4\\libnvvp"
+        - "C:\\Windows\\system32"
+        - "C:\\Windows"
+        - "C:\\Windows\\System32\\Wbem"
+        - "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\Windows\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2024.1.1\\"
+        - "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common"
+        - "C:\\Program Files\\Tailscale\\"
+        - "C:\\Program Files (x86)\\cloudflared\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR"
+        - "C:\\metasploit-framework\\bin\\"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\VC\\Tools\\MSVC\\14.39.33519\\bin\\HostX86\\x86"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\Common7\\IDE\\VC\\VCPackages"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\MSBuild\\Current\\bin\\Roslyn"
+        - "C:\\Program Files (x86)\\Microsoft SDKs\\Windows\\v10.0A\\bin\\NETFX 4.8 Tools\\"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\Team Tools\\DiagnosticsHub\\Collector"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\Common7\\IDE\\Extensions\\Microsoft\\CodeCoverage.Console"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\\\x86"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\\\x86"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\\\MSBuild\\Current\\Bin\\amd64"
+        - "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\Common7\\IDE\\"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\Common7\\Tools\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Users\\A\\AppData\\Local\\hermes\\bin"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4\\lib\\x64"
+        - "\\\\?\\C:\\Users\\A\\AppData\\Local\\Programs\\Jan\\resources\\bin"
+        - "C:\\Users\\A\\.bun\\bin"
+        - "C:\\Users\\A\\.local\\bin"
+        - "C:\\Users\\A\\.cargo\\bin"
+        - "C:\\Users\\A\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\"
+        - "C:\\Users\\A\\AppData\\Local\\Programs\\Python\\Python312\\"
+        - "C:\\Users\\A\\AppData\\Local\\Programs\\Python\\Launcher\\"
+        - "C:\\Users\\A\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\A\\.dotnet\\tools"
+        - "C:\\Users\\A\\AppData\\Local\\Microsoft\\WinGet\\Links"
+        - "C:\\Users\\A\\AppData\\Local\\Programs\\Ollama"
+        - "C:\\Users\\A\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\A\\AppData\\Roaming\\npm"
+        - "C:\\Users\\A\\.dotnet\\tools"
+        - "C:\\Users\\A\\AppData\\Local\\Microsoft\\WinGet\\Packages\\ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\A\\AppData\\Local\\Microsoft\\WinGet\\Packages\\BurntSushi.ripgrep.MSVC_Microsoft.Winget.Source_8wekyb3d8bbwe\\ripgrep-15.2.0-x86_64-pc-windows-msvc"
+        - "C:\\Users\\A\\AppData\\Local\\Programs\\Cua\\cua-driver\\bin"
+        - "C:\\HuaweiCloudCLI"
+        - "C:\\Users\\A\\AppData\\Local\\DockerSandboxes\\bin\\"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\Common7\\IDE\\VC\\Linux\\bin\\ConnectionManagerExe"
+        - "D:\\KHZ-Toolchain\\VS2022-BuildTools\\VC\\vcpkg"
+        - "C:\\Program Files\\Graphviz\\bin"
+        - "C:\\Program Files\\Graphviz\\bin"
+        - "C:\\Users\\A\\AppData\\Local\\Microsoft\\WinGet\\Packages\\MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\\llvm-mingw-20260616-ucrt-x86_64\\bin"
+...

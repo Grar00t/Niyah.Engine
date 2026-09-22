@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/niyah_decode_test.dir/link.d CMakeFiles/niyah_decode_test.dir/tests/test_decode.c.o -o niyah_decode_test  libniyah.a -lm

@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/niyah_dataset_collection_test.dir/link.d CMakeFiles/niyah_dataset_collection_test.dir/tests/test_dataset_collection.c.o -o niyah_dataset_collection_test  libniyah.a -lm

@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/niyah_backward_test.dir/link.d CMakeFiles/niyah_backward_test.dir/tests/test_backward.c.o -o niyah_backward_test  libniyah.a -lm

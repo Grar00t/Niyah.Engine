@@ -1,0 +1,10 @@
+^D:\PROJECTS\NIYAH.ENGINE\BUILD-WARMUP-BEHAVIOR\CMAKEFILES\6E6EC8FA9C5D650B7778D5D2BF14F207\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/Projects/Niyah.Engine -BD:/Projects/Niyah.Engine/build-warmup-behavior --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/Projects/Niyah.Engine/build-warmup-behavior/NiyahEngine.slnx
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

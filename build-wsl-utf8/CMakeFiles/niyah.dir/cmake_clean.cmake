@@ -1,0 +1,41 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/niyah.dir/src/niyah_backward.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_backward.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_checkpoint.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_checkpoint.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_dataset.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_dataset.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_dataset_shard.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_dataset_shard.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_decode.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_decode.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_eval.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_eval.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_generate.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_generate.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_math.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_math.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_model.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_model.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_optimizer.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_optimizer.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_sampler.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_sampler.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_sha256.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_sha256.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_tokenizer.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_tokenizer.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_train.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_train.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_training_loop.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_training_loop.c.o.d"
+  "CMakeFiles/niyah.dir/src/niyah_transformer.c.o"
+  "CMakeFiles/niyah.dir/src/niyah_transformer.c.o.d"
+  "libniyah.a"
+  "libniyah.pdb"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang C)
+  include(CMakeFiles/niyah.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

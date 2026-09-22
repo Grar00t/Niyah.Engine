@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/niyah_text_pipeline_test.dir/link.d CMakeFiles/niyah_text_pipeline_test.dir/tests/test_text_pipeline.c.o -o niyah_text_pipeline_test  libniyah.a -lm

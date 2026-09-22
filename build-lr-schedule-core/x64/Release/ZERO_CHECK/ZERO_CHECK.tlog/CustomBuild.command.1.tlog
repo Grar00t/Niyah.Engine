@@ -1,0 +1,10 @@
+^D:\PROJECTS\NIYAH.ENGINE\BUILD-LR-SCHEDULE-CORE\CMAKEFILES\B6F94F6ED2EB9711088F455746E4A464\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/Projects/Niyah.Engine -BD:/Projects/Niyah.Engine/build-lr-schedule-core --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/Projects/Niyah.Engine/build-lr-schedule-core/NiyahEngine.slnx
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

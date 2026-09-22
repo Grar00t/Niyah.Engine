@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Projects\Niyah.Engine\build-warmup-final-seal\CMakeFiles\085ba099f54a116c5d29eac4ef433b2a\INSTALL_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{483335DD-D6BC-3E97-AD88-0169847A54A7}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

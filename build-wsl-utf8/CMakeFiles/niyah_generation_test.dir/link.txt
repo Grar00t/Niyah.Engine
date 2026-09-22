@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/niyah_generation_test.dir/link.d CMakeFiles/niyah_generation_test.dir/tests/test_generation.c.o -o niyah_generation_test  libniyah.a -lm

@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/niyah_model_test.dir/link.d CMakeFiles/niyah_model_test.dir/tests/test_model.c.o -o niyah_model_test  libniyah.a -lm
