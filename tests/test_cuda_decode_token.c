@@ -222,6 +222,52 @@ int main(void)
         CHECK(cuda_decode.next_position == before);
     }
 
+    {
+        const float nan_value = NAN;
+        const float sentinel = 17.0f;
+        const size_t weight_index =
+            model.layout.token_embedding +
+            (size_t)tokens[0] *
+                (size_t)config.embedding_dim;
+        const size_t before =
+            cuda_decode.next_position;
+        size_t i;
+
+        CHECK(weight_index < model.weight_count);
+
+        for (i = 0U;
+             i < (size_t)config.vocab_size;
+             ++i) {
+            gpu_logits[i] = sentinel;
+        }
+
+        CHECK(cudaMemcpy(
+                  (float *)cuda_model.device_weights +
+                      weight_index,
+                  &nan_value,
+                  sizeof(nan_value),
+                  cudaMemcpyHostToDevice) == cudaSuccess);
+
+        CHECK(niyah_cuda_decode_token(
+                  &cuda_model,
+                  &cuda_decode,
+                  tokens[0],
+                  gpu_logits,
+                  (size_t)config.vocab_size) != 0);
+
+        CHECK(cuda_decode.next_position == before);
+
+        for (i = 0U;
+             i < (size_t)config.vocab_size;
+             ++i) {
+            CHECK(gpu_logits[i] == sentinel);
+        }
+
+        CHECK(niyah_cuda_model_state_sync(
+                  &cuda_model,
+                  &model) == 0);
+    }
+
     niyah_kv_cache_reset(&cpu_cache);
     CHECK(niyah_cuda_decode_state_reset(
               &cuda_decode) == 0);

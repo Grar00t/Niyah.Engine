@@ -508,8 +508,9 @@ extern "C" int niyah_cuda_decode_state_create(
     }
 
     /*
-     * CUDA attention keeps one context-length score slice per head:
-     * 5*dim + 2*kv_dim + 2*ffn + n_heads*context_length.
+     * CUDA attention keeps one context-length score slice per head
+     * plus one 32-bit fail-closed status word:
+     * 5*dim + 2*kv_dim + 2*ffn + n_heads*context_length + 1.
      * The public CPU decode workspace contract remains unchanged.
      */
     if (!niyah_cuda_size_mul_ok(5U, dim, &workspace_floats) ||
@@ -526,6 +527,10 @@ extern "C" int niyah_cuda_decode_state_create(
         !niyah_cuda_size_add_ok(
             workspace_floats,
             term,
+            &workspace_floats) ||
+        !niyah_cuda_size_add_ok(
+            workspace_floats,
+            1U,
             &workspace_floats)) {
         return 1;
     }
@@ -735,7 +740,8 @@ __global__ static void niyah_cuda_attention_one_kernel(
     size_t n_heads,
     size_t n_kv_heads,
     size_t head_dim,
-    size_t kv_dim)
+    size_t kv_dim,
+    unsigned int *status)
 {
     __shared__ float partial[128];
     __shared__ float shared_max;
@@ -839,8 +845,23 @@ __global__ static void niyah_cuda_attention_one_kernel(
 
     if (lane == 0U) {
         shared_normalizer = partial[0];
+
+        if (!(shared_normalizer > 0.0f) ||
+            !isfinite(shared_normalizer)) {
+            atomicExch(status, 1U);
+        }
     }
     __syncthreads();
+
+    if (!(shared_normalizer > 0.0f) ||
+        !isfinite(shared_normalizer)) {
+        for (d = (size_t)lane;
+             d < head_dim;
+             d += (size_t)blockDim.x) {
+            out[head * head_dim + d] = 0.0f;
+        }
+        return;
+    }
 
     for (d = (size_t)lane;
          d < head_dim;
@@ -1002,6 +1023,10 @@ static int niyah_cuda_decode_state_matches_model(
         !niyah_cuda_size_add_ok(
             expected_workspace,
             term,
+            &expected_workspace) ||
+        !niyah_cuda_size_add_ok(
+            expected_workspace,
+            1U,
             &expected_workspace)) {
         return 0;
     }
@@ -1185,7 +1210,8 @@ static int niyah_cuda_attention_one_device(
     const NiyahCudaDecodeState *decode_state,
     uint32_t layer_index,
     size_t position,
-    float *scores)
+    float *scores,
+    unsigned int *status)
 {
     const size_t n_heads =
         (size_t)decode_state->config.n_heads;
@@ -1200,6 +1226,7 @@ static int niyah_cuda_attention_one_device(
         q == NULL ||
         decode_state == NULL ||
         scores == NULL ||
+        status == NULL ||
         n_heads == 0U ||
         n_heads > (size_t)UINT_MAX ||
         n_kv_heads == 0U ||
@@ -1231,7 +1258,8 @@ static int niyah_cuda_attention_one_device(
         n_heads,
         n_kv_heads,
         decode_state->head_dim,
-        decode_state->kv_dim);
+        decode_state->kv_dim,
+        status);
 
     return niyah_cuda_check_launch();
 }
@@ -1297,6 +1325,8 @@ extern "C" int niyah_cuda_decode_token(
     float *gate;
     float *up;
     float *scores;
+    unsigned int *attention_status;
+    unsigned int host_attention_status = 0U;
     size_t dim;
     size_t ffn;
     size_t kv_dim;
@@ -1360,9 +1390,19 @@ extern "C" int niyah_cuda_decode_token(
 
     if ((size_t)(scores - workspace) >
             decode_state->workspace_floats ||
-        score_floats >
+        score_floats >=
             decode_state->workspace_floats -
                 (size_t)(scores - workspace)) {
+        return 1;
+    }
+
+    attention_status =
+        (unsigned int *)(scores + score_floats);
+
+    if (cudaMemset(
+            attention_status,
+            0,
+            sizeof(*attention_status)) != cudaSuccess) {
         return 1;
     }
 
@@ -1479,7 +1519,8 @@ extern "C" int niyah_cuda_decode_token(
                 decode_state,
                 layer_index,
                 position,
-                scores) != 0) {
+                scores,
+                attention_status) != 0) {
             return 1;
         }
 
@@ -1552,6 +1593,15 @@ extern "C" int niyah_cuda_decode_token(
             decode_state->device_logits,
             vocab,
             dim) != 0) {
+        return 1;
+    }
+
+    if (cudaMemcpy(
+            &host_attention_status,
+            attention_status,
+            sizeof(host_attention_status),
+            cudaMemcpyDeviceToHost) != cudaSuccess ||
+        host_attention_status != 0U) {
         return 1;
     }
 
