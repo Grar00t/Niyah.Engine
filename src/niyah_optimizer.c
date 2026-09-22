@@ -94,6 +94,46 @@ static NiyahStatus niyah_adamw_validate_model(const NiyahModel *model,
     return NIYAH_OK;
 }
 
+NiyahStatus niyah_adamw_linear_warmup_learning_rate(
+    float base_learning_rate,
+    uint64_t optimizer_step,
+    uint64_t warmup_steps,
+    float *out_learning_rate)
+{
+    double scaled;
+    float effective;
+
+    if (out_learning_rate == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    *out_learning_rate = 0.0f;
+
+    if (!isfinite(base_learning_rate) ||
+        base_learning_rate <= 0.0f ||
+        optimizer_step == UINT64_C(0)) {
+        return NIYAH_ERR_INVALID_CONFIG;
+    }
+
+    if (warmup_steps == UINT64_C(0) ||
+        optimizer_step >= warmup_steps) {
+        *out_learning_rate = base_learning_rate;
+        return NIYAH_OK;
+    }
+
+    scaled =
+        (double)base_learning_rate *
+        ((double)optimizer_step / (double)warmup_steps);
+
+    effective = (float)scaled;
+
+    if (!isfinite(effective) || effective <= 0.0f) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
+    *out_learning_rate = effective;
+    return NIYAH_OK;
+}
+
 NiyahStatus niyah_adamw_config_validate(const NiyahAdamWConfig *config)
 {
     if (config == NULL) {

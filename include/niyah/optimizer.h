@@ -34,6 +34,20 @@ typedef struct NiyahAdamWState {
     NiyahModelLayout model_layout;
 } NiyahAdamWState;
 
+/* Compute the effective learning rate for a one-based optimizer step.
+ *
+ * warmup_steps == 0 selects the constant schedule.
+ * During warmup, step N uses base_learning_rate * N / warmup_steps.
+ * At and after warmup_steps, the effective rate equals base_learning_rate.
+ *
+ * This function is pure: it does not mutate optimizer state or configuration.
+ */
+NiyahStatus niyah_adamw_linear_warmup_learning_rate(
+    float base_learning_rate,
+    uint64_t optimizer_step,
+    uint64_t warmup_steps,
+    float *out_learning_rate);
+
 NiyahStatus niyah_adamw_config_validate(const NiyahAdamWConfig *config);
 NiyahStatus niyah_adamw_state_create(NiyahAdamWState *state,
                                      const NiyahModel *model);
