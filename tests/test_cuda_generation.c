@@ -138,6 +138,57 @@ int main(void)
           cuda_decode.next_position);
     CHECK(cuda_decode.next_position == 7U);
 
+    niyah_kv_cache_reset(&cpu_cache);
+    CHECK(niyah_cuda_decode_state_reset(
+              &cuda_decode) == 0);
+
+    memset(&cpu_result, 0, sizeof(cpu_result));
+    memset(&gpu_result, 0, sizeof(gpu_result));
+    memset(cpu_output, 0, sizeof(cpu_output));
+    memset(gpu_output, 0, sizeof(gpu_output));
+
+    config.max_new_tokens = 4U;
+    config.eos_token = 0U;
+    config.stop_on_eos = 0;
+    config.sampler.temperature = 0.75f;
+    config.sampler.seed = UINT64_C(12345);
+
+    CHECK(niyah_generate(
+              &model,
+              &cpu_cache,
+              prompt,
+              3U,
+              &config,
+              cpu_output,
+              4U,
+              &cpu_result,
+              cpu_workspace,
+              cpu_workspace_count) == NIYAH_OK);
+
+    CHECK(niyah_cuda_generate(
+              &cuda_model,
+              &cuda_decode,
+              prompt,
+              3U,
+              &config,
+              gpu_output,
+              4U,
+              &gpu_result,
+              gpu_logits,
+              16U) == NIYAH_OK);
+
+    CHECK(results_equal(
+              &cpu_result,
+              &gpu_result));
+
+    for (i = 0U; i < 4U; ++i) {
+        CHECK(cpu_output[i] == gpu_output[i]);
+    }
+
+    CHECK(niyah_kv_cache_position(&cpu_cache) ==
+          cuda_decode.next_position);
+    CHECK(cuda_decode.next_position == 7U);
+
     /*
      * Zero weights force tied zero logits. Greedy chooses token 0,
      * exercising identical EOS behavior without relying on approximate
