@@ -1,0 +1,52 @@
+name: dataset-quality
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/generate_verified_math.py'
+      - 'tools/validate_verified_math.py'
+      - 'python/niyah_ref.py'
+      - 'data/**'
+      - '.github/workflows/dataset-quality.yml'
+  workflow_dispatch:
+
+jobs:
+  verify-generated-math:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python sources
+        run: |
+          python -m py_compile tools/generate_verified_math.py
+          python -m py_compile tools/validate_verified_math.py
+          python -m py_compile python/niyah_ref.py
+      - name: Generate deterministic corpus
+        run: |
+          mkdir -p build-data
+          python tools/generate_verified_math.py \
+            --out build-data/verified_math.jsonl \
+            --records 1200 \
+            --seed 1448 | tee build-data/generate.txt
+      - name: Validate every record
+        run: |
+          python tools/validate_verified_math.py \
+            build-data/verified_math.jsonl \
+            --expect-records 1200 | tee build-data/validate.txt
+      - name: Reproducibility check
+        run: |
+          python tools/generate_verified_math.py \
+            --out build-data/verified_math_second.jsonl \
+            --records 1200 \
+            --seed 1448 >/dev/null
+          cmp build-data/verified_math.jsonl build-data/verified_math_second.jsonl
+      - name: Upload receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-math-receipts
+          path: |
+            build-data/generate.txt
+            build-data/validate.txt
