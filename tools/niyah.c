@@ -44,6 +44,9 @@ typedef struct NiyahShardOptions {
     const char *corpus_path;
     const char *shard_out;
     size_t sequence_length;
+    int record_mode;
+    const char **response_delimiters;
+    size_t response_delimiter_count;
     int have_sequence_length;
 } NiyahShardOptions;
 
@@ -78,6 +81,8 @@ static void usage(FILE *stream)
         "\n"
         "  niyah shard --tokenizer TOK --corpus FILE --shard-out SHARD\n"
         "      --sequence-length N\n"
+        "      [--record-mode stream|blank-line]\n"
+        "      [--response-delimiter TEXT ...]\n"
         "\n"
         "  niyah eval --tokenizer TOK --checkpoint CKPT --heldout FILE\n"
         "      [--format text|shard]\n"
@@ -313,6 +318,14 @@ static int parse_shard_options(
 
     memset(options, 0, sizeof(*options));
 
+    options->response_delimiters =
+        (const char **)calloc(
+            (size_t)argc,
+            sizeof(*options->response_delimiters));
+    if (options->response_delimiters == NULL) {
+        return 0;
+    }
+
     for (i = 2; i < argc; ++i) {
         const char *key = argv[i];
         const char *value;
@@ -336,6 +349,45 @@ static int parse_shard_options(
                 return 0;
             }
             options->have_sequence_length = 1;
+        } else if (strcmp(key, "--record-mode") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+
+            if (strcmp(value, "stream") == 0) {
+                options->record_mode =
+                    NIYAH_PREPARE_RECORD_STREAM;
+            } else if (strcmp(value, "blank-line") == 0) {
+                options->record_mode =
+                    NIYAH_PREPARE_RECORD_BLANK_LINE;
+            } else {
+                return 0;
+            }
+        } else if (strcmp(key, "--response-delimiter") == 0) {
+            size_t j;
+
+            value = next_value(argc, argv, &i);
+            if (value == NULL || value[0] == '\0') {
+                return 0;
+            }
+
+            for (j = 0U;
+                 j < options->response_delimiter_count;
+                 ++j) {
+                if (strcmp(
+                        options->response_delimiters[j],
+                        value) == 0) {
+                    return 0;
+                }
+            }
+
+            if (options->response_delimiter_count >=
+                (size_t)argc) {
+                return 0;
+            }
+
+            options->response_delimiters[
+                options->response_delimiter_count++] =
+                    value;
         } else {
             return 0;
         }
@@ -345,7 +397,10 @@ static int parse_shard_options(
            options->corpus_path != NULL &&
            options->shard_out != NULL &&
            options->have_sequence_length &&
-           options->sequence_length > 0U;
+           options->sequence_length > 0U &&
+           (options->response_delimiter_count == 0U ||
+            options->record_mode ==
+                NIYAH_PREPARE_RECORD_BLANK_LINE);
 }
 
 static FILE *niyah_cli_fopen(const char *path, const char *mode)
@@ -871,6 +926,10 @@ static int shard_command(int argc, char **argv)
     NiyahDatasetShard shard;
     uint8_t *corpus = NULL;
     size_t corpus_size = 0U;
+    size_t *record_offsets = NULL;
+    size_t *record_lengths = NULL;
+    NiyahDatasetSupervisedRecord *supervised_records = NULL;
+    size_t record_count = 0U;
     NiyahStatus status;
     int exit_code = 1;
 
@@ -878,13 +937,15 @@ static int shard_command(int argc, char **argv)
 
     if (!parse_shard_options(argc, argv, &options)) {
         usage(stderr);
+        free(options.response_delimiters);
         return 2;
     }
 
     if (!path_exists(options.tokenizer_path)) {
-        return fail_status(
+        exit_code = fail_status(
             "tokenizer_path",
             NIYAH_ERR_IO);
+        goto cleanup;
     }
 
     if (path_exists(options.shard_out)) {
@@ -892,6 +953,7 @@ static int shard_command(int argc, char **argv)
             stderr,
             "error_stage=output_exists "
             "status=NIYAH_ERR_INVALID_ARGUMENT\n");
+        free(options.response_delimiters);
         return 2;
     }
 
@@ -915,12 +977,130 @@ static int shard_command(int argc, char **argv)
         goto cleanup;
     }
 
-    status = niyah_dataset_shard_build_text(
-        tokenizer,
-        corpus,
-        corpus_size,
-        options.sequence_length,
-        &shard);
+    if (options.record_mode ==
+        NIYAH_PREPARE_RECORD_BLANK_LINE) {
+        size_t geometry_bytes;
+
+        if (!blank_line_records(
+                corpus,
+                corpus_size,
+                NULL,
+                NULL,
+                0U,
+                &record_count)) {
+            exit_code = fail_status(
+                "record_split",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
+        if (record_count > SIZE_MAX / sizeof(size_t)) {
+            exit_code = fail_status(
+                "record_allocation",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+
+        geometry_bytes =
+            record_count * sizeof(size_t);
+
+        record_offsets =
+            (size_t *)malloc(geometry_bytes);
+        record_lengths =
+            (size_t *)malloc(geometry_bytes);
+
+        if (record_offsets == NULL ||
+            record_lengths == NULL) {
+            exit_code = fail_status(
+                "record_allocation",
+                NIYAH_ERR_OUT_OF_MEMORY);
+            goto cleanup;
+        }
+
+        if (!blank_line_records(
+                corpus,
+                corpus_size,
+                record_offsets,
+                record_lengths,
+                record_count,
+                &record_count)) {
+            exit_code = fail_status(
+                "record_split",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
+        if (options.response_delimiter_count != 0U) {
+            size_t supervised_bytes;
+
+            if (record_count >
+                SIZE_MAX /
+                    sizeof(*supervised_records)) {
+                exit_code = fail_status(
+                    "response_allocation",
+                    NIYAH_ERR_OVERFLOW);
+                goto cleanup;
+            }
+
+            supervised_bytes =
+                record_count *
+                sizeof(*supervised_records);
+
+            supervised_records =
+                (NiyahDatasetSupervisedRecord *)
+                    malloc(supervised_bytes);
+
+            if (supervised_records == NULL) {
+                exit_code = fail_status(
+                    "response_allocation",
+                    NIYAH_ERR_OUT_OF_MEMORY);
+                goto cleanup;
+            }
+
+            if (!supervised_records_from_delimiters(
+                    corpus,
+                    corpus_size,
+                    record_offsets,
+                    record_lengths,
+                    record_count,
+                    options.response_delimiters,
+                    options.response_delimiter_count,
+                    supervised_records)) {
+                exit_code = fail_status(
+                    "response_split",
+                    NIYAH_ERR_INVALID_CONFIG);
+                goto cleanup;
+            }
+
+            status =
+                niyah_dataset_shard_build_supervised_records(
+                    tokenizer,
+                    corpus,
+                    corpus_size,
+                    supervised_records,
+                    record_count,
+                    options.sequence_length,
+                    &shard);
+        } else {
+            status = niyah_dataset_shard_build_records(
+                tokenizer,
+                corpus,
+                corpus_size,
+                record_offsets,
+                record_lengths,
+                record_count,
+                options.sequence_length,
+                &shard);
+        }
+    } else {
+        status = niyah_dataset_shard_build_text(
+            tokenizer,
+            corpus,
+            corpus_size,
+            options.sequence_length,
+            &shard);
+    }
+
     if (status != NIYAH_OK) {
         exit_code = fail_status(
             "shard_build",
@@ -947,20 +1127,27 @@ static int shard_command(int argc, char **argv)
         shard.token_count,
         shard.sample_count);
 
+    if (options.response_delimiter_count != 0U) {
+        fprintf(
+            stdout,
+            "NIYAH_SHARD_SUPERVISED=PASS "
+            "delimiters=%zu\n",
+            options.response_delimiter_count);
+    }
+
     exit_code = 0;
 
 cleanup:
     if (exit_code != 0) {
-        /*
-         * Existing outputs are rejected before any write is attempted,
-         * so removing this path on failure cannot delete caller data.
-         * This also removes a partially written shard if save fails.
-         */
         (void)remove(options.shard_out);
     }
 
     niyah_dataset_shard_destroy(&shard);
     niyah_tokenizer_destroy(tokenizer);
+    free(supervised_records);
+    free(record_lengths);
+    free(record_offsets);
+    free(options.response_delimiters);
     free(corpus);
     return exit_code;
 }
