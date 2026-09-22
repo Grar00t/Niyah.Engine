@@ -1165,8 +1165,12 @@ NiyahStatus niyah_checkpoint_identity_sha256(
         return NIYAH_ERR_IO;
 
     niyah_sha256_init(&sha);
-    while ((received = fread(buffer, 1U, sizeof(buffer), file)) != 0U)
-        niyah_sha256_update(&sha, buffer, received);
+    while ((received = fread(buffer, 1U, sizeof(buffer), file)) != 0U) {
+        if (!niyah_sha256_update(&sha, buffer, received)) {
+            (void)fclose(file);
+            return NIYAH_ERR_OVERFLOW;
+        }
+    }
 
     if (ferror(file) != 0) {
         (void)fclose(file);
