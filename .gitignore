@@ -1,9 +1,16 @@
 build/
 out/
+artifacts/
+data/generated/
 *.nyh
 *.ckpt
 *.cursor
 *.bin
+*.pt
+*.pth
+*.safetensors
 *.log
 .vscode/
 .idea/
+__pycache__/
+*.pyc
