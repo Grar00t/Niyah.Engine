@@ -41,6 +41,9 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME model_unit COMMAND test_model)
 
+    add_executable(test_sha256 tests/test_sha256.c src/niyah_sha256.c)
+    add_test(NAME sha256_unit COMMAND test_sha256)
+
     add_test(NAME cli_smoke
         COMMAND ${CMAKE_COMMAND}
             -DNIYAH_EXE=$<TARGET_FILE:niyah-cli>
