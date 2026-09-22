@@ -39,6 +39,14 @@ typedef struct NiyahPrepareOptions {
     int have_sequence_length;
 } NiyahPrepareOptions;
 
+typedef struct NiyahShardOptions {
+    const char *tokenizer_path;
+    const char *corpus_path;
+    const char *shard_out;
+    size_t sequence_length;
+    int have_sequence_length;
+} NiyahShardOptions;
+
 typedef struct NiyahEvalOptions {
     const char *tokenizer_path;
     const char *checkpoint_path;
@@ -67,6 +75,9 @@ static void usage(FILE *stream)
         "      --target-vocab N --min-pair-frequency N --sequence-length N\n"
         "      [--record-mode stream|blank-line]\n"
         "      [--response-delimiter TEXT ...]\n"
+        "\n"
+        "  niyah shard --tokenizer TOK --corpus FILE --shard-out SHARD\n"
+        "      --sequence-length N\n"
         "\n"
         "  niyah eval --tokenizer TOK --checkpoint CKPT --heldout FILE\n"
         "      [--format text|shard]\n"
@@ -291,6 +302,50 @@ static int parse_prepare_options(
            (options->response_delimiter_count == 0U ||
             options->record_mode ==
                 NIYAH_PREPARE_RECORD_BLANK_LINE);
+}
+
+static int parse_shard_options(
+    int argc,
+    char **argv,
+    NiyahShardOptions *options)
+{
+    int i;
+
+    memset(options, 0, sizeof(*options));
+
+    for (i = 2; i < argc; ++i) {
+        const char *key = argv[i];
+        const char *value;
+
+        if (strcmp(key, "--tokenizer") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->tokenizer_path = value;
+        } else if (strcmp(key, "--corpus") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->corpus_path = value;
+        } else if (strcmp(key, "--shard-out") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->shard_out = value;
+        } else if (strcmp(key, "--sequence-length") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL ||
+                !parse_size(value, &options->sequence_length)) {
+                return 0;
+            }
+            options->have_sequence_length = 1;
+        } else {
+            return 0;
+        }
+    }
+
+    return options->tokenizer_path != NULL &&
+           options->corpus_path != NULL &&
+           options->shard_out != NULL &&
+           options->have_sequence_length &&
+           options->sequence_length > 0U;
 }
 
 static FILE *niyah_cli_fopen(const char *path, const char *mode)
@@ -772,7 +827,6 @@ static int prepare_command(int argc, char **argv)
         goto cleanup;
     }
     shard_created = 1;
-
     fprintf(
         stdout,
         "P8C_PREPARE=PASS vocab=%zu merges=%zu tokens=%zu samples=%zu\n",
@@ -806,6 +860,107 @@ cleanup:
     free(record_lengths);
     free(record_offsets);
     free(options.response_delimiters);
+    free(corpus);
+    return exit_code;
+}
+
+static int shard_command(int argc, char **argv)
+{
+    NiyahShardOptions options;
+    NiyahTokenizer *tokenizer = NULL;
+    NiyahDatasetShard shard;
+    uint8_t *corpus = NULL;
+    size_t corpus_size = 0U;
+    NiyahStatus status;
+    int exit_code = 1;
+
+    memset(&shard, 0, sizeof(shard));
+
+    if (!parse_shard_options(argc, argv, &options)) {
+        usage(stderr);
+        return 2;
+    }
+
+    if (!path_exists(options.tokenizer_path)) {
+        return fail_status(
+            "tokenizer_path",
+            NIYAH_ERR_IO);
+    }
+
+    if (path_exists(options.shard_out)) {
+        fprintf(
+            stderr,
+            "error_stage=output_exists "
+            "status=NIYAH_ERR_INVALID_ARGUMENT\n");
+        return 2;
+    }
+
+    status = niyah_tokenizer_load(
+        options.tokenizer_path,
+        &tokenizer);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "tokenizer_load",
+            status);
+        goto cleanup;
+    }
+
+    if (!read_file_bytes(
+            options.corpus_path,
+            &corpus,
+            &corpus_size)) {
+        exit_code = fail_status(
+            "corpus_read",
+            NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    status = niyah_dataset_shard_build_text(
+        tokenizer,
+        corpus,
+        corpus_size,
+        options.sequence_length,
+        &shard);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "shard_build",
+            status);
+        goto cleanup;
+    }
+
+    status = niyah_dataset_shard_save(
+        &shard,
+        tokenizer,
+        options.shard_out);
+    if (status != NIYAH_OK) {
+        exit_code = fail_status(
+            "shard_save",
+            status);
+        goto cleanup;
+    }
+
+    fprintf(
+        stdout,
+        "NIYAH_SHARD=PASS "
+        "vocab=%zu tokens=%zu samples=%zu\n",
+        niyah_tokenizer_vocab_size(tokenizer),
+        shard.token_count,
+        shard.sample_count);
+
+    exit_code = 0;
+
+cleanup:
+    if (exit_code != 0) {
+        /*
+         * Existing outputs are rejected before any write is attempted,
+         * so removing this path on failure cannot delete caller data.
+         * This also removes a partially written shard if save fails.
+         */
+        (void)remove(options.shard_out);
+    }
+
+    niyah_dataset_shard_destroy(&shard);
+    niyah_tokenizer_destroy(tokenizer);
     free(corpus);
     return exit_code;
 }
@@ -1630,6 +1785,11 @@ int main(int argc, char **argv)
     if (argc >= 2 &&
         strcmp(argv[1], "prepare") == 0) {
         return prepare_command(argc, argv);
+    }
+
+    if (argc >= 2 &&
+        strcmp(argv[1], "shard") == 0) {
+        return shard_command(argc, argv);
     }
 
     if (argc >= 2 &&

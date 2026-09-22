@@ -11,6 +11,7 @@ endif()
 set(CORPUS "${WORK_DIR}/p8c_corpus.txt")
 set(TOK_A "${WORK_DIR}/p8c_a.tok")
 set(SHARD_A "${WORK_DIR}/p8c_a.srd")
+set(SHARD_REUSE "${WORK_DIR}/p8c_reuse.srd")
 set(TOK_B "${WORK_DIR}/p8c_b.tok")
 set(SHARD_B "${WORK_DIR}/p8c_b.srd")
 set(CKPT "${WORK_DIR}/p8c_train.ckpt")
@@ -30,6 +31,7 @@ file(REMOVE
     "${CORPUS}"
     "${TOK_A}"
     "${SHARD_A}"
+    "${SHARD_REUSE}"
     "${TOK_B}"
     "${SHARD_B}"
     "${CKPT}"
@@ -73,6 +75,49 @@ endif()
 if(NOT prepare_a_output MATCHES "P8C_PREPARE=PASS")
     message(FATAL_ERROR "prepare A marker missing: ${prepare_a_output}")
 endif()
+
+file(SHA256 "${TOK_A}" tokenizer_before_shard)
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" shard
+        --tokenizer "${TOK_A}"
+        --corpus "${CORPUS}"
+        --shard-out "${SHARD_REUSE}"
+        --sequence-length 4
+    RESULT_VARIABLE shard_reuse_result
+    OUTPUT_VARIABLE shard_reuse_output
+    ERROR_VARIABLE shard_reuse_error)
+
+if(NOT shard_reuse_result EQUAL 0)
+    message(FATAL_ERROR
+        "existing-tokenizer shard failed: ${shard_reuse_result}\n"
+        "stdout=${shard_reuse_output}\n"
+        "stderr=${shard_reuse_error}")
+endif()
+
+if(NOT shard_reuse_output MATCHES "NIYAH_SHARD=PASS")
+    message(FATAL_ERROR
+        "existing-tokenizer shard marker missing: ${shard_reuse_output}")
+endif()
+
+file(SHA256 "${TOK_A}" tokenizer_after_shard)
+
+if(NOT tokenizer_before_shard STREQUAL tokenizer_after_shard)
+    message(FATAL_ERROR
+        "existing tokenizer was modified by shard command")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+        "${SHARD_A}" "${SHARD_REUSE}"
+    RESULT_VARIABLE shard_reuse_compare_result)
+
+if(NOT shard_reuse_compare_result EQUAL 0)
+    message(FATAL_ERROR
+        "existing-tokenizer shard differs from prepare output")
+endif()
+
+message("P8G_EXISTING_TOKENIZER_SHARD=PASS")
 
 execute_process(
     COMMAND "${NIYAH_CLI}" prepare
