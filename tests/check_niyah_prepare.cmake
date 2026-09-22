@@ -19,11 +19,13 @@ set(CURSOR "${WORK_DIR}/p8c_train.cursor")
 set(RECORD_CORPUS "${WORK_DIR}/p8d_records.txt")
 set(RECORD_TOK "${WORK_DIR}/p8d_records.tok")
 set(RECORD_SHARD "${WORK_DIR}/p8d_records.srd")
+set(RECORD_SHARD_REUSE "${WORK_DIR}/p8d_records_reuse.srd")
 set(RECORD_CKPT "${WORK_DIR}/p8d_records.ckpt")
 set(RECORD_CURSOR "${WORK_DIR}/p8d_records.cursor")
 set(SUP_CORPUS "${WORK_DIR}/p8f_supervised.txt")
 set(SUP_TOK "${WORK_DIR}/p8f_supervised.tok")
 set(SUP_SHARD "${WORK_DIR}/p8f_supervised.srd")
+set(SUP_SHARD_REUSE "${WORK_DIR}/p8f_supervised_reuse.srd")
 set(SUP_CKPT "${WORK_DIR}/p8f_supervised.ckpt")
 set(SUP_CURSOR "${WORK_DIR}/p8f_supervised.cursor")
 
@@ -39,11 +41,13 @@ file(REMOVE
     "${RECORD_CORPUS}"
     "${RECORD_TOK}"
     "${RECORD_SHARD}"
+    "${RECORD_SHARD_REUSE}"
     "${RECORD_CKPT}"
     "${RECORD_CURSOR}"
     "${SUP_CORPUS}"
     "${SUP_TOK}"
     "${SUP_SHARD}"
+    "${SUP_SHARD_REUSE}"
     "${SUP_CKPT}"
     "${SUP_CURSOR}")
 
@@ -220,6 +224,41 @@ if(NOT record_prepare_result EQUAL 0)
 endif()
 
 execute_process(
+    COMMAND "${NIYAH_CLI}" shard
+        --tokenizer "${RECORD_TOK}"
+        --corpus "${RECORD_CORPUS}"
+        --shard-out "${RECORD_SHARD_REUSE}"
+        --sequence-length 64
+        --record-mode blank-line
+    RESULT_VARIABLE record_reuse_result
+    OUTPUT_VARIABLE record_reuse_output
+    ERROR_VARIABLE record_reuse_error)
+
+if(NOT record_reuse_result EQUAL 0)
+    message(FATAL_ERROR
+        "existing-tokenizer record shard failed: ${record_reuse_result}\n"
+        "stdout=${record_reuse_output}\n"
+        "stderr=${record_reuse_error}")
+endif()
+
+if(NOT record_reuse_output MATCHES "NIYAH_SHARD=PASS")
+    message(FATAL_ERROR
+        "record shard success marker missing: ${record_reuse_output}")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+        "${RECORD_SHARD}" "${RECORD_SHARD_REUSE}"
+    RESULT_VARIABLE record_reuse_compare)
+
+if(NOT record_reuse_compare EQUAL 0)
+    message(FATAL_ERROR
+        "existing-tokenizer record shard differs from prepare output")
+endif()
+
+message("P8H_EXISTING_TOKENIZER_RECORD_SHARD=PASS")
+
+execute_process(
     COMMAND "${NIYAH_TRAIN}" new
         --tokenizer "${RECORD_TOK}"
         --shard "${RECORD_SHARD}"
@@ -293,6 +332,44 @@ if(NOT sup_prepare_output MATCHES
 endif()
 
 execute_process(
+    COMMAND "${NIYAH_CLI}" shard
+        --tokenizer "${SUP_TOK}"
+        --corpus "${SUP_CORPUS}"
+        --shard-out "${SUP_SHARD_REUSE}"
+        --sequence-length 64
+        --record-mode blank-line
+        --response-delimiter "Assistant: "
+        --response-delimiter "Bot: "
+    RESULT_VARIABLE sup_reuse_result
+    OUTPUT_VARIABLE sup_reuse_output
+    ERROR_VARIABLE sup_reuse_error)
+
+if(NOT sup_reuse_result EQUAL 0)
+    message(FATAL_ERROR
+        "existing-tokenizer supervised shard failed: ${sup_reuse_result}\n"
+        "stdout=${sup_reuse_output}\n"
+        "stderr=${sup_reuse_error}")
+endif()
+
+if(NOT sup_reuse_output MATCHES
+    "NIYAH_SHARD_SUPERVISED=PASS delimiters=2")
+    message(FATAL_ERROR
+        "supervised shard marker missing: ${sup_reuse_output}")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+        "${SUP_SHARD}" "${SUP_SHARD_REUSE}"
+    RESULT_VARIABLE sup_reuse_compare)
+
+if(NOT sup_reuse_compare EQUAL 0)
+    message(FATAL_ERROR
+        "existing-tokenizer supervised shard differs from prepare output")
+endif()
+
+message("P8I_EXISTING_TOKENIZER_SUPERVISED_SHARD=PASS")
+
+execute_process(
     COMMAND "${NIYAH_TRAIN}" new
         --tokenizer "${SUP_TOK}"
         --shard "${SUP_SHARD}"
@@ -363,6 +440,11 @@ if(NOT shard_overwrite_result EQUAL 2)
     message(FATAL_ERROR 
         "Overwrite refusal failed: expected exit 2, got ${shard_overwrite_result}\n"
         "stderr: ${shard_overwrite_err}")
+endif()
+
+if(NOT shard_overwrite_err MATCHES "error_stage=output_exists")
+    message(FATAL_ERROR
+        "Overwrite refusal marker missing: ${shard_overwrite_err}")
 endif()
 
 if(NOT dummy_hash_before STREQUAL dummy_hash_after)
