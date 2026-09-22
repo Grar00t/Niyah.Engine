@@ -650,32 +650,44 @@ __global__ static void niyah_cuda_rmsnorm_kernel(
     size_t n,
     float eps)
 {
+    __shared__ double partial[128];
     __shared__ float shared_inv_rms;
+    const unsigned int lane = threadIdx.x;
+    double sum_sq = 0.0;
+    size_t i;
+    unsigned int stride;
 
-    if (threadIdx.x == 0U) {
-        double sum_sq = 0.0;
-        size_t i;
+    for (i = (size_t)lane;
+         i < n;
+         i += (size_t)blockDim.x) {
+        const double v = (double)x[i];
+        sum_sq += v * v;
+    }
 
-        for (i = 0U; i < n; ++i) {
-            const double v = (double)x[i];
-            sum_sq += v * v;
+    partial[lane] = sum_sq;
+    __syncthreads();
+
+    for (stride = blockDim.x / 2U;
+         stride > 0U;
+         stride >>= 1U) {
+        if (lane < stride) {
+            partial[lane] += partial[lane + stride];
         }
+        __syncthreads();
+    }
 
+    if (lane == 0U) {
         shared_inv_rms =
-            1.0f / sqrtf((float)(sum_sq / (double)n) + eps);
+            1.0f / sqrtf((float)(partial[0] / (double)n) + eps);
     }
 
     __syncthreads();
 
-    {
-        size_t i;
-
-        for (i = (size_t)threadIdx.x;
-             i < n;
-             i += (size_t)blockDim.x) {
-            out[i] =
-                x[i] * shared_inv_rms * weight[i];
-        }
+    for (i = (size_t)lane;
+         i < n;
+         i += (size_t)blockDim.x) {
+        out[i] =
+            x[i] * shared_inv_rms * weight[i];
     }
 }
 
@@ -725,62 +737,131 @@ __global__ static void niyah_cuda_attention_one_kernel(
     size_t head_dim,
     size_t kv_dim)
 {
+    __shared__ float partial[128];
+    __shared__ float shared_max;
+    __shared__ float shared_normalizer;
     const size_t head = (size_t)blockIdx.x;
+    const unsigned int lane = threadIdx.x;
+    const size_t group_size = n_heads / n_kv_heads;
+    const size_t kv_head = head / group_size;
+    const float *q_head = q + head * head_dim;
+    float *head_scores = scores + head * score_stride;
+    const float scale = 1.0f / sqrtf((float)head_dim);
+    size_t source;
+    size_t d;
+    unsigned int stride;
+    float local_max = -FLT_MAX;
+    float local_sum = 0.0f;
 
-    if (head < n_heads && threadIdx.x == 0U) {
-        const size_t group_size = n_heads / n_kv_heads;
-        const size_t kv_head = head / group_size;
-        const float *q_head = q + head * head_dim;
-        float *head_scores = scores + head * score_stride;
-        const float scale = 1.0f / sqrtf((float)head_dim);
-        float max_score = -FLT_MAX;
-        float normalizer = 0.0f;
-        size_t source;
-        size_t d;
+    if (head >= n_heads) {
+        return;
+    }
 
-        for (source = 0U; source <= position; ++source) {
-            const float *k_head =
-                keys +
+    for (source = 0U; source <= position; ++source) {
+        const float *k_head =
+            keys +
+            layer_base +
+            source * kv_dim +
+            kv_head * head_dim;
+        float dot = 0.0f;
+
+        for (d = (size_t)lane;
+             d < head_dim;
+             d += (size_t)blockDim.x) {
+            dot += q_head[d] * k_head[d];
+        }
+
+        partial[lane] = dot;
+        __syncthreads();
+
+        for (stride = blockDim.x / 2U;
+             stride > 0U;
+             stride >>= 1U) {
+            if (lane < stride) {
+                partial[lane] += partial[lane + stride];
+            }
+            __syncthreads();
+        }
+
+        if (lane == 0U) {
+            head_scores[source] = partial[0] * scale;
+        }
+        __syncthreads();
+    }
+
+    for (source = (size_t)lane;
+         source <= position;
+         source += (size_t)blockDim.x) {
+        const float score = head_scores[source];
+        if (score > local_max) {
+            local_max = score;
+        }
+    }
+
+    partial[lane] = local_max;
+    __syncthreads();
+
+    for (stride = blockDim.x / 2U;
+         stride > 0U;
+         stride >>= 1U) {
+        if (lane < stride &&
+            partial[lane + stride] > partial[lane]) {
+            partial[lane] = partial[lane + stride];
+        }
+        __syncthreads();
+    }
+
+    if (lane == 0U) {
+        shared_max = partial[0];
+    }
+    __syncthreads();
+
+    for (source = (size_t)lane;
+         source <= position;
+         source += (size_t)blockDim.x) {
+        const float probability =
+            expf(head_scores[source] - shared_max);
+        head_scores[source] = probability;
+        local_sum += probability;
+    }
+
+    partial[lane] = local_sum;
+    __syncthreads();
+
+    for (stride = blockDim.x / 2U;
+         stride > 0U;
+         stride >>= 1U) {
+        if (lane < stride) {
+            partial[lane] += partial[lane + stride];
+        }
+        __syncthreads();
+    }
+
+    if (lane == 0U) {
+        shared_normalizer = partial[0];
+    }
+    __syncthreads();
+
+    for (d = (size_t)lane;
+         d < head_dim;
+         d += (size_t)blockDim.x) {
+        float value = 0.0f;
+
+        for (source = 0U;
+             source <= position;
+             ++source) {
+            const float *v_head =
+                values +
                 layer_base +
                 source * kv_dim +
                 kv_head * head_dim;
-            float dot = 0.0f;
 
-            for (d = 0U; d < head_dim; ++d) {
-                dot += q_head[d] * k_head[d];
-            }
-
-            head_scores[source] = dot * scale;
-            if (head_scores[source] > max_score) {
-                max_score = head_scores[source];
-            }
+            value +=
+                (head_scores[source] / shared_normalizer) *
+                v_head[d];
         }
 
-        for (source = 0U; source <= position; ++source) {
-            head_scores[source] =
-                expf(head_scores[source] - max_score);
-            normalizer += head_scores[source];
-        }
-
-        for (d = 0U; d < head_dim; ++d) {
-            float value = 0.0f;
-
-            for (source = 0U;
-                 source <= position;
-                 ++source) {
-                const float *v_head =
-                    values +
-                    layer_base +
-                    source * kv_dim +
-                    kv_head * head_dim;
-
-                value +=
-                    (head_scores[source] / normalizer) *
-                    v_head[d];
-            }
-
-            out[head * head_dim + d] = value;
-        }
+        out[head * head_dim + d] = value;
     }
 }
 
@@ -1110,6 +1191,7 @@ static int niyah_cuda_attention_one_device(
         (size_t)decode_state->config.n_heads;
     const size_t n_kv_heads =
         (size_t)decode_state->config.n_kv_heads;
+    const unsigned int threads = 128U;
     size_t layer_base;
     size_t per_layer;
     unsigned int blocks;
@@ -1119,6 +1201,7 @@ static int niyah_cuda_attention_one_device(
         decode_state == NULL ||
         scores == NULL ||
         n_heads == 0U ||
+        n_heads > (size_t)UINT_MAX ||
         n_kv_heads == 0U ||
         (n_heads % n_kv_heads) != 0U ||
         layer_index >= decode_state->config.n_layers ||
@@ -1130,13 +1213,13 @@ static int niyah_cuda_attention_one_device(
         !niyah_cuda_size_mul_ok(
             (size_t)layer_index,
             per_layer,
-            &layer_base) ||
-        niyah_cuda_blocks_for(
-            n_heads, 1U, &blocks) != 0) {
+            &layer_base)) {
         return 1;
     }
 
-    niyah_cuda_attention_one_kernel<<<blocks, 1U>>>(
+    blocks = (unsigned int)n_heads;
+
+    niyah_cuda_attention_one_kernel<<<blocks, threads>>>(
         out,
         q,
         (const float *)decode_state->device_keys,
@@ -1163,7 +1246,8 @@ static int niyah_cuda_add_device(
 
     if (dst == NULL || src == NULL || dst == src ||
         niyah_cuda_blocks_for(
-            n, threads, &blocks) != 0) {
+            n, threads,
+            &blocks) != 0) {
         return 1;
     }
 
@@ -1183,7 +1267,8 @@ static int niyah_cuda_silu_mul_device(
 
     if (gate == NULL || up == NULL || gate == up ||
         niyah_cuda_blocks_for(
-            n, threads, &blocks) != 0) {
+            n, threads,
+            &blocks) != 0) {
         return 1;
     }
 
