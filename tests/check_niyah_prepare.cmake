@@ -336,3 +336,53 @@ endif()
 
 message("P8F_SUPERVISED_PREPARE=PASS")
 message("P8C_NATIVE_CORPUS_PREPARE=PASS")
+
+
+# ------------------------------------------------------------
+# PR87: Negative Path Coverage for `niyah shard`
+# ------------------------------------------------------------
+
+# 1. Overwrite Refusal Invariant
+file(WRITE "${WORK_DIR}/dummy_target.srd" "DO_NOT_OVERWRITE")
+file(SHA256 "${WORK_DIR}/dummy_target.srd" dummy_hash_before)
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" shard
+        --tokenizer "${TOK_A}"
+        --corpus "${CORPUS}"
+        --shard-out "${WORK_DIR}/dummy_target.srd"
+        --sequence-length 4
+    RESULT_VARIABLE shard_overwrite_result
+    OUTPUT_VARIABLE shard_overwrite_out
+    ERROR_VARIABLE shard_overwrite_err
+)
+
+file(SHA256 "${WORK_DIR}/dummy_target.srd" dummy_hash_after)
+
+if(NOT shard_overwrite_result EQUAL 2)
+    message(FATAL_ERROR 
+        "Overwrite refusal failed: expected exit 2, got ${shard_overwrite_result}\n"
+        "stderr: ${shard_overwrite_err}")
+endif()
+
+if(NOT dummy_hash_before STREQUAL dummy_hash_after)
+    message(FATAL_ERROR "Overwrite refusal violated: target file was modified!")
+endif()
+
+message("P87_OVERWRITE_REFUSAL=PASS")
+
+# 2. Invalid Path / Save Failure Invariant
+execute_process(
+    COMMAND "${NIYAH_CLI}" shard
+        --tokenizer "${TOK_A}"
+        --corpus "${CORPUS}"
+        --shard-out "${WORK_DIR}/nonexistent_dir/shard.srd"
+        --sequence-length 4
+    RESULT_VARIABLE shard_invalid_path_result
+)
+
+if(shard_invalid_path_result EQUAL 0)
+    message(FATAL_ERROR "Invalid path test failed: expected non-zero exit, got 0")
+endif()
+
+message("P87_INVALID_PATH_REJECTION=PASS")
