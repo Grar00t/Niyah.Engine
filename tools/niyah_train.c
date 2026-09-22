@@ -49,6 +49,8 @@ typedef struct NiyahTrainOptions {
     int have_epsilon;
     int have_weight_decay;
     int have_max_grad_norm;
+    uint64_t warmup_steps;
+    int have_warmup_steps;
     int progress_details;
 } NiyahTrainOptions;
 
@@ -69,7 +71,7 @@ static void usage(FILE *stream)
         "      --layers N --heads N --kv-heads N --ffn-hidden-dim N\n"
         "      --rms-norm-eps F --tie-word-embeddings 0|1\n"
         "      --learning-rate F --beta1 F --beta2 F --epsilon F\n"
-        "      --weight-decay F --max-grad-norm F [--progress-details]\n"
+        "      --weight-decay F --max-grad-norm F [--warmup-steps N] [--progress-details]\n"
         "\n"
         "  niyah-train resume --tokenizer TOK --shard SHARD [--shard SHARD ...]\n"
         "      --checkpoint-in CKPT --cursor-in CURSOR\n"
@@ -114,21 +116,44 @@ static void print_training_progress(size_t update_index, size_t updates,
 {
     const NiyahTrainProgressContext *context =
         (const NiyahTrainProgressContext *)user_data;
+    float effective_learning_rate = 0.0f;
+    NiyahStatus lr_status = NIYAH_OK;
+
+    if (context != NULL && context->details != 0) {
+        lr_status = niyah_adamw_linear_warmup_learning_rate(
+            context->optimizer_config->learning_rate,
+            context->optimizer_state->step,
+            context->optimizer_state->warmup_steps,
+            &effective_learning_rate);
+    }
 
     fprintf(stderr, "update=%zu/%zu loss=%.9g",
             update_index + 1U, updates, (double)loss);
 
     if (context != NULL && context->details != 0) {
-        fprintf(
-            stderr,
-            " optimizer_step=%" PRIu64
-            " learning_rate=%.9g"
-            " cursor_epoch=%" PRIu64
-            " cursor_position=%zu",
-            context->optimizer_state->step,
-            (double)context->optimizer_config->learning_rate,
-            context->cursor->epoch,
-            context->cursor->position);
+        if (lr_status == NIYAH_OK) {
+            fprintf(
+                stderr,
+                " optimizer_step=%" PRIu64
+                " learning_rate=%.9g"
+                " cursor_epoch=%" PRIu64
+                " cursor_position=%zu",
+                context->optimizer_state->step,
+                (double)effective_learning_rate,
+                context->cursor->epoch,
+                context->cursor->position);
+        } else {
+            fprintf(
+                stderr,
+                " optimizer_step=%" PRIu64
+                " learning_rate_status=%d"
+                " cursor_epoch=%" PRIu64
+                " cursor_position=%zu",
+                context->optimizer_state->step,
+                (int)lr_status,
+                context->cursor->epoch,
+                context->cursor->position);
+        }
     }
 
     fputc('\n', stderr);
@@ -298,6 +323,10 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
             value = next_value(argc, argv, &i);
             if (value == NULL || !parse_float_value(value, &options->optimizer_config.max_grad_norm)) return 0;
             options->have_max_grad_norm = 1;
+        } else if (strcmp(key, "--warmup-steps") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL || !parse_u64(value, &options->warmup_steps)) return 0;
+            options->have_warmup_steps = 1;
         } else if (strcmp(key, "--progress-details") == 0) {
             options->progress_details = 1;
         } else {
@@ -315,7 +344,8 @@ static int new_fields_present(const NiyahTrainOptions *o)
            o->have_ffn_hidden_dim || o->have_rms_norm_eps ||
            o->have_tie_word_embeddings || o->have_learning_rate ||
            o->have_beta1 || o->have_beta2 || o->have_epsilon ||
-           o->have_weight_decay || o->have_max_grad_norm;
+           o->have_weight_decay || o->have_max_grad_norm ||
+           o->have_warmup_steps;
 }
 
 static int validate_options(const NiyahTrainOptions *o)
@@ -534,6 +564,7 @@ int main(int argc, char **argv)
             goto cleanup;
         }
         optimizer_config = options.optimizer_config;
+        optimizer_state.warmup_steps = options.warmup_steps;
         status = niyah_dataset_cursor_init(
             &cursor, sample_count, options.data_seed);
         if (status != NIYAH_OK) {

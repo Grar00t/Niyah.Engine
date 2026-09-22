@@ -566,8 +566,10 @@ NiyahStatus niyah_adamw_step(NiyahModel *model,
 {
     NiyahModelLayout canonical;
     NiyahAdamWDecayPlan plan;
+    NiyahAdamWConfig effective_config;
     size_t bytes = 0U;
     uint64_t next_step;
+    float effective_learning_rate = 0.0f;
     double norm = 0.0;
     double clip_scale = 1.0;
     double correction1 = 0.0;
@@ -618,6 +620,19 @@ NiyahStatus niyah_adamw_step(NiyahModel *model,
     }
 
     next_step = state->step + UINT64_C(1);
+
+    status = niyah_adamw_linear_warmup_learning_rate(
+        config->learning_rate,
+        next_step,
+        state->warmup_steps,
+        &effective_learning_rate);
+    if (status != NIYAH_OK) {
+        return status;
+    }
+
+    effective_config = *config;
+    effective_config.learning_rate = effective_learning_rate;
+
     if (!niyah_bias_correction(config->beta1, next_step, &correction1) ||
         !niyah_bias_correction(config->beta2, next_step, &correction2)) {
         return NIYAH_ERR_INVALID_CONFIG;
@@ -627,14 +642,16 @@ NiyahStatus niyah_adamw_step(NiyahModel *model,
         return status;
     }
 
-    status = niyah_adamw_validate_plan(model, gradients, state, config, &plan,
-                                       clip_scale, correction1, correction2);
+    status = niyah_adamw_validate_plan(
+        model, gradients, state, &effective_config, &plan,
+        clip_scale, correction1, correction2);
     if (status != NIYAH_OK) {
         return status;
     }
 
-    niyah_adamw_commit_plan(model, gradients, state, config, &plan,
-                            clip_scale, correction1, correction2);
+    niyah_adamw_commit_plan(
+        model, gradients, state, &effective_config, &plan,
+        clip_scale, correction1, correction2);
     state->step = next_step;
     return NIYAH_OK;
 }

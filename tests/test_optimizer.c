@@ -658,6 +658,113 @@ static void run_training_chain(int tied)
     niyah_model_destroy(&a);
 }
 
+static void test_linear_warmup_applied_to_adamw(void)
+{
+    static const float reference_rates[4] = {
+        0.025f, 0.05f, 0.075f, 0.1f
+    };
+
+    NiyahModelConfig config = test_config(0);
+    NiyahModel scheduled_model;
+    NiyahModel reference_model;
+    NiyahModelGradients scheduled_gradients;
+    NiyahModelGradients reference_gradients;
+    NiyahAdamWState scheduled_state;
+    NiyahAdamWState reference_state;
+    NiyahAdamWConfig scheduled_config = default_optimizer_config();
+    NiyahAdamWConfig reference_config = default_optimizer_config();
+    size_t bytes;
+    size_t i;
+    size_t step;
+
+    memset(&scheduled_model, 0, sizeof(scheduled_model));
+    memset(&reference_model, 0, sizeof(reference_model));
+    memset(&scheduled_gradients, 0, sizeof(scheduled_gradients));
+    memset(&reference_gradients, 0, sizeof(reference_gradients));
+    memset(&scheduled_state, 0, sizeof(scheduled_state));
+    memset(&reference_state, 0, sizeof(reference_state));
+
+    CHECK(niyah_model_create(&scheduled_model, &config) == NIYAH_OK);
+    CHECK(niyah_model_create(&reference_model, &config) == NIYAH_OK);
+
+    CHECK(niyah_model_reset_parameters(
+              &scheduled_model, UINT64_C(20260922)) == NIYAH_OK);
+    CHECK(niyah_model_reset_parameters(
+              &reference_model, UINT64_C(20260922)) == NIYAH_OK);
+
+    CHECK(niyah_model_gradients_create(
+              &scheduled_gradients, &scheduled_model) == NIYAH_OK);
+    CHECK(niyah_model_gradients_create(
+              &reference_gradients, &reference_model) == NIYAH_OK);
+
+    CHECK(niyah_adamw_state_create(
+              &scheduled_state, &scheduled_model) == NIYAH_OK);
+    CHECK(niyah_adamw_state_create(
+              &reference_state, &reference_model) == NIYAH_OK);
+
+    scheduled_state.warmup_steps = UINT64_C(4);
+
+    scheduled_config.learning_rate = 0.1f;
+    scheduled_config.weight_decay = 0.0f;
+    scheduled_config.max_grad_norm = 10.0f;
+
+    reference_config = scheduled_config;
+
+    for (i = 0U; i < scheduled_gradients.count; ++i) {
+        const float value =
+            (float)((int)(i % 7U) - 3) * 0.01f;
+
+        scheduled_gradients.values[i] = value;
+        reference_gradients.values[i] = value;
+    }
+
+    bytes = scheduled_model.weight_count * sizeof(float);
+
+    for (step = 0U; step < 4U; ++step) {
+        reference_config.learning_rate = reference_rates[step];
+
+        CHECK(niyah_adamw_step(
+                  &scheduled_model,
+                  &scheduled_gradients,
+                  &scheduled_state,
+                  &scheduled_config) == NIYAH_OK);
+
+        CHECK(niyah_adamw_step(
+                  &reference_model,
+                  &reference_gradients,
+                  &reference_state,
+                  &reference_config) == NIYAH_OK);
+
+        CHECK(scheduled_state.step == (uint64_t)(step + 1U));
+        CHECK(reference_state.step == scheduled_state.step);
+
+        CHECK(memcmp(
+                  scheduled_model.weights,
+                  reference_model.weights,
+                  bytes) == 0);
+
+        CHECK(memcmp(
+                  scheduled_state.m,
+                  reference_state.m,
+                  bytes) == 0);
+
+        CHECK(memcmp(
+                  scheduled_state.v,
+                  reference_state.v,
+                  bytes) == 0);
+    }
+
+    CHECK(scheduled_state.warmup_steps == UINT64_C(4));
+    CHECK(reference_state.warmup_steps == UINT64_C(0));
+
+    niyah_adamw_state_destroy(&reference_state);
+    niyah_adamw_state_destroy(&scheduled_state);
+    niyah_model_gradients_destroy(&reference_gradients);
+    niyah_model_gradients_destroy(&scheduled_gradients);
+    niyah_model_destroy(&reference_model);
+    niyah_model_destroy(&scheduled_model);
+}
+
 int main(void)
 {
     test_state_initialization_and_identity();
@@ -665,6 +772,7 @@ int main(void)
     test_hyperparameter_validation();
     test_global_norm_and_clipping();
     test_hand_computed_adamw();
+    test_linear_warmup_applied_to_adamw();
     test_decay_policy(1);
     test_decay_policy(0);
     test_zero_decay_zero_gradient();
