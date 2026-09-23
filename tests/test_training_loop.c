@@ -348,6 +348,200 @@ static void test_minibatch_accumulation_deterministic(void)
     niyah_model_destroy(&a);
 }
 
+static void test_accumulated_step_token_weighted(void)
+{
+    static const uint32_t short_tokens[] = {1U};
+    static const uint32_t short_targets[] = {2U};
+    static const uint32_t long_tokens[] = {1U, 2U, 3U};
+    static const uint32_t long_targets[] = {2U, 3U, 4U};
+
+    const NiyahTrainingSample samples[] = {
+        {short_tokens, short_targets, 1U, 0U},
+        {long_tokens, long_targets, 3U, 0U}
+    };
+
+    NiyahModelConfig config = test_config();
+    NiyahAdamWConfig opt = optimizer_config();
+
+    NiyahModel actual, expected;
+    NiyahAdamWState actual_state, expected_state;
+    NiyahDatasetCursor cursor;
+
+    NiyahModelGradients sample_actual;
+    NiyahModelGradients accum_actual;
+    NiyahModelGradients sample_expected;
+    NiyahModelGradients accum_expected;
+
+    float *workspace = NULL;
+    size_t workspace_count = 0U;
+    size_t consumed = 0U;
+    size_t order[2];
+    size_t total_supervised = 0U;
+    double weighted_loss = 0.0;
+    float actual_loss = NAN;
+    float expected_loss;
+    size_t k;
+    size_t i;
+
+    memset(&actual, 0, sizeof(actual));
+    memset(&expected, 0, sizeof(expected));
+    memset(&actual_state, 0, sizeof(actual_state));
+    memset(&expected_state, 0, sizeof(expected_state));
+    memset(&cursor, 0, sizeof(cursor));
+    memset(&sample_actual, 0, sizeof(sample_actual));
+    memset(&accum_actual, 0, sizeof(accum_actual));
+    memset(&sample_expected, 0, sizeof(sample_expected));
+    memset(&accum_expected, 0, sizeof(accum_expected));
+
+    CHECK(niyah_model_create(&actual, &config) == NIYAH_OK);
+    CHECK(niyah_model_create(&expected, &config) == NIYAH_OK);
+
+    CHECK(niyah_model_reset_parameters(
+              &actual, UINT64_C(20260923)) == NIYAH_OK);
+    CHECK(niyah_model_reset_parameters(
+              &expected, UINT64_C(20260923)) == NIYAH_OK);
+
+    CHECK(niyah_adamw_state_create(
+              &actual_state, &actual) == NIYAH_OK);
+    CHECK(niyah_adamw_state_create(
+              &expected_state, &expected) == NIYAH_OK);
+
+    CHECK(niyah_dataset_cursor_init(
+              &cursor, 2U, UINT64_C(42)) == NIYAH_OK);
+
+    CHECK(niyah_model_gradients_create(
+              &sample_actual, &actual) == NIYAH_OK);
+    CHECK(niyah_model_gradients_create(
+              &accum_actual, &actual) == NIYAH_OK);
+    CHECK(niyah_model_gradients_create(
+              &sample_expected, &expected) == NIYAH_OK);
+    CHECK(niyah_model_gradients_create(
+              &accum_expected, &expected) == NIYAH_OK);
+
+    CHECK(niyah_train_backward_workspace_floats(
+              &config, 3U, &workspace_count) == NIYAH_OK);
+
+    workspace = (float *)calloc(
+        workspace_count, sizeof(float));
+    CHECK(workspace != NULL);
+
+    if (workspace != NULL) {
+        order[0] = cursor.order[0];
+        order[1] = cursor.order[1];
+
+        niyah_model_gradients_zero(&accum_expected);
+
+        for (k = 0U; k < 2U; ++k) {
+            const NiyahTrainingSample *sample =
+                &samples[order[k]];
+            const size_t supervised =
+                sample->token_count - sample->loss_start;
+            float sample_loss = NAN;
+
+            CHECK(niyah_train_backward_masked(
+                      &expected,
+                      sample->tokens,
+                      sample->targets,
+                      sample->token_count,
+                      sample->loss_start,
+                      &sample_loss,
+                      &sample_expected,
+                      workspace,
+                      workspace_count) == NIYAH_OK);
+
+            for (i = 0U;
+                 i < sample_expected.count;
+                 ++i) {
+                sample_expected.values[i] *=
+                    (float)supervised;
+            }
+
+            for (i = 0U;
+                 i < accum_expected.count;
+                 ++i) {
+                accum_expected.values[i] +=
+                    sample_expected.values[i];
+            }
+
+            total_supervised += supervised;
+            weighted_loss +=
+                (double)sample_loss *
+                (double)supervised;
+        }
+
+        for (i = 0U;
+             i < accum_expected.count;
+             ++i) {
+            accum_expected.values[i] /=
+                (float)total_supervised;
+        }
+
+        expected_loss =
+            (float)(
+                weighted_loss /
+                (double)total_supervised);
+
+        CHECK(niyah_adamw_step(
+                  &expected,
+                  &accum_expected,
+                  &expected_state,
+                  &opt) == NIYAH_OK);
+
+        CHECK(niyah_training_accumulated_step(
+                  &actual,
+                  samples,
+                  2U,
+                  &cursor,
+                  &sample_actual,
+                  &accum_actual,
+                  workspace,
+                  workspace_count,
+                  &actual_state,
+                  &opt,
+                  2U,
+                  1U,
+                  &consumed,
+                  &actual_loss) == NIYAH_OK);
+
+        CHECK(consumed == 2U);
+        CHECK(total_supervised == 4U);
+        CHECK(actual_loss == expected_loss);
+
+        CHECK(memcmp(
+                  actual.weights,
+                  expected.weights,
+                  actual.weight_count *
+                      sizeof(float)) == 0);
+
+        CHECK(memcmp(
+                  actual_state.m,
+                  expected_state.m,
+                  actual_state.count *
+                      sizeof(float)) == 0);
+
+        CHECK(memcmp(
+                  actual_state.v,
+                  expected_state.v,
+                  actual_state.count *
+                      sizeof(float)) == 0);
+    }
+
+    free(workspace);
+
+    niyah_model_gradients_destroy(&accum_expected);
+    niyah_model_gradients_destroy(&sample_expected);
+    niyah_model_gradients_destroy(&accum_actual);
+    niyah_model_gradients_destroy(&sample_actual);
+
+    niyah_dataset_cursor_destroy(&cursor);
+
+    niyah_adamw_state_destroy(&expected_state);
+    niyah_adamw_state_destroy(&actual_state);
+
+    niyah_model_destroy(&expected);
+    niyah_model_destroy(&actual);
+}
+
 static void test_accumulated_step_rolls_back_whole_group(void)
 {
     static const uint32_t good_tokens[] = {1U, 2U, 3U};
@@ -549,6 +743,7 @@ int main(void)
     test_cursor_rollback_on_backward_failure();
     test_loss_decreases();
     test_accumulated_step_matches_single_step();
+    test_accumulated_step_token_weighted();
     test_minibatch_accumulation_deterministic();
     test_accumulated_step_rolls_back_whole_group();
     test_run_updates_with_progress_invokes_callback();

@@ -299,6 +299,9 @@ NiyahStatus niyah_training_accumulated_step(
     size_t old_position;
     size_t total_samples;
     size_t consumed;
+    size_t total_supervised_targets = 0U;
+    size_t common_supervised_targets = 0U;
+    int token_weighting_active = 0;
     double loss_sum = 0.0;
     NiyahStatus status;
 
@@ -351,19 +354,81 @@ NiyahStatus niyah_training_accumulated_step(
         if (status != NIYAH_OK)
             return rollback_cursor(cursor, old_epoch, old_position, status);
 
+        {
+            const size_t supervised_count =
+                samples[sample_index].token_count -
+                samples[sample_index].loss_start;
+
+            if (supervised_count >
+                    SIZE_MAX - total_supervised_targets)
+                return rollback_cursor(
+                    cursor, old_epoch, old_position,
+                    NIYAH_ERR_OVERFLOW);
+
+            total_supervised_targets += supervised_count;
+
+            /*
+             * Preserve the historical byte-identical averaging path while
+             * every sample has the same supervised length. If a different
+             * length appears, convert the already accumulated equal-length
+             * means into token sums exactly once, then continue token
+             * weighted for the remainder of this optimizer update.
+             */
+            if (consumed == 0U) {
+                common_supervised_targets = supervised_count;
+            } else if (!token_weighting_active &&
+                       supervised_count != common_supervised_targets) {
+                status = gradients_scale(
+                    accumulated_gradients,
+                    (float)common_supervised_targets);
+                if (status != NIYAH_OK)
+                    return rollback_cursor(
+                        cursor, old_epoch, old_position, status);
+
+                loss_sum *= (double)common_supervised_targets;
+                if (!isfinite(loss_sum))
+                    return rollback_cursor(
+                        cursor, old_epoch, old_position,
+                        NIYAH_ERR_OVERFLOW);
+
+                token_weighting_active = 1;
+            }
+
+            if (token_weighting_active) {
+                status = gradients_scale(
+                    sample_gradients, (float)supervised_count);
+                if (status != NIYAH_OK)
+                    return rollback_cursor(
+                        cursor, old_epoch, old_position, status);
+
+                loss_sum +=
+                    (double)loss * (double)supervised_count;
+            } else {
+                loss_sum += (double)loss;
+            }
+
+            if (!isfinite(loss_sum))
+                return rollback_cursor(
+                    cursor, old_epoch, old_position,
+                    NIYAH_ERR_OVERFLOW);
+        }
+
         status = gradients_accumulate(
             accumulated_gradients, sample_gradients);
         if (status != NIYAH_OK)
             return rollback_cursor(cursor, old_epoch, old_position, status);
-
-        loss_sum += (double)loss;
-        if (!isfinite(loss_sum))
-            return rollback_cursor(
-                cursor, old_epoch, old_position, NIYAH_ERR_OVERFLOW);
     }
 
+    if (total_supervised_targets == 0U)
+        return rollback_cursor(
+            cursor, old_epoch, old_position,
+            NIYAH_ERR_INVALID_CONFIG);
+
     status = gradients_scale(
-        accumulated_gradients, 1.0f / (float)total_samples);
+        accumulated_gradients,
+        token_weighting_active
+            ? 1.0f / (float)total_supervised_targets
+            : 1.0f / (float)total_samples);
     if (status != NIYAH_OK)
         return rollback_cursor(cursor, old_epoch, old_position, status);
 
@@ -372,7 +437,9 @@ NiyahStatus niyah_training_accumulated_step(
     if (status != NIYAH_OK)
         return rollback_cursor(cursor, old_epoch, old_position, status);
 
-    loss_sum /= (double)total_samples;
+    loss_sum /= token_weighting_active
+        ? (double)total_supervised_targets
+        : (double)total_samples;
     if (!isfinite(loss_sum) || loss_sum > (double)FLT_MAX)
         return NIYAH_ERR_OVERFLOW;
 
