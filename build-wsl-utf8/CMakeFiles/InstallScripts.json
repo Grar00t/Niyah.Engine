@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/mnt/d/Projects/Niyah.Engine/build-wsl-utf8/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

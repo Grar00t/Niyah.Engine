@@ -1,1 +1,0 @@
-/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/niyah_transformer_test.dir/link.d CMakeFiles/niyah_transformer_test.dir/tests/test_transformer.c.o -o niyah_transformer_test  libniyah.a -lm
