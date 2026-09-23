@@ -1,26 +1,53 @@
 #ifndef NIYAH_CHECKPOINT_H
 #define NIYAH_CHECKPOINT_H
 
-#include "niyah/common.h"
-#include "niyah/model.h"
+#include "niyah/optimizer.h"
+#include "niyah/tokenizer.h"
+
 #include <stdint.h>
+
+#define NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE 32U
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef struct niyah_checkpoint {
-    niyah_model model;
-    uint64_t cursor;
-    uint8_t dataset_sha256[32];
-} niyah_checkpoint;
+NiyahStatus niyah_checkpoint_save(const char *path,
+                                  const NiyahModel *model,
+                                  const NiyahAdamWState *optimizer_state,
+                                  const NiyahAdamWConfig *optimizer_config);
 
-void niyah_checkpoint_init(niyah_checkpoint *ckpt);
-niyah_status niyah_checkpoint_save(const niyah_checkpoint *ckpt, const char *path);
-niyah_status niyah_checkpoint_load(const char *path, niyah_checkpoint *out);
-niyah_status niyah_checkpoint_require_dataset(
-    const niyah_checkpoint *ckpt,
-    const uint8_t dataset_sha256[32]);
+NiyahStatus niyah_checkpoint_load(const char *path,
+                                  NiyahModel *out_model,
+                                  NiyahAdamWState *out_optimizer_state,
+                                  NiyahAdamWConfig *out_optimizer_config);
+
+NiyahStatus niyah_checkpoint_save_with_tokenizer(
+    const char *path,
+    const NiyahModel *model,
+    const NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    const NiyahTokenizer *tokenizer);
+
+NiyahStatus niyah_checkpoint_load_with_tokenizer(
+    const char *path,
+    const NiyahTokenizer *tokenizer,
+    NiyahModel *out_model,
+    NiyahAdamWState *out_optimizer_state,
+    NiyahAdamWConfig *out_optimizer_config);
+
+NiyahStatus niyah_checkpoint_load_model_with_tokenizer(
+    const char *path,
+    const NiyahTokenizer *tokenizer,
+    NiyahModel *out_model);
+
+/* SHA-256 identity of the exact persisted checkpoint bytes. This provides
+ * content identity for checkpoint/cursor pairing; it does not authenticate
+ * the checkpoint or establish semantic truth.
+ */
+NiyahStatus niyah_checkpoint_identity_sha256(
+    const char *path,
+    uint8_t out_identity[NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE]);
 
 #ifdef __cplusplus
 }

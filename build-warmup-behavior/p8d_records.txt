@@ -1,5 +1,0 @@
-User: A
-Assistant: 1
-
-User: B
-Assistant: 2

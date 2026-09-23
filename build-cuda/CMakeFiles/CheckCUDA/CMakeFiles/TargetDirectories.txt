@@ -1,2 +1,0 @@
-D:/Projects/Niyah.Engine/build-cuda/CMakeFiles/CheckCUDA/CMakeFiles/ALL_BUILD.dir
-D:/Projects/Niyah.Engine/build-cuda/CMakeFiles/CheckCUDA/CMakeFiles/ZERO_CHECK.dir

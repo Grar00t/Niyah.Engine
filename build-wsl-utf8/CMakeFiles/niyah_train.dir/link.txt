@@ -1,1 +1,0 @@
-/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/niyah_train.dir/link.d CMakeFiles/niyah_train.dir/tools/niyah_train.c.o -o niyah-train  libniyah.a -lm

@@ -1,1 +1,0 @@
-/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/niyah_training_fixture.dir/link.d CMakeFiles/niyah_training_fixture.dir/tests/make_training_fixture.c.o -o niyah_training_fixture  libniyah.a -lm
