@@ -2195,7 +2195,11 @@ extern "C" int niyah_cuda_train_backward_full(
          t < token_count;
          ++t) {
         if ((size_t)tokens[t] >=
-                s.vocab ||
+                s.vocab) {
+            return 1;
+        }
+
+        if (t >= loss_start &&
             (size_t)targets[t] >=
                 s.vocab) {
             return 1;

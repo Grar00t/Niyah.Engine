@@ -3,6 +3,7 @@
 #include "niyah_cuda_matvec.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -57,15 +58,24 @@ static int run_case(
     int tied,
     uint32_t n_segments,
     int use_segments,
-    size_t loss_start)
+    size_t loss_start,
+    int invalid_masked_target)
 {
     const size_t token_count = 4U;
     const uint32_t tokens[4] = {
         1U, 3U, 1U, 5U
     };
-    const uint32_t targets[4] = {
+    uint32_t targets[4] = {
         2U, 4U, 6U, 8U
     };
+
+    if (invalid_masked_target) {
+        if (loss_start == 0U) {
+            return 1;
+        }
+
+        targets[0] = UINT32_MAX;
+    }
     const uint32_t segments[4] = {
         0U, 1U, 0U, 1U
     };
@@ -481,7 +491,8 @@ int main(void)
             0,
             0U,
             0,
-            0U) != 0) {
+            0U,
+            0) != 0) {
         return 1;
     }
 
@@ -490,7 +501,18 @@ int main(void)
             1,
             2U,
             1,
-            1U) != 0) {
+            1U,
+            0) != 0) {
+        return 1;
+    }
+
+    if (run_case(
+            "masked_invalid_target",
+            0,
+            0U,
+            0,
+            1U,
+            1) != 0) {
         return 1;
     }
 
