@@ -317,7 +317,7 @@ static NiyahStatus gradients_scale(NiyahModelGradients *gradients,
     return NIYAH_OK;
 }
 
-NiyahStatus niyah_training_accumulated_step(
+static NiyahStatus niyah_training_accumulated_step_impl(
     NiyahModel *model,
     const NiyahTrainingSample *samples,
     size_t sample_count,
@@ -331,7 +331,9 @@ NiyahStatus niyah_training_accumulated_step(
     size_t batch_size,
     size_t accumulation_steps,
     size_t *out_samples_consumed,
-    float *out_mean_loss)
+    float *out_mean_loss,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data)
 {
     uint64_t old_epoch;
     size_t old_position;
@@ -379,16 +381,27 @@ NiyahStatus niyah_training_accumulated_step(
             return rollback_cursor(
                 cursor, old_epoch, old_position, NIYAH_ERR_INVALID_CONFIG);
 
-        status = niyah_train_backward_masked(
-            model,
-            samples[sample_index].tokens,
-            samples[sample_index].targets,
-            samples[sample_index].token_count,
-            samples[sample_index].loss_start,
-            &loss,
-            sample_gradients,
-            workspace,
-            workspace_count);
+        if (backward_fn != NULL) {
+            status = backward_fn(
+                model,
+                &samples[sample_index],
+                sample_gradients,
+                workspace,
+                workspace_count,
+                &loss,
+                backward_user_data);
+        } else {
+            status = niyah_train_backward_masked(
+                model,
+                samples[sample_index].tokens,
+                samples[sample_index].targets,
+                samples[sample_index].token_count,
+                samples[sample_index].loss_start,
+                &loss,
+                sample_gradients,
+                workspace,
+                workspace_count);
+        }
         if (status != NIYAH_OK)
             return rollback_cursor(cursor, old_epoch, old_position, status);
 
@@ -486,7 +499,7 @@ NiyahStatus niyah_training_accumulated_step(
     return NIYAH_OK;
 }
 
-NiyahStatus niyah_training_run_updates_with_progress(
+static NiyahStatus niyah_training_run_updates_with_progress_impl(
     NiyahModel *model,
     const NiyahTrainingSample *samples,
     size_t sample_count,
@@ -496,6 +509,8 @@ NiyahStatus niyah_training_run_updates_with_progress(
     size_t batch_size,
     size_t accumulation_steps,
     size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
     NiyahTrainingProgressFn progress_fn,
     void *progress_user_data,
     float *out_mean_loss)
@@ -559,13 +574,14 @@ NiyahStatus niyah_training_run_updates_with_progress(
         size_t consumed = 0U;
         float mean_loss = 0.0f;
 
-        status = niyah_training_accumulated_step(
+        status = niyah_training_accumulated_step_impl(
             model, samples, sample_count, cursor,
             &sample_gradients, &accumulated_gradients,
             workspace, workspace_count,
             optimizer_state, optimizer_config,
             batch_size, accumulation_steps,
-            &consumed, &mean_loss);
+            &consumed, &mean_loss,
+            backward_fn, backward_user_data);
         if (status != NIYAH_OK) {
             free(workspace);
             niyah_model_gradients_destroy(&accumulated_gradients);
@@ -622,4 +638,106 @@ NiyahStatus niyah_training_run_updates(
         optimizer_state, optimizer_config,
         batch_size, accumulation_steps, updates,
         NULL, NULL, out_mean_loss);
+}
+
+NiyahStatus niyah_training_accumulated_step(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahModelGradients *sample_gradients,
+    NiyahModelGradients *accumulated_gradients,
+    float *workspace,
+    size_t workspace_count,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t *out_samples_consumed,
+    float *out_mean_loss)
+{
+    return niyah_training_accumulated_step_impl(
+        model,
+        samples,
+        sample_count,
+        cursor,
+        sample_gradients,
+        accumulated_gradients,
+        workspace,
+        workspace_count,
+        optimizer_state,
+        optimizer_config,
+        batch_size,
+        accumulation_steps,
+        out_samples_consumed,
+        out_mean_loss,
+        NULL,
+        NULL);
+}
+
+NiyahStatus niyah_training_run_updates_with_progress(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss)
+{
+    return niyah_training_run_updates_with_progress_impl(
+        model,
+        samples,
+        sample_count,
+        cursor,
+        optimizer_state,
+        optimizer_config,
+        batch_size,
+        accumulation_steps,
+        updates,
+        NULL,
+        NULL,
+        progress_fn,
+        progress_user_data,
+        out_mean_loss);
+}
+
+NiyahStatus niyah_training_run_updates_with_progress_with_backward(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss)
+{
+    if (backward_fn == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    return niyah_training_run_updates_with_progress_impl(
+        model,
+        samples,
+        sample_count,
+        cursor,
+        optimizer_state,
+        optimizer_config,
+        batch_size,
+        accumulation_steps,
+        updates,
+        backward_fn,
+        backward_user_data,
+        progress_fn,
+        progress_user_data,
+        out_mean_loss);
 }

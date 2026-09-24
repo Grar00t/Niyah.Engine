@@ -153,6 +153,24 @@ add_executable(niyah_train tools/niyah_train.c)
 set_target_properties(niyah_train PROPERTIES OUTPUT_NAME "niyah-train")
 target_link_libraries(niyah_train PRIVATE niyah)
 
+if(NIYAH_ENABLE_CUDA)
+    target_include_directories(
+        niyah_train
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(
+        niyah_train
+        PRIVATE
+            niyah_cuda_backend
+    )
+    target_compile_definitions(
+        niyah_train
+        PRIVATE
+            NIYAH_TRAIN_ENABLE_CUDA=1
+    )
+endif()
+
 if(MSVC)
     target_compile_options(niyah_train PRIVATE /W4 /WX)
 else()

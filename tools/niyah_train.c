@@ -4,6 +4,10 @@
 #include "niyah/tokenizer.h"
 #include "niyah/training_loop.h"
 
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+#include "niyah_cuda_matvec.h"
+#endif
+
 #include <errno.h>
 #include <inttypes.h>
 #include <math.h>
@@ -52,6 +56,7 @@ typedef struct NiyahTrainOptions {
     uint64_t warmup_steps;
     int have_warmup_steps;
     int progress_details;
+    int use_cuda;
 } NiyahTrainOptions;
 
 static void train_options_destroy(NiyahTrainOptions *options)
@@ -72,11 +77,13 @@ static void usage(FILE *stream)
         "      --rms-norm-eps F --tie-word-embeddings 0|1\n"
         "      --learning-rate F --beta1 F --beta2 F --epsilon F\n"
         "      --weight-decay F --max-grad-norm F [--warmup-steps N] [--progress-details]\n"
+        "      [--backend cpu|cuda]\n"
         "\n"
         "  niyah-train resume --tokenizer TOK --shard SHARD [--shard SHARD ...]\n"
         "      --checkpoint-in CKPT --cursor-in CURSOR\n"
         "      --checkpoint-out CKPT --cursor-out CURSOR\n"
         "      --updates N --batch-size N --accumulation-steps N [--progress-details]\n"
+        "      [--backend cpu|cuda]\n"
         "\n"
         "Outputs are required to be new paths. Resume inputs are never overwritten.\n");
 }
@@ -159,6 +166,87 @@ static void print_training_progress(size_t update_index, size_t updates,
     fputc('\n', stderr);
     fflush(stderr);
 }
+
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+typedef struct NiyahCudaTrainingContext {
+    NiyahCudaModelState model_state;
+    NiyahCudaTrainState train_state;
+    NiyahAdamWState *optimizer_state;
+    uint64_t synced_optimizer_step;
+    int model_ready;
+    int train_ready;
+} NiyahCudaTrainingContext;
+
+static NiyahStatus cuda_training_failure(const char *stage)
+{
+    fprintf(
+        stderr,
+        "cuda_training_stage=%s status=CUDA_ERROR\n",
+        stage);
+    return NIYAH_ERR_INVALID_CONFIG;
+}
+
+static NiyahStatus cuda_training_backward(
+    const NiyahModel *model,
+    const NiyahTrainingSample *sample,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count,
+    float *out_loss,
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    (void)workspace;
+    (void)workspace_count;
+
+    if (model == NULL ||
+        sample == NULL ||
+        gradients == NULL ||
+        gradients->values == NULL ||
+        out_loss == NULL ||
+        context == NULL ||
+        context->optimizer_state == NULL ||
+        context->model_ready == 0 ||
+        context->train_ready == 0) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    if (context->synced_optimizer_step !=
+        context->optimizer_state->step) {
+        if (niyah_cuda_model_state_sync(
+                &context->model_state,
+                model) != 0) {
+            return cuda_training_failure("model_sync");
+        }
+
+        context->synced_optimizer_step =
+            context->optimizer_state->step;
+    }
+
+    if (niyah_cuda_train_backward_full(
+            &context->model_state,
+            &context->train_state,
+            sample->tokens,
+            sample->targets,
+            sample->token_count,
+            sample->loss_start,
+            NULL,
+            out_loss) != 0) {
+        return cuda_training_failure("backward");
+    }
+
+    if (niyah_cuda_train_state_copy_gradients_to_host(
+            &context->train_state,
+            gradients->values,
+            gradients->count) != 0) {
+        return cuda_training_failure("gradient_d2h");
+    }
+
+    return NIYAH_OK;
+}
+#endif
 
 static int parse_u64(const char *text, uint64_t *out)
 {
@@ -329,6 +417,17 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
             options->have_warmup_steps = 1;
         } else if (strcmp(key, "--progress-details") == 0) {
             options->progress_details = 1;
+        } else if (strcmp(key, "--backend") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+
+            if (strcmp(value, "cpu") == 0) {
+                options->use_cuda = 0;
+            } else if (strcmp(value, "cuda") == 0) {
+                options->use_cuda = 1;
+            } else {
+                return 0;
+            }
         } else {
             return 0;
         }
@@ -416,6 +515,9 @@ int main(int argc, char **argv)
     NiyahAdamWState optimizer_state;
     NiyahAdamWConfig optimizer_config;
     NiyahTrainProgressContext progress_context;
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    NiyahCudaTrainingContext cuda_context;
+#endif
     size_t sample_count = 0U;
     size_t sample_bytes = 0U;
     size_t shard_index;
@@ -433,6 +535,9 @@ int main(int argc, char **argv)
     memset(&optimizer_state, 0, sizeof(optimizer_state));
     memset(&optimizer_config, 0, sizeof(optimizer_config));
     memset(&progress_context, 0, sizeof(progress_context));
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    memset(&cuda_context, 0, sizeof(cuda_context));
+#endif
 
     parsed = parse_options(argc, argv, &options);
     if (parsed == 2) {
@@ -444,6 +549,15 @@ int main(int argc, char **argv)
         train_options_destroy(&options);
         return 2;
     }
+
+#ifndef NIYAH_TRAIN_ENABLE_CUDA
+    if (options.use_cuda) {
+        fprintf(stderr, "backend_unavailable=cuda\n");
+        train_options_destroy(&options);
+        return 2;
+    }
+#endif
+
     if (path_exists(options.checkpoint_out) || path_exists(options.cursor_out)) {
         fprintf(stderr, "output_path_exists=1\n");
         train_options_destroy(&options);
@@ -611,17 +725,97 @@ int main(int argc, char **argv)
         }
     }
 
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    if (options.use_cuda) {
+        size_t max_tokens = 0U;
+        size_t cuda_workspace_count = 0U;
+        size_t sample_index;
+
+        for (sample_index = 0U;
+             sample_index < sample_count;
+             ++sample_index) {
+            size_t required_cuda_workspace = 0U;
+
+            if (niyah_cuda_train_backward_workspace_floats(
+                    &model.config,
+                    samples[sample_index].token_count,
+                    &required_cuda_workspace) != 0) {
+                fprintf(
+                    stderr,
+                    "cuda_training_stage=workspace_query status=CUDA_ERROR\n");
+                exit_code = 1;
+                goto cleanup;
+            }
+
+            if (samples[sample_index].token_count >
+                max_tokens) {
+                max_tokens =
+                    samples[sample_index].token_count;
+            }
+
+            if (required_cuda_workspace >
+                cuda_workspace_count) {
+                cuda_workspace_count =
+                    required_cuda_workspace;
+            }
+        }
+
+        if (niyah_cuda_model_state_create(
+                &cuda_context.model_state,
+                &model) != 0) {
+            fprintf(
+                stderr,
+                "cuda_training_stage=model_create status=CUDA_ERROR\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+        cuda_context.model_ready = 1;
+
+        if (niyah_cuda_train_state_create(
+                &cuda_context.train_state,
+                &model,
+                max_tokens,
+                cuda_workspace_count) != 0) {
+            fprintf(
+                stderr,
+                "cuda_training_stage=train_state_create status=CUDA_ERROR\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+        cuda_context.train_ready = 1;
+        cuda_context.optimizer_state =
+            &optimizer_state;
+        cuda_context.synced_optimizer_step =
+            optimizer_state.step;
+    }
+#endif
+
     progress_context.optimizer_state = &optimizer_state;
     progress_context.optimizer_config = &optimizer_config;
     progress_context.cursor = &cursor;
     progress_context.details = options.progress_details;
 
-    status = niyah_training_run_updates_with_progress(
-        &model, samples, sample_count, &cursor,
-        &optimizer_state, &optimizer_config,
-        options.batch_size, options.accumulation_steps,
-        options.updates, print_training_progress,
-        &progress_context, &mean_loss);
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    if (options.use_cuda) {
+        status =
+            niyah_training_run_updates_with_progress_with_backward(
+                &model, samples, sample_count, &cursor,
+                &optimizer_state, &optimizer_config,
+                options.batch_size, options.accumulation_steps,
+                options.updates,
+                cuda_training_backward, &cuda_context,
+                print_training_progress,
+                &progress_context, &mean_loss);
+    } else
+#endif
+    {
+        status = niyah_training_run_updates_with_progress(
+            &model, samples, sample_count, &cursor,
+            &optimizer_state, &optimizer_config,
+            options.batch_size, options.accumulation_steps,
+            options.updates, print_training_progress,
+            &progress_context, &mean_loss);
+    }
     if (status != NIYAH_OK) {
         exit_code = fail_status("training", status);
         goto cleanup;
@@ -658,6 +852,8 @@ int main(int argc, char **argv)
 
     printf("mode=%s\n",
            options.mode == NIYAH_TRAIN_MODE_NEW ? "new" : "resume");
+    printf("backend=%s\n",
+           options.use_cuda ? "cuda" : "cpu");
     printf("shards=%zu\n", options.shard_count);
     printf("samples=%zu\n", sample_count);
     printf("updates=%zu\n", options.updates);
@@ -672,6 +868,12 @@ int main(int argc, char **argv)
     exit_code = 0;
 
 cleanup:
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    if (cuda_context.train_ready)
+        niyah_cuda_train_state_destroy(&cuda_context.train_state);
+    if (cuda_context.model_ready)
+        niyah_cuda_model_state_destroy(&cuda_context.model_state);
+#endif
     niyah_dataset_cursor_destroy(&cursor);
     niyah_adamw_state_destroy(&optimizer_state);
     niyah_model_destroy(&model);

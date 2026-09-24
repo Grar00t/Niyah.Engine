@@ -18,6 +18,15 @@ typedef struct NiyahTrainingSample {
     size_t loss_start;
 } NiyahTrainingSample;
 
+typedef NiyahStatus (*NiyahTrainingBackwardFn)(
+    const NiyahModel *model,
+    const NiyahTrainingSample *sample,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count,
+    float *out_loss,
+    void *user_data);
+
 /* Build zero-copy training sample descriptors over one loaded dataset shard.
  *
  * Query mode: samples == NULL and sample_capacity == 0 returns the required
@@ -106,6 +115,22 @@ NiyahStatus niyah_training_run_updates_with_progress(
     size_t batch_size,
     size_t accumulation_steps,
     size_t updates,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss);
+
+NiyahStatus niyah_training_run_updates_with_progress_with_backward(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
     NiyahTrainingProgressFn progress_fn,
     void *progress_user_data,
     float *out_mean_loss);
