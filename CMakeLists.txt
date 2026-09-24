@@ -60,7 +60,12 @@ if(NIYAH_ENABLE_CUDA)
             ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
-    target_link_libraries(niyah_cuda_backend PRIVATE CUDA::cudart)
+    target_sources(niyah_cuda_backend
+    PRIVATE
+        src/niyah_cuda_train.cu
+)
+
+target_link_libraries(niyah_cuda_backend PRIVATE CUDA::cudart)
     set_target_properties(niyah_cuda_backend PROPERTIES
         CUDA_STANDARD 14
         CUDA_STANDARD_REQUIRED ON
@@ -338,6 +343,33 @@ if(NIYAH_BUILD_TESTS)
         add_test(
             NAME niyah_cuda_generation_test
             COMMAND niyah_cuda_generation_test
+        )
+
+        add_executable(niyah_cuda_train_linear_test
+            tests/test_cuda_train_linear.c
+        )
+        target_include_directories(niyah_cuda_train_linear_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_train_linear_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_train_linear_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_train_linear_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_linear_test
+            COMMAND niyah_cuda_train_linear_test
         )
     endif()
 

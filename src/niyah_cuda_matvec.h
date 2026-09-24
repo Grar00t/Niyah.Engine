@@ -75,6 +75,51 @@ int niyah_cuda_train_state_copy_gradients_to_host(
     float *host_gradients,
     size_t gradient_count);
 
+
+int niyah_cuda_train_state_copy_workspace_from_host(
+    NiyahCudaTrainState *state,
+    size_t workspace_offset,
+    const float *host_values,
+    size_t value_count);
+
+int niyah_cuda_train_state_copy_workspace_to_host(
+    const NiyahCudaTrainState *state,
+    size_t workspace_offset,
+    float *host_values,
+    size_t value_count);
+
+int niyah_cuda_train_state_zero_workspace(
+    NiyahCudaTrainState *state,
+    size_t workspace_offset,
+    size_t value_count);
+
+int niyah_cuda_train_state_copy_gradient_range_to_host(
+    const NiyahCudaTrainState *state,
+    size_t gradient_offset,
+    float *host_values,
+    size_t value_count);
+
+int niyah_cuda_train_linear_forward(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaTrainState *train_state,
+    size_t weight_offset,
+    size_t x_workspace_offset,
+    size_t y_workspace_offset,
+    size_t token_count,
+    size_t rows,
+    size_t cols);
+
+int niyah_cuda_train_linear_backward(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaTrainState *train_state,
+    size_t weight_offset,
+    size_t x_workspace_offset,
+    size_t dy_workspace_offset,
+    size_t dx_workspace_offset,
+    size_t token_count,
+    size_t rows,
+    size_t cols);
+
 typedef struct NiyahCudaDecodeState {
     void *device_keys;
     void *device_values;
