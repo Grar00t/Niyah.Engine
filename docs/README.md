@@ -20,6 +20,7 @@ This documentation is organized to separate **how the system works** from **what
 | [Data](DATA.md) | Dataset contracts, provenance requirements, quality risks, and current diagnostic-corpus caveats |
 | [CLI Reference](CLI.md) | `niyah`, `niyah-train`, and `niyah_probe` command surfaces currently present in the repository |
 | [Verification](VERIFICATION.md) | Evidence ledger: what has passed, what is locally observed, and what remains unestablished |
+| [Local Evidence Snapshot — 2026-09-24](LOCAL_EVIDENCE_2026-09-24.md) | Dated local corpus, tokenizer-preparation, CUDA-adjacent, synthetic-data, and external-RAG evidence with explicit claim boundaries |
 | [FAQ](FAQ.md) | Direct answers to common architecture, training, data, and capability questions |
 | [Contributing](../CONTRIBUTING.md) | Patch scope, regression gates, platform evidence, and claim discipline |
 
@@ -50,6 +51,8 @@ Implementation does not automatically imply model quality. A successful training
 ## Evidence sources
 
 Repository behavior should be grounded in source, tests, and CI for a named commit. Local model experiments should separately identify their model/data/evaluation artifacts. When the exact repository SHA used for a local experiment is missing from the available transcript, the documentation states that limitation rather than assigning a SHA retroactively.
+
+Dated local snapshots live alongside the durable architecture/training documentation rather than replacing it. They may contain work-in-progress states such as a tokenizer build that was still running at capture time; those states are labeled explicitly.
 
 ## Repository documentation philosophy
 
