@@ -8,6 +8,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(NIYAH_BUILD_TESTS "Build Niyah.Engine tests" ON)
 option(NIYAH_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(NIYAH_ENABLE_CUDA "Build the optional CUDA backend" OFF)
+option(NIYAH_ENABLE_OPENMP "Enable OpenMP CPU kernels" OFF)
 
 if(NIYAH_ENABLE_SANITIZERS)
     if(MSVC)
@@ -135,6 +136,12 @@ endif()
 
 if(NOT MSVC)
     target_link_libraries(niyah PUBLIC m)
+
+if(NIYAH_ENABLE_OPENMP)
+    find_package(OpenMP REQUIRED)
+    target_link_libraries(niyah PUBLIC OpenMP::OpenMP_C)
+    target_compile_definitions(niyah PRIVATE NIYAH_ENABLE_OPENMP=1)
+endif()
 endif()
 
 add_executable(niyah_train tools/niyah_train.c)
