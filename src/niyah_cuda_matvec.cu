@@ -1475,6 +1475,97 @@ static int niyah_cuda_add_device(
     return niyah_cuda_check_launch();
 }
 
+extern "C" int niyah_cuda_train_add_inplace(
+    NiyahCudaTrainState *train_state,
+    size_t dst_workspace_offset,
+    size_t src_workspace_offset,
+    size_t value_count)
+{
+    if (train_state == NULL ||
+        train_state->device_workspace == NULL ||
+        value_count == 0U ||
+        dst_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - dst_workspace_offset ||
+        src_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - src_workspace_offset) {
+        return 1;
+    }
+
+    if (dst_workspace_offset <
+            src_workspace_offset + value_count &&
+        src_workspace_offset <
+            dst_workspace_offset + value_count) {
+        return 1;
+    }
+
+    return niyah_cuda_add_device(
+        (float *)train_state->device_workspace +
+            dst_workspace_offset,
+        (const float *)train_state->device_workspace +
+            src_workspace_offset,
+        value_count);
+}
+
+extern "C" int niyah_cuda_train_add(
+    NiyahCudaTrainState *train_state,
+    size_t dst_workspace_offset,
+    size_t a_workspace_offset,
+    size_t b_workspace_offset,
+    size_t value_count)
+{
+    float *workspace;
+    size_t bytes;
+
+    if (train_state == NULL ||
+        train_state->device_workspace == NULL ||
+        value_count == 0U ||
+        value_count > ((size_t)-1) / sizeof(float) ||
+        dst_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - dst_workspace_offset ||
+        a_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - a_workspace_offset ||
+        b_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - b_workspace_offset) {
+        return 1;
+    }
+
+    if ((dst_workspace_offset <
+             a_workspace_offset + value_count &&
+         a_workspace_offset <
+             dst_workspace_offset + value_count) ||
+        (dst_workspace_offset <
+             b_workspace_offset + value_count &&
+         b_workspace_offset <
+             dst_workspace_offset + value_count) ||
+        (a_workspace_offset <
+             b_workspace_offset + value_count &&
+         b_workspace_offset <
+             a_workspace_offset + value_count)) {
+        return 1;
+    }
+
+    workspace = (float *)train_state->device_workspace;
+    bytes = value_count * sizeof(float);
+
+    if (cudaMemcpy(
+            workspace + dst_workspace_offset,
+            workspace + a_workspace_offset,
+            bytes,
+            cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return 1;
+    }
+
+    return niyah_cuda_add_device(
+        workspace + dst_workspace_offset,
+        workspace + b_workspace_offset,
+        value_count);
+}
+
 static int niyah_cuda_silu_mul_device(
     float *gate,
     const float *up,

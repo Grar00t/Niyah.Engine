@@ -138,6 +138,19 @@ int niyah_cuda_train_rope_backward(
     size_t n_heads,
     size_t head_dim);
 
+int niyah_cuda_train_add_inplace(
+    NiyahCudaTrainState *train_state,
+    size_t dst_workspace_offset,
+    size_t src_workspace_offset,
+    size_t value_count);
+
+int niyah_cuda_train_add(
+    NiyahCudaTrainState *train_state,
+    size_t dst_workspace_offset,
+    size_t a_workspace_offset,
+    size_t b_workspace_offset,
+    size_t value_count);
+
 typedef struct NiyahCudaDecodeState {
     void *device_keys;
     void *device_values;
