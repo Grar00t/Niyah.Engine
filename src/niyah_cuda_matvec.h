@@ -47,6 +47,34 @@ int niyah_cuda_model_state_matvec_device(
     size_t rows,
     size_t cols);
 
+
+typedef struct NiyahCudaTrainState {
+    void *device_gradients;
+    void *device_workspace;
+    void *device_tokens;
+    void *device_targets;
+    size_t gradient_capacity;
+    size_t workspace_capacity;
+    size_t token_capacity;
+} NiyahCudaTrainState;
+
+int niyah_cuda_train_state_create(
+    NiyahCudaTrainState *state,
+    const NiyahModel *model,
+    size_t max_tokens,
+    size_t workspace_floats);
+
+void niyah_cuda_train_state_destroy(
+    NiyahCudaTrainState *state);
+
+int niyah_cuda_train_state_zero_gradients(
+    NiyahCudaTrainState *state);
+
+int niyah_cuda_train_state_copy_gradients_to_host(
+    const NiyahCudaTrainState *state,
+    float *host_gradients,
+    size_t gradient_count);
+
 typedef struct NiyahCudaDecodeState {
     void *device_keys;
     void *device_values;

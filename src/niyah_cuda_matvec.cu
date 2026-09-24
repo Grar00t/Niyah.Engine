@@ -621,6 +621,131 @@ static int niyah_cuda_model_state_matvec_device_launch(
         : 1;
 }
 
+
+extern "C" void niyah_cuda_train_state_destroy(
+    NiyahCudaTrainState *state)
+{
+    if (state == NULL) {
+        return;
+    }
+
+    if (state->device_targets != NULL) {
+        (void)cudaFree(state->device_targets);
+    }
+    if (state->device_tokens != NULL) {
+        (void)cudaFree(state->device_tokens);
+    }
+    if (state->device_workspace != NULL) {
+        (void)cudaFree(state->device_workspace);
+    }
+    if (state->device_gradients != NULL) {
+        (void)cudaFree(state->device_gradients);
+    }
+
+    memset(state, 0, sizeof(*state));
+}
+
+extern "C" int niyah_cuda_train_state_create(
+    NiyahCudaTrainState *state,
+    const NiyahModel *model,
+    size_t max_tokens,
+    size_t workspace_floats)
+{
+    size_t gradient_bytes;
+    size_t workspace_bytes;
+    size_t token_bytes;
+
+    if (state == NULL ||
+        model == NULL ||
+        model->weights == NULL ||
+        model->weight_count == 0U ||
+        max_tokens == 0U ||
+        workspace_floats == 0U ||
+        model->weight_count > ((size_t)-1) / sizeof(float) ||
+        workspace_floats > ((size_t)-1) / sizeof(float) ||
+        max_tokens > ((size_t)-1) / sizeof(uint32_t)) {
+        return 1;
+    }
+
+    memset(state, 0, sizeof(*state));
+
+    gradient_bytes = model->weight_count * sizeof(float);
+    workspace_bytes = workspace_floats * sizeof(float);
+    token_bytes = max_tokens * sizeof(uint32_t);
+
+    if (cudaMalloc(&state->device_gradients, gradient_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    if (cudaMalloc(&state->device_workspace, workspace_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    if (cudaMalloc(&state->device_tokens, token_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    if (cudaMalloc(&state->device_targets, token_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    if (cudaMemset(state->device_gradients, 0, gradient_bytes) != cudaSuccess ||
+        cudaMemset(state->device_workspace, 0, workspace_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    state->gradient_capacity = model->weight_count;
+    state->workspace_capacity = workspace_floats;
+    state->token_capacity = max_tokens;
+
+    return 0;
+
+fail:
+    niyah_cuda_train_state_destroy(state);
+    return 1;
+}
+
+extern "C" int niyah_cuda_train_state_zero_gradients(
+    NiyahCudaTrainState *state)
+{
+    if (state == NULL ||
+        state->device_gradients == NULL ||
+        state->gradient_capacity == 0U ||
+        state->gradient_capacity > ((size_t)-1) / sizeof(float)) {
+        return 1;
+    }
+
+    return cudaMemset(
+               state->device_gradients,
+               0,
+               state->gradient_capacity * sizeof(float)) == cudaSuccess
+        ? 0
+        : 1;
+}
+
+extern "C" int niyah_cuda_train_state_copy_gradients_to_host(
+    const NiyahCudaTrainState *state,
+    float *host_gradients,
+    size_t gradient_count)
+{
+    if (state == NULL ||
+        state->device_gradients == NULL ||
+        host_gradients == NULL ||
+        gradient_count == 0U ||
+        gradient_count > state->gradient_capacity ||
+        gradient_count > ((size_t)-1) / sizeof(float)) {
+        return 1;
+    }
+
+    return cudaMemcpy(
+               host_gradients,
+               state->device_gradients,
+               gradient_count * sizeof(float),
+               cudaMemcpyDeviceToHost) == cudaSuccess
+        ? 0
+        : 1;
+}
+
 extern "C" int niyah_cuda_model_state_matvec_device(
     const NiyahCudaModelState *state,
     size_t weight_offset,
