@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Niyah.Engine local evidence snapshot — 2026-09-24</title>
+  <desc id="desc">A dated evidence dashboard showing observed corpus sizes, tokenizer preparation state, synthetic curriculum identity, an adjacent CSI CUDA experiment, PostgreSQL pgvector status, and the explicit boundary between observed artifacts and unestablished model claims.</desc>
+  <defs>
+    <style>
+      .bg{fill:#0b1020}.panel{fill:#11182b;stroke:#2b3a5d;stroke-width:2}.data{fill:#102a24;stroke:#3dd6a4;stroke-width:2}.work{fill:#2a1f14;stroke:#e6a85c;stroke-width:2}.adj{fill:#172433;stroke:#69b9ff;stroke-width:2}.boundary{fill:#241a2d;stroke:#c78cff;stroke-width:2}.title{font:700 34px system-ui,-apple-system,Segoe UI,sans-serif;fill:#f4f7ff}.subtitle{font:500 18px system-ui,-apple-system,Segoe UI,sans-serif;fill:#aab8d4}.label{font:700 13px system-ui,-apple-system,Segoe UI,sans-serif;fill:#8ea5d8;letter-spacing:.7px}.h{font:700 22px system-ui,-apple-system,Segoe UI,sans-serif;fill:#f4f7ff}.t{font:500 16px system-ui,-apple-system,Segoe UI,sans-serif;fill:#d4def2}.small{font:500 14px system-ui,-apple-system,Segoe UI,sans-serif;fill:#aab8d4}.mono{font:600 14px ui-monospace,SFMono-Regular,Consolas,monospace;fill:#cfe1ff}.num{font:700 28px ui-monospace,SFMono-Regular,Consolas,monospace;fill:#f4f7ff}.good{fill:#62e0b5}.warn{fill:#f1bd72}.line{stroke:#2b3a5d;stroke-width:2}.dash{stroke:#52647f;stroke-width:2;stroke-dasharray:7 7}.badge{font:700 12px system-ui,-apple-system,Segoe UI,sans-serif;fill:#0b1020}
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="1000" rx="24"/>
+  <text x="70" y="62" class="title">Niyah.Engine — Local Evidence Snapshot · 2026-09-24</text>
+  <text x="70" y="94" class="subtitle">Observed artifacts and measurements from the active local research workflow. This is not a release or capability claim.</text>
+
+  <text x="70" y="140" class="label">LANGUAGE DATA PIPELINE</text>
+
+  <rect x="70" y="160" width="455" height="270" rx="18" class="data"/>
+  <text x="100" y="202" class="h">Prepared text sources</text>
+  <text x="100" y="245" class="t">Najdi + Nawah normalized train corpus</text>
+  <text x="485" y="245" text-anchor="end" class="mono">5,402,685,314 B</text>
+  <text x="100" y="278" class="t">General Arabic extraction</text>
+  <text x="485" y="278" text-anchor="end" class="mono">1,055,650,506 B</text>
+  <text x="100" y="311" class="t">Arabic reasoning text</text>
+  <text x="485" y="311" text-anchor="end" class="mono">7,992,080 B</text>
+  <line x1="100" y1="334" x2="495" y2="334" class="line"/>
+  <text x="100" y="374" class="h">Combined observed text</text>
+  <text x="495" y="374" text-anchor="end" class="num">6.022 GiB</text>
+  <text x="100" y="404" class="small">Exact total: 6,466,327,900 bytes</text>
+
+  <rect x="565" y="160" width="455" height="270" rx="18" class="work"/>
+  <text x="595" y="202" class="h">Tokenizer preparation baseline</text>
+  <text x="595" y="245" class="t">Full Najdi/Nawah records split</text>
+  <text x="980" y="245" text-anchor="end" class="mono">46,885,052</text>
+  <text x="595" y="278" class="t">Text chunks</text>
+  <text x="980" y="278" text-anchor="end" class="mono">41</text>
+  <text x="595" y="311" class="t">Stratified tokenizer sample records</text>
+  <text x="980" y="311" text-anchor="end" class="mono">1,172,127</text>
+  <text x="595" y="344" class="t">Tokenizer sample bytes</text>
+  <text x="980" y="344" text-anchor="end" class="mono">134,839,251</text>
+  <rect x="595" y="374" width="174" height="30" rx="15" fill="#f1bd72"/>
+  <text x="682" y="394" text-anchor="middle" class="badge">RUNNING AT SNAPSHOT</text>
+
+  <rect x="1060" y="160" width="470" height="270" rx="18" class="panel"/>
+  <text x="1090" y="202" class="h">Small synthetic curriculum</text>
+  <text x="1090" y="245" class="t">Math · English · Python · C · systems</text>
+  <text x="1090" y="294" class="num">35 unique records</text>
+  <text x="1090" y="334" class="small">Strict JSONL validation passed</text>
+  <text x="1090" y="365" class="small">No model-control tokens found by the local check</text>
+  <text x="1090" y="401" class="mono">SHA-256 b86e1950…97e143cb</text>
+
+  <text x="70" y="492" class="label">ADJACENT LOCAL EXPERIMENTS — NOT THE LANGUAGE-MODEL CORE</text>
+
+  <rect x="70" y="512" width="710" height="300" rx="18" class="adj"/>
+  <text x="100" y="555" class="h">Wi-Fi CSI encoder · CUDA experiment</text>
+  <text x="100" y="598" class="t">Frames processed</text>
+  <text x="745" y="598" text-anchor="end" class="mono">160,380</text>
+  <text x="100" y="631" class="t">Training epochs</text>
+  <text x="745" y="631" text-anchor="end" class="mono">10 / 10</text>
+  <text x="100" y="664" class="t">Reported training loss</text>
+  <text x="745" y="664" text-anchor="end" class="mono">1.213397</text>
+  <text x="100" y="697" class="t">Reported training accuracy</text>
+  <text x="745" y="697" text-anchor="end" class="mono">0.660257</text>
+  <text x="100" y="730" class="t">Device</text>
+  <text x="745" y="730" text-anchor="end" class="mono">GeForce RTX 3060 · CUDA 12.8</text>
+  <text x="100" y="764" class="small">Training accuracy only — no held-out subject accuracy is claimed.</text>
+  <text x="100" y="790" class="mono">final.pt SHA-256 833227ec…0a347322</text>
+
+  <rect x="820" y="512" width="710" height="300" rx="18" class="boundary"/>
+  <text x="850" y="555" class="h">External retrieval boundary</text>
+  <text x="850" y="598" class="t">PostgreSQL database</text>
+  <text x="1495" y="598" text-anchor="end" class="mono">niyah</text>
+  <text x="850" y="631" class="t">pgvector extension</text>
+  <text x="1495" y="631" text-anchor="end" class="mono">0.8.1</text>
+  <text x="850" y="664" class="t">rag.documents rows</text>
+  <text x="1495" y="664" text-anchor="end" class="mono">0</text>
+  <line x1="850" y1="692" x2="1500" y2="692" class="dash"/>
+  <text x="850" y="731" class="t">RAG/vector storage remains external to NiyahModel.</text>
+  <text x="850" y="760" class="small">It is not a tokenizer dependency, training dependency, or proof of model quality.</text>
+
+  <text x="70" y="866" class="label">EVIDENCE BOUNDARY</text>
+  <rect x="70" y="884" width="1460" height="76" rx="18" class="panel"/>
+  <text x="100" y="918" class="t">At this snapshot: the final combined tokenizer and full 6.022 GiB language-model training run were not yet complete.</text>
+  <text x="100" y="946" class="small">Observed preparation, CUDA-adjacent experiments, or infrastructure setup must not be presented as broad language, reasoning, or production capability.</text>
+</svg>
