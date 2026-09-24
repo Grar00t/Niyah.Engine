@@ -903,7 +903,7 @@ NiyahStatus niyah_dataset_shard_identity_sha256(
     size_t domain_size;
     NiyahSha256 sha;
     unsigned char u64[8];
-    unsigned char u32[4];
+    unsigned char identity_block[64U * 1024U];
     size_t expected_samples;
     size_t i;
 
@@ -998,21 +998,45 @@ NiyahStatus niyah_dataset_shard_identity_sha256(
             sizeof(u64)))
         return NIYAH_ERR_OVERFLOW;
 
-    for (i = 0U;
-         i < shard->token_count;
-         ++i) {
-        store_u32_le(
-            u32,
-            shard->tokens[i]);
+    {
+        size_t block_used = 0U;
 
-        if (!niyah_sha256_update(
+        for (i = 0U;
+             i < shard->token_count;
+             ++i) {
+            if (sizeof(identity_block) -
+                    block_used < 4U) {
+                if (!niyah_sha256_update(
+                        &sha,
+                        identity_block,
+                        block_used))
+                    return NIYAH_ERR_OVERFLOW;
+
+                block_used = 0U;
+            }
+
+            store_u32_le(
+                identity_block + block_used,
+                shard->tokens[i]);
+
+            block_used += 4U;
+        }
+
+        if (block_used != 0U &&
+            !niyah_sha256_update(
                 &sha,
-                u32,
-                sizeof(u32)))
+                identity_block,
+                block_used))
             return NIYAH_ERR_OVERFLOW;
     }
 
     if (shard->has_explicit_samples != 0) {
+        const size_t bytes_per_sample =
+            shard->has_loss_starts != 0
+                ? 24U
+                : 16U;
+        size_t block_used = 0U;
+
         for (i = 0U;
              i < shard->sample_count;
              ++i) {
@@ -1022,27 +1046,29 @@ NiyahStatus niyah_dataset_shard_identity_sha256(
                     (size_t)UINT64_MAX)
                 return NIYAH_ERR_OVERFLOW;
 
+            if (sizeof(identity_block) -
+                    block_used <
+                bytes_per_sample) {
+                if (!niyah_sha256_update(
+                        &sha,
+                        identity_block,
+                        block_used))
+                    return NIYAH_ERR_OVERFLOW;
+
+                block_used = 0U;
+            }
+
             store_u64_le(
-                u64,
+                identity_block + block_used,
                 (uint64_t)
                     shard->sample_offsets[i]);
-
-            if (!niyah_sha256_update(
-                    &sha,
-                    u64,
-                    sizeof(u64)))
-                return NIYAH_ERR_OVERFLOW;
+            block_used += 8U;
 
             store_u64_le(
-                u64,
+                identity_block + block_used,
                 (uint64_t)
                     shard->sample_lengths[i]);
-
-            if (!niyah_sha256_update(
-                    &sha,
-                    u64,
-                    sizeof(u64)))
-                return NIYAH_ERR_OVERFLOW;
+            block_used += 8U;
 
             if (shard->has_loss_starts != 0) {
                 if (shard->sample_loss_starts[i] >
@@ -1050,17 +1076,19 @@ NiyahStatus niyah_dataset_shard_identity_sha256(
                     return NIYAH_ERR_OVERFLOW;
 
                 store_u64_le(
-                    u64,
+                    identity_block + block_used,
                     (uint64_t)
                         shard->sample_loss_starts[i]);
-
-                if (!niyah_sha256_update(
-                        &sha,
-                        u64,
-                        sizeof(u64)))
-                    return NIYAH_ERR_OVERFLOW;
+                block_used += 8U;
             }
         }
+
+        if (block_used != 0U &&
+            !niyah_sha256_update(
+                &sha,
+                identity_block,
+                block_used))
+            return NIYAH_ERR_OVERFLOW;
     }
 
     niyah_sha256_final(
@@ -1309,8 +1337,6 @@ NiyahStatus niyah_dataset_shard_load(
     NiyahDatasetShard *out_shard)
 {
     unsigned char header[NIYAH_DATASET_SHARD_HEADER_SIZE];
-    unsigned char token_bytes[4];
-    unsigned char u64_bytes[8];
     unsigned char footer[8];
     unsigned char extra;
     uint8_t identity[NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE];
@@ -1326,7 +1352,6 @@ NiyahStatus niyah_dataset_shard_load(
     size_t geometry_bytes_size;
     size_t expected_samples;
     size_t vocab_size;
-    size_t i;
     NiyahStatus status;
     int close_result;
 
@@ -1504,24 +1529,48 @@ NiyahStatus niyah_dataset_shard_load(
         goto done;
     }
 
-    for (i = 0U;
-         i < temp.token_count;
-         ++i) {
-        status = read_crc(
-            file,
-            token_bytes,
-            sizeof(token_bytes),
-            &crc);
-        if (status != NIYAH_OK)
-            goto done;
+    {
+        unsigned char token_block[64U * 1024U];
+        size_t token_index = 0U;
 
-        temp.tokens[i] =
-            load_u32_le(token_bytes);
+        while (token_index < temp.token_count) {
+            const size_t remaining =
+                temp.token_count - token_index;
+            const size_t block_capacity =
+                sizeof(token_block) / 4U;
+            const size_t chunk_tokens =
+                remaining < block_capacity
+                    ? remaining
+                    : block_capacity;
+            const size_t chunk_bytes =
+                chunk_tokens * 4U;
+            size_t j;
 
-        if ((size_t)temp.tokens[i] >=
-            vocab_size) {
-            status = NIYAH_ERR_CORRUPT_DATA;
-            goto done;
+            status = read_crc(
+                file,
+                token_block,
+                chunk_bytes,
+                &crc);
+            if (status != NIYAH_OK)
+                goto done;
+
+            for (j = 0U;
+                 j < chunk_tokens;
+                 ++j) {
+                temp.tokens[token_index + j] =
+                    load_u32_le(
+                        token_block + (j * 4U));
+
+                if ((size_t)temp.tokens[
+                        token_index + j] >=
+                    vocab_size) {
+                    status =
+                        NIYAH_ERR_CORRUPT_DATA;
+                    goto done;
+                }
+            }
+
+            token_index += chunk_tokens;
         }
     }
 
@@ -1529,71 +1578,94 @@ NiyahStatus niyah_dataset_shard_load(
             NIYAH_DATASET_SHARD_VERSION_V2 ||
         version ==
             NIYAH_DATASET_SHARD_VERSION_V3) {
-        for (i = 0U;
-             i < temp.sample_count;
-             ++i) {
-            uint64_t value;
+        unsigned char sample_block[64U * 1024U];
+        const size_t fields_per_sample =
+            version ==
+                NIYAH_DATASET_SHARD_VERSION_V3
+                ? 3U
+                : 2U;
+        const size_t bytes_per_sample =
+            fields_per_sample * 8U;
+        const size_t block_capacity =
+            sizeof(sample_block) /
+            bytes_per_sample;
+        size_t sample_index = 0U;
+
+        while (sample_index <
+               temp.sample_count) {
+            const size_t remaining =
+                temp.sample_count -
+                sample_index;
+            const size_t chunk_samples =
+                remaining < block_capacity
+                    ? remaining
+                    : block_capacity;
+            const size_t chunk_bytes =
+                chunk_samples *
+                bytes_per_sample;
+            size_t j;
 
             status = read_crc(
                 file,
-                u64_bytes,
-                sizeof(u64_bytes),
+                sample_block,
+                chunk_bytes,
                 &crc);
             if (status != NIYAH_OK)
                 goto done;
 
-            value =
-                load_u64_le(u64_bytes);
-            if (value >
-                (uint64_t)SIZE_MAX) {
-                status =
-                    NIYAH_ERR_CORRUPT_DATA;
-                goto done;
-            }
-            temp.sample_offsets[i] =
-                (size_t)value;
-
-            status = read_crc(
-                file,
-                u64_bytes,
-                sizeof(u64_bytes),
-                &crc);
-            if (status != NIYAH_OK)
-                goto done;
-
-            value =
-                load_u64_le(u64_bytes);
-            if (value >
-                (uint64_t)SIZE_MAX) {
-                status =
-                    NIYAH_ERR_CORRUPT_DATA;
-                goto done;
-            }
-            temp.sample_lengths[i] =
-                (size_t)value;
-
-            if (version ==
-                NIYAH_DATASET_SHARD_VERSION_V3) {
-                status = read_crc(
-                    file,
-                    u64_bytes,
-                    sizeof(u64_bytes),
-                    &crc);
-                if (status != NIYAH_OK)
-                    goto done;
+            for (j = 0U;
+                 j < chunk_samples;
+                 ++j) {
+                const unsigned char *entry =
+                    sample_block +
+                    (j * bytes_per_sample);
+                uint64_t value;
 
                 value =
-                    load_u64_le(u64_bytes);
+                    load_u64_le(entry);
                 if (value >
                     (uint64_t)SIZE_MAX) {
                     status =
                         NIYAH_ERR_CORRUPT_DATA;
                     goto done;
                 }
-
-                temp.sample_loss_starts[i] =
+                temp.sample_offsets[
+                    sample_index + j] =
                     (size_t)value;
+
+                value =
+                    load_u64_le(
+                        entry + 8U);
+                if (value >
+                    (uint64_t)SIZE_MAX) {
+                    status =
+                        NIYAH_ERR_CORRUPT_DATA;
+                    goto done;
+                }
+                temp.sample_lengths[
+                    sample_index + j] =
+                    (size_t)value;
+
+                if (version ==
+                    NIYAH_DATASET_SHARD_VERSION_V3) {
+                    value =
+                        load_u64_le(
+                            entry + 16U);
+                    if (value >
+                        (uint64_t)SIZE_MAX) {
+                        status =
+                            NIYAH_ERR_CORRUPT_DATA;
+                        goto done;
+                    }
+
+                    temp.sample_loss_starts[
+                        sample_index + j] =
+                        (size_t)value;
+                }
             }
+
+            sample_index +=
+                chunk_samples;
         }
     }
 

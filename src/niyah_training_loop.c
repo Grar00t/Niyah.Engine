@@ -42,16 +42,54 @@ NiyahStatus niyah_training_samples_from_shard(
     samples[0U].token_count = token_count;
     samples[0U].loss_start = loss_start;
 
-    for (i = 1U; i < shard->sample_count; ++i) {
-        status = niyah_dataset_shard_sample_with_loss(
-            shard, i, &tokens, &targets,
-            &token_count, &loss_start);
-        if (status != NIYAH_OK)
-            return status;
-        samples[i].tokens = tokens;
-        samples[i].targets = targets;
-        samples[i].token_count = token_count;
-        samples[i].loss_start = loss_start;
+    if (shard->has_explicit_samples != 0) {
+        /*
+         * Sample 0 above already validated the complete explicit
+         * geometry through niyah_dataset_shard_sample_with_loss().
+         * Do not repeat the O(sample_count) geometry validation for
+         * every descriptor.
+         */
+        for (i = 1U;
+             i < shard->sample_count;
+             ++i) {
+            const size_t start =
+                shard->sample_offsets[i];
+
+            samples[i].tokens =
+                shard->tokens + start;
+            samples[i].targets =
+                shard->tokens + start + 1U;
+            samples[i].token_count =
+                shard->sample_lengths[i];
+            samples[i].loss_start =
+                shard->has_loss_starts != 0
+                    ? shard->sample_loss_starts[i]
+                    : 0U;
+        }
+    } else {
+        for (i = 1U;
+             i < shard->sample_count;
+             ++i) {
+            status =
+                niyah_dataset_shard_sample_with_loss(
+                    shard,
+                    i,
+                    &tokens,
+                    &targets,
+                    &token_count,
+                    &loss_start);
+            if (status != NIYAH_OK)
+                return status;
+
+            samples[i].tokens =
+                tokens;
+            samples[i].targets =
+                targets;
+            samples[i].token_count =
+                token_count;
+            samples[i].loss_start =
+                loss_start;
+        }
     }
 
     return NIYAH_OK;
