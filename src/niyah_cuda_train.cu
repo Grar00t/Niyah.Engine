@@ -353,6 +353,115 @@ __global__ static void rmsnorm_dx_kernel(
     }
 }
 
+__global__ static void silu_mul_backward_kernel(
+    float *dgate,
+    float *dup,
+    const float *gate,
+    const float *up,
+    const float *dact,
+    size_t n)
+{
+    const size_t i =
+        (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i < n) {
+        const float x = gate[i];
+        const float s =
+            1.0f / (1.0f + expf(-x));
+        const float silu = x * s;
+        const float dsilu =
+            s + x * s * (1.0f - s);
+        const float da = dact[i];
+
+        dgate[i] = da * up[i] * dsilu;
+        dup[i] = da * silu;
+    }
+}
+
+extern "C" int niyah_cuda_train_silu_mul_backward(
+    NiyahCudaTrainState *ts,
+    size_t gate_offset,
+    size_t up_offset,
+    size_t dact_offset,
+    size_t dgate_offset,
+    size_t dup_offset,
+    size_t value_count)
+{
+    const unsigned int threads = 256U;
+
+    if (ts == NULL ||
+        ts->device_workspace == NULL ||
+        value_count == 0U ||
+        !range_ok(
+            gate_offset, value_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            up_offset, value_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            dact_offset, value_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            dgate_offset, value_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            dup_offset, value_count,
+            ts->workspace_capacity) ||
+        overlap(
+            gate_offset, value_count,
+            up_offset, value_count) ||
+        overlap(
+            gate_offset, value_count,
+            dact_offset, value_count) ||
+        overlap(
+            gate_offset, value_count,
+            dgate_offset, value_count) ||
+        overlap(
+            gate_offset, value_count,
+            dup_offset, value_count) ||
+        overlap(
+            up_offset, value_count,
+            dact_offset, value_count) ||
+        overlap(
+            up_offset, value_count,
+            dgate_offset, value_count) ||
+        overlap(
+            up_offset, value_count,
+            dup_offset, value_count) ||
+        overlap(
+            dact_offset, value_count,
+            dgate_offset, value_count) ||
+        overlap(
+            dact_offset, value_count,
+            dup_offset, value_count) ||
+        overlap(
+            dgate_offset, value_count,
+            dup_offset, value_count) ||
+        value_count > (size_t)UINT_MAX * threads) {
+        return 1;
+    }
+
+    const unsigned int blocks =
+        (unsigned int)(
+            (value_count + threads - 1U) /
+            threads);
+
+    silu_mul_backward_kernel<<<blocks, threads>>>(
+        (float *)ts->device_workspace +
+            dgate_offset,
+        (float *)ts->device_workspace +
+            dup_offset,
+        (const float *)ts->device_workspace +
+            gate_offset,
+        (const float *)ts->device_workspace +
+            up_offset,
+        (const float *)ts->device_workspace +
+            dact_offset,
+        value_count);
+
+    return cudaGetLastError() == cudaSuccess ? 0 : 1;
+}
+
 extern "C" int niyah_cuda_train_rmsnorm_backward(
     const NiyahCudaModelState *ms,
     NiyahCudaTrainState *ts,

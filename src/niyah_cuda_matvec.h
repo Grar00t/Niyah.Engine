@@ -120,6 +120,15 @@ int niyah_cuda_train_linear_backward(
     size_t rows,
     size_t cols);
 
+int niyah_cuda_train_silu_mul_backward(
+    NiyahCudaTrainState *train_state,
+    size_t gate_workspace_offset,
+    size_t up_workspace_offset,
+    size_t dact_workspace_offset,
+    size_t dgate_workspace_offset,
+    size_t dup_workspace_offset,
+    size_t value_count);
+
 int niyah_cuda_train_rmsnorm_backward(
     const NiyahCudaModelState *model_state,
     NiyahCudaTrainState *train_state,
