@@ -18,6 +18,7 @@ This documentation is organized to separate **how the system works** from **what
 | [Evaluation](EVALUATION.md) | Metric definitions, diagnostic held-out trajectory, interpretation rules, and test-set discipline |
 | [Model Card](MODEL_CARD.md) | Current model/runtime status, demonstrated capabilities, limitations, and intended research use |
 | [Data](DATA.md) | Dataset contracts, provenance requirements, quality risks, and current diagnostic-corpus caveats |
+| [Arabic Heritage Stack](ARABIC_HERITAGE_STACK.md) | License/provenance boundary for Arabic morphology tools, dictionaries, databases, and training use |
 | [CLI Reference](CLI.md) | `niyah`, `niyah-train`, and `niyah_probe` command surfaces currently present in the repository |
 | [Verification](VERIFICATION.md) | Evidence ledger: what has passed, what is locally observed, and what remains unestablished |
 | [Local Evidence Snapshot — 2026-09-24](LOCAL_EVIDENCE_2026-09-24.md) | Dated local corpus, tokenizer-preparation, CUDA-adjacent, synthetic-data, and external-RAG evidence with explicit claim boundaries |
