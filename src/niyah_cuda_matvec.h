@@ -174,6 +174,21 @@ int niyah_cuda_train_add(
     size_t b_workspace_offset,
     size_t value_count);
 
+int niyah_cuda_train_backward_workspace_floats(
+    const NiyahModelConfig *config,
+    size_t token_count,
+    size_t *out_floats);
+
+int niyah_cuda_train_backward_full(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaTrainState *train_state,
+    const uint32_t *tokens,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t loss_start,
+    const uint32_t *segment_ids,
+    float *out_loss);
+
 typedef struct NiyahCudaDecodeState {
     void *device_keys;
     void *device_values;
