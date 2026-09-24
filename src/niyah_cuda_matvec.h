@@ -131,6 +131,13 @@ int niyah_cuda_train_rmsnorm_backward(
     size_t width,
     float eps);
 
+int niyah_cuda_train_rope_backward(
+    NiyahCudaTrainState *train_state,
+    size_t workspace_offset,
+    size_t token_count,
+    size_t n_heads,
+    size_t head_dim);
+
 typedef struct NiyahCudaDecodeState {
     void *device_keys;
     void *device_values;

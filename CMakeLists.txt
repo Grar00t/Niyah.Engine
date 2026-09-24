@@ -398,6 +398,33 @@ if(NIYAH_BUILD_TESTS)
             NAME niyah_cuda_train_rmsnorm_test
             COMMAND niyah_cuda_train_rmsnorm_test
         )
+
+        add_executable(niyah_cuda_train_rope_test
+            tests/test_cuda_train_rope.c
+        )
+        target_include_directories(niyah_cuda_train_rope_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_train_rope_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_train_rope_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_train_rope_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_rope_test
+            COMMAND niyah_cuda_train_rope_test
+        )
     endif()
 
     add_executable(niyah_model_test tests/test_model.c)

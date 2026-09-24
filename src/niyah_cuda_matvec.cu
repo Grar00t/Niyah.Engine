@@ -822,10 +822,13 @@ __global__ static void niyah_cuda_rmsnorm_kernel(
 }
 
 __global__ static void niyah_cuda_rope_kernel(
-    float *vector,
+    float *vectors,
     size_t total_pairs,
+    size_t pairs_per_token,
+    size_t token_width,
     size_t head_dim,
-    size_t position)
+    size_t position_start,
+    float sign)
 {
     const size_t pair =
         (size_t)blockIdx.x * (size_t)blockDim.x +
@@ -833,16 +836,20 @@ __global__ static void niyah_cuda_rope_kernel(
 
     if (pair < total_pairs) {
         const size_t pairs_per_head = head_dim / 2U;
-        const size_t head = pair / pairs_per_head;
-        const size_t pair_in_head = pair % pairs_per_head;
+        const size_t token = pair / pairs_per_token;
+        const size_t pair_in_token = pair % pairs_per_token;
+        const size_t head = pair_in_token / pairs_per_head;
+        const size_t pair_in_head =
+            pair_in_token % pairs_per_head;
         const size_t i = pair_in_head * 2U;
-        float *head_vector = vector + head * head_dim;
-        const float pos = (float)position;
+        float *head_vector =
+            vectors + token * token_width + head * head_dim;
+        const float pos = (float)(position_start + token);
         const float exponent =
             -((float)i / (float)head_dim);
         const float inv_freq =
             powf(10000.0f, exponent);
-        const float angle = pos * inv_freq;
+        const float angle = sign * pos * inv_freq;
         const float c = cosf(angle);
         const float sn = sinf(angle);
         const float x0 = head_vector[i];
@@ -1290,20 +1297,27 @@ static int niyah_cuda_rmsnorm_device(
 }
 
 static int niyah_cuda_rope_device(
-    float *vector,
+    float *vectors,
+    size_t token_count,
     size_t n_heads,
     size_t head_dim,
-    size_t position)
+    size_t position_start,
+    float sign)
 {
     const unsigned int threads = 128U;
     size_t pairs_per_head;
+    size_t pairs_per_token;
+    size_t token_width;
     size_t total_pairs;
     unsigned int blocks;
 
-    if (vector == NULL ||
+    if (vectors == NULL ||
+        token_count == 0U ||
         n_heads == 0U ||
         head_dim < 2U ||
-        (head_dim % 2U) != 0U) {
+        (head_dim % 2U) != 0U ||
+        (sign != 1.0f && sign != -1.0f) ||
+        position_start > ((size_t)-1) - (token_count - 1U)) {
         return 1;
     }
 
@@ -1312,6 +1326,14 @@ static int niyah_cuda_rope_device(
     if (!niyah_cuda_size_mul_ok(
             n_heads,
             pairs_per_head,
+            &pairs_per_token) ||
+        !niyah_cuda_size_mul_ok(
+            n_heads,
+            head_dim,
+            &token_width) ||
+        !niyah_cuda_size_mul_ok(
+            token_count,
+            pairs_per_token,
             &total_pairs) ||
         niyah_cuda_blocks_for(
             total_pairs,
@@ -1321,12 +1343,55 @@ static int niyah_cuda_rope_device(
     }
 
     niyah_cuda_rope_kernel<<<blocks, threads>>>(
-        vector,
+        vectors,
         total_pairs,
+        pairs_per_token,
+        token_width,
         head_dim,
-        position);
+        position_start,
+        sign);
 
     return niyah_cuda_check_launch();
+}
+
+extern "C" int niyah_cuda_train_rope_backward(
+    NiyahCudaTrainState *train_state,
+    size_t workspace_offset,
+    size_t token_count,
+    size_t n_heads,
+    size_t head_dim)
+{
+    size_t token_width;
+    size_t value_count;
+
+    if (train_state == NULL ||
+        train_state->device_workspace == NULL ||
+        token_count == 0U ||
+        n_heads == 0U ||
+        head_dim < 2U ||
+        (head_dim % 2U) != 0U ||
+        !niyah_cuda_size_mul_ok(
+            n_heads,
+            head_dim,
+            &token_width) ||
+        !niyah_cuda_size_mul_ok(
+            token_count,
+            token_width,
+            &value_count) ||
+        workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - workspace_offset) {
+        return 1;
+    }
+
+    return niyah_cuda_rope_device(
+        (float *)train_state->device_workspace +
+            workspace_offset,
+        token_count,
+        n_heads,
+        head_dim,
+        0U,
+        -1.0f);
 }
 
 static int niyah_cuda_attention_one_device(
@@ -1612,14 +1677,18 @@ extern "C" int niyah_cuda_decode_token(
 
         if (niyah_cuda_rope_device(
                 q,
+                1U,
                 (size_t)config->n_heads,
                 decode_state->head_dim,
-                position) != 0 ||
+                position,
+                1.0f) != 0 ||
             niyah_cuda_rope_device(
                 k,
+                1U,
                 (size_t)config->n_kv_heads,
                 decode_state->head_dim,
-                position) != 0) {
+                position,
+                1.0f) != 0) {
             return 1;
         }
 
