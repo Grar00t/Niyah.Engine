@@ -277,3 +277,142 @@ extern "C" int niyah_cuda_train_linear_backward(
 
     return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
+
+__global__ static void rmsnorm_dweight_kernel(
+    float *dw,
+    const float *x,
+    const float *dy,
+    size_t tokens,
+    size_t width,
+    float eps)
+{
+    const size_t c =
+        (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (c < width) {
+        float value = dw[c];
+
+        for (size_t t = 0U; t < tokens; ++t) {
+            double sum_sq = 0.0;
+
+            for (size_t i = 0U; i < width; ++i) {
+                const double xv = (double)x[t * width + i];
+                sum_sq += xv * xv;
+            }
+
+            const float inv =
+                1.0f / sqrtf((float)(sum_sq / (double)width) + eps);
+
+            value += dy[t * width + c] *
+                     x[t * width + c] *
+                     inv;
+        }
+
+        dw[c] = value;
+    }
+}
+
+__global__ static void rmsnorm_dx_kernel(
+    float *dx,
+    const float *x,
+    const float *dy,
+    const float *weight,
+    size_t tokens,
+    size_t width,
+    float eps)
+{
+    const size_t t =
+        (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (t < tokens) {
+        double sum_sq = 0.0;
+        double dot = 0.0;
+
+        for (size_t i = 0U; i < width; ++i) {
+            const double xv = (double)x[t * width + i];
+            sum_sq += xv * xv;
+        }
+
+        const float inv =
+            1.0f / sqrtf((float)(sum_sq / (double)width) + eps);
+
+        for (size_t i = 0U; i < width; ++i) {
+            dot += (double)dy[t * width + i] *
+                   (double)weight[i] *
+                   (double)x[t * width + i];
+        }
+
+        const float coeff =
+            inv * inv * inv * (float)(dot / (double)width);
+
+        for (size_t i = 0U; i < width; ++i) {
+            dx[t * width + i] =
+                dy[t * width + i] * weight[i] * inv -
+                x[t * width + i] * coeff;
+        }
+    }
+}
+
+extern "C" int niyah_cuda_train_rmsnorm_backward(
+    const NiyahCudaModelState *ms,
+    NiyahCudaTrainState *ts,
+    size_t weight_offset,
+    size_t x_offset,
+    size_t dy_offset,
+    size_t dx_offset,
+    size_t tokens,
+    size_t width,
+    float eps)
+{
+    const unsigned int threads = 256U;
+    size_t value_count;
+
+    if (ms == NULL || ts == NULL ||
+        ms->device_weights == NULL ||
+        ts->device_gradients == NULL ||
+        ts->device_workspace == NULL ||
+        tokens == 0U || width == 0U ||
+        !(eps > 0.0f) ||
+        tokens > ((size_t)-1) / width)
+        return 1;
+
+    value_count = tokens * width;
+
+    if (weight_offset > ms->weight_count ||
+        width > ms->weight_count - weight_offset ||
+        weight_offset > ts->gradient_capacity ||
+        width > ts->gradient_capacity - weight_offset ||
+        !range_ok(x_offset, value_count, ts->workspace_capacity) ||
+        !range_ok(dy_offset, value_count, ts->workspace_capacity) ||
+        !range_ok(dx_offset, value_count, ts->workspace_capacity) ||
+        overlap(x_offset, value_count, dy_offset, value_count) ||
+        overlap(x_offset, value_count, dx_offset, value_count) ||
+        overlap(dy_offset, value_count, dx_offset, value_count) ||
+        width > (size_t)UINT_MAX * threads ||
+        tokens > (size_t)UINT_MAX * threads)
+        return 1;
+
+    unsigned int blocks =
+        (unsigned int)((width + threads - 1U) / threads);
+
+    rmsnorm_dweight_kernel<<<blocks, threads>>>(
+        (float *)ts->device_gradients + weight_offset,
+        (const float *)ts->device_workspace + x_offset,
+        (const float *)ts->device_workspace + dy_offset,
+        tokens, width, eps);
+
+    if (cudaGetLastError() != cudaSuccess)
+        return 1;
+
+    blocks =
+        (unsigned int)((tokens + threads - 1U) / threads);
+
+    rmsnorm_dx_kernel<<<blocks, threads>>>(
+        (float *)ts->device_workspace + dx_offset,
+        (const float *)ts->device_workspace + x_offset,
+        (const float *)ts->device_workspace + dy_offset,
+        (const float *)ms->device_weights + weight_offset,
+        tokens, width, eps);
+
+    return cudaGetLastError() == cudaSuccess ? 0 : 1;
+}
