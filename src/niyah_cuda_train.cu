@@ -353,6 +353,452 @@ __global__ static void rmsnorm_dx_kernel(
     }
 }
 
+__global__ static void attention_dq_kernel(
+    float *dq,
+    const float *da,
+    const float *q,
+    const float *k,
+    const float *v,
+    size_t tokens,
+    size_t n_heads,
+    size_t n_kv_heads,
+    size_t head_dim,
+    size_t dim,
+    size_t kv_dim)
+{
+    const size_t item =
+        (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t item_count = tokens * n_heads;
+
+    if (item < item_count) {
+        const size_t t = item / n_heads;
+        const size_t h = item % n_heads;
+        const size_t group_size = n_heads / n_kv_heads;
+        const size_t kh = h / group_size;
+        const float scale = 1.0f / sqrtf((float)head_dim);
+        const float *qh =
+            q + t * dim + h * head_dim;
+        const float *dah =
+            da + t * dim + h * head_dim;
+
+        float max_score = -3.402823466e+38F;
+
+        for (size_t src = 0U; src <= t; ++src) {
+            const float *khv =
+                k + src * kv_dim + kh * head_dim;
+            float score = 0.0f;
+
+            for (size_t d = 0U; d < head_dim; ++d)
+                score += qh[d] * khv[d];
+
+            score *= scale;
+            if (score > max_score)
+                max_score = score;
+        }
+
+        float sum_exp = 0.0f;
+
+        for (size_t src = 0U; src <= t; ++src) {
+            const float *khv =
+                k + src * kv_dim + kh * head_dim;
+            float score = 0.0f;
+
+            for (size_t d = 0U; d < head_dim; ++d)
+                score += qh[d] * khv[d];
+
+            sum_exp +=
+                expf(score * scale - max_score);
+        }
+
+        if (!(sum_exp > 0.0f) || !isfinite(sum_exp))
+            return;
+
+        float mean_dp = 0.0f;
+
+        for (size_t src = 0U; src <= t; ++src) {
+            const float *khv =
+                k + src * kv_dim + kh * head_dim;
+            const float *vh =
+                v + src * kv_dim + kh * head_dim;
+            float score = 0.0f;
+            float dprob = 0.0f;
+
+            for (size_t d = 0U; d < head_dim; ++d) {
+                score += qh[d] * khv[d];
+                dprob += dah[d] * vh[d];
+            }
+
+            const float probability =
+                expf(score * scale - max_score) /
+                sum_exp;
+
+            mean_dp += probability * dprob;
+        }
+
+        for (size_t d = 0U; d < head_dim; ++d) {
+            float value = 0.0f;
+
+            for (size_t src = 0U; src <= t; ++src) {
+                const float *khv =
+                    k + src * kv_dim + kh * head_dim;
+                const float *vh =
+                    v + src * kv_dim + kh * head_dim;
+                float score = 0.0f;
+                float dprob = 0.0f;
+
+                for (size_t j = 0U; j < head_dim; ++j) {
+                    score += qh[j] * khv[j];
+                    dprob += dah[j] * vh[j];
+                }
+
+                const float probability =
+                    expf(score * scale - max_score) /
+                    sum_exp;
+
+                const float ds =
+                    probability * (dprob - mean_dp);
+
+                value += ds * scale * khv[d];
+            }
+
+            dq[t * dim + h * head_dim + d] = value;
+        }
+    }
+}
+
+__global__ static void attention_dkdv_kernel(
+    float *dk,
+    float *dv,
+    const float *da,
+    const float *q,
+    const float *k,
+    const float *v,
+    size_t tokens,
+    size_t n_heads,
+    size_t n_kv_heads,
+    size_t head_dim,
+    size_t dim,
+    size_t kv_dim)
+{
+    const size_t item =
+        (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t item_count =
+        tokens * n_kv_heads * head_dim;
+
+    if (item < item_count) {
+        const size_t per_token =
+            n_kv_heads * head_dim;
+        const size_t src =
+            item / per_token;
+        const size_t rem =
+            item % per_token;
+        const size_t kh =
+            rem / head_dim;
+        const size_t d =
+            rem % head_dim;
+
+        const size_t group_size =
+            n_heads / n_kv_heads;
+        const size_t first_head =
+            kh * group_size;
+        const size_t last_head =
+            first_head + group_size;
+        const float scale =
+            1.0f / sqrtf((float)head_dim);
+
+        float dk_value = 0.0f;
+        float dv_value = 0.0f;
+
+        for (size_t t = src; t < tokens; ++t) {
+            for (size_t h = first_head;
+                 h < last_head;
+                 ++h) {
+                const float *qh =
+                    q + t * dim + h * head_dim;
+                const float *dah =
+                    da + t * dim + h * head_dim;
+
+                float max_score =
+                    -3.402823466e+38F;
+
+                for (size_t s = 0U; s <= t; ++s) {
+                    const float *khv =
+                        k + s * kv_dim +
+                        kh * head_dim;
+                    float score = 0.0f;
+
+                    for (size_t j = 0U;
+                         j < head_dim;
+                         ++j) {
+                        score += qh[j] * khv[j];
+                    }
+
+                    score *= scale;
+                    if (score > max_score)
+                        max_score = score;
+                }
+
+                float sum_exp = 0.0f;
+
+                for (size_t s = 0U; s <= t; ++s) {
+                    const float *khv =
+                        k + s * kv_dim +
+                        kh * head_dim;
+                    float score = 0.0f;
+
+                    for (size_t j = 0U;
+                         j < head_dim;
+                         ++j) {
+                        score += qh[j] * khv[j];
+                    }
+
+                    sum_exp +=
+                        expf(
+                            score * scale -
+                            max_score);
+                }
+
+                if (!(sum_exp > 0.0f) ||
+                    !isfinite(sum_exp)) {
+                    continue;
+                }
+
+                float mean_dp = 0.0f;
+
+                for (size_t s = 0U; s <= t; ++s) {
+                    const float *khv =
+                        k + s * kv_dim +
+                        kh * head_dim;
+                    const float *vh =
+                        v + s * kv_dim +
+                        kh * head_dim;
+                    float score = 0.0f;
+                    float dprob = 0.0f;
+
+                    for (size_t j = 0U;
+                         j < head_dim;
+                         ++j) {
+                        score += qh[j] * khv[j];
+                        dprob += dah[j] * vh[j];
+                    }
+
+                    const float probability =
+                        expf(
+                            score * scale -
+                            max_score) /
+                        sum_exp;
+
+                    mean_dp +=
+                        probability * dprob;
+                }
+
+                const float *src_k =
+                    k + src * kv_dim +
+                    kh * head_dim;
+                const float *src_v =
+                    v + src * kv_dim +
+                    kh * head_dim;
+
+                float src_score = 0.0f;
+                float src_dprob = 0.0f;
+
+                for (size_t j = 0U;
+                     j < head_dim;
+                     ++j) {
+                    src_score +=
+                        qh[j] * src_k[j];
+                    src_dprob +=
+                        dah[j] * src_v[j];
+                }
+
+                const float probability =
+                    expf(
+                        src_score * scale -
+                        max_score) /
+                    sum_exp;
+
+                const float ds =
+                    probability *
+                    (src_dprob - mean_dp);
+
+                dk_value +=
+                    ds * scale * qh[d];
+
+                dv_value +=
+                    probability * dah[d];
+            }
+        }
+
+        dk[src * kv_dim + kh * head_dim + d] =
+            dk_value;
+        dv[src * kv_dim + kh * head_dim + d] =
+            dv_value;
+    }
+}
+
+extern "C" int niyah_cuda_train_attention_backward(
+    NiyahCudaTrainState *ts,
+    size_t q_offset,
+    size_t k_offset,
+    size_t v_offset,
+    size_t da_offset,
+    size_t dq_offset,
+    size_t dk_offset,
+    size_t dv_offset,
+    size_t token_count,
+    size_t n_heads,
+    size_t n_kv_heads,
+    size_t head_dim)
+{
+    const unsigned int threads = 128U;
+    size_t dim;
+    size_t kv_dim;
+    size_t q_count;
+    size_t kv_count;
+    size_t dq_items;
+    size_t dkdv_items;
+
+    if (ts == NULL ||
+        ts->device_workspace == NULL ||
+        token_count == 0U ||
+        n_heads == 0U ||
+        n_kv_heads == 0U ||
+        head_dim == 0U ||
+        (n_heads % n_kv_heads) != 0U ||
+        n_heads > ((size_t)-1) / head_dim ||
+        n_kv_heads > ((size_t)-1) / head_dim) {
+        return 1;
+    }
+
+    dim = n_heads * head_dim;
+    kv_dim = n_kv_heads * head_dim;
+
+    if (token_count > ((size_t)-1) / dim ||
+        token_count > ((size_t)-1) / kv_dim ||
+        token_count > ((size_t)-1) / n_heads) {
+        return 1;
+    }
+
+    q_count = token_count * dim;
+    kv_count = token_count * kv_dim;
+    dq_items = token_count * n_heads;
+
+    if (kv_count > ((size_t)-1) / head_dim)
+        return 1;
+
+    dkdv_items =
+        token_count * n_kv_heads * head_dim;
+
+    if (!range_ok(
+            q_offset, q_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            k_offset, kv_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            v_offset, kv_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            da_offset, q_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            dq_offset, q_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            dk_offset, kv_count,
+            ts->workspace_capacity) ||
+        !range_ok(
+            dv_offset, kv_count,
+            ts->workspace_capacity)) {
+        return 1;
+    }
+
+    if (overlap(q_offset, q_count, dq_offset, q_count) ||
+        overlap(q_offset, q_count, dk_offset, kv_count) ||
+        overlap(q_offset, q_count, dv_offset, kv_count) ||
+        overlap(k_offset, kv_count, dq_offset, q_count) ||
+        overlap(k_offset, kv_count, dk_offset, kv_count) ||
+        overlap(k_offset, kv_count, dv_offset, kv_count) ||
+        overlap(v_offset, kv_count, dq_offset, q_count) ||
+        overlap(v_offset, kv_count, dk_offset, kv_count) ||
+        overlap(v_offset, kv_count, dv_offset, kv_count) ||
+        overlap(da_offset, q_count, dq_offset, q_count) ||
+        overlap(da_offset, q_count, dk_offset, kv_count) ||
+        overlap(da_offset, q_count, dv_offset, kv_count) ||
+        overlap(dq_offset, q_count, dk_offset, kv_count) ||
+        overlap(dq_offset, q_count, dv_offset, kv_count) ||
+        overlap(dk_offset, kv_count, dv_offset, kv_count)) {
+        return 1;
+    }
+
+    if (dq_items >
+            (size_t)UINT_MAX * threads ||
+        dkdv_items >
+            (size_t)UINT_MAX * threads) {
+        return 1;
+    }
+
+    float *workspace =
+        (float *)ts->device_workspace;
+
+    if (cudaMemset(
+            workspace + dq_offset,
+            0,
+            q_count * sizeof(float)) != cudaSuccess ||
+        cudaMemset(
+            workspace + dk_offset,
+            0,
+            kv_count * sizeof(float)) != cudaSuccess ||
+        cudaMemset(
+            workspace + dv_offset,
+            0,
+            kv_count * sizeof(float)) != cudaSuccess) {
+        return 1;
+    }
+
+    unsigned int blocks =
+        (unsigned int)(
+            (dq_items + threads - 1U) /
+            threads);
+
+    attention_dq_kernel<<<blocks, threads>>>(
+        workspace + dq_offset,
+        workspace + da_offset,
+        workspace + q_offset,
+        workspace + k_offset,
+        workspace + v_offset,
+        token_count,
+        n_heads,
+        n_kv_heads,
+        head_dim,
+        dim,
+        kv_dim);
+
+    if (cudaGetLastError() != cudaSuccess)
+        return 1;
+
+    blocks =
+        (unsigned int)(
+            (dkdv_items + threads - 1U) /
+            threads);
+
+    attention_dkdv_kernel<<<blocks, threads>>>(
+        workspace + dk_offset,
+        workspace + dv_offset,
+        workspace + da_offset,
+        workspace + q_offset,
+        workspace + k_offset,
+        workspace + v_offset,
+        token_count,
+        n_heads,
+        n_kv_heads,
+        head_dim,
+        dim,
+        kv_dim);
+
+    return cudaGetLastError() == cudaSuccess ? 0 : 1;
+}
+
 __global__ static void silu_mul_backward_kernel(
     float *dgate,
     float *dup,

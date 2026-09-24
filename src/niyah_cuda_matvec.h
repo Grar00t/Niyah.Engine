@@ -120,6 +120,20 @@ int niyah_cuda_train_linear_backward(
     size_t rows,
     size_t cols);
 
+int niyah_cuda_train_attention_backward(
+    NiyahCudaTrainState *train_state,
+    size_t q_workspace_offset,
+    size_t k_workspace_offset,
+    size_t v_workspace_offset,
+    size_t da_workspace_offset,
+    size_t dq_workspace_offset,
+    size_t dk_workspace_offset,
+    size_t dv_workspace_offset,
+    size_t token_count,
+    size_t n_heads,
+    size_t n_kv_heads,
+    size_t head_dim);
+
 int niyah_cuda_train_silu_mul_backward(
     NiyahCudaTrainState *train_state,
     size_t gate_workspace_offset,
