@@ -216,6 +216,12 @@ NiyahStatus niyah_dataset_shard_reader_info(
     uint8_t out_shard_identity[
         NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE]);
 
+NiyahStatus niyah_dataset_shard_reader_collection_identity_sha256(
+    NiyahDatasetShardReader *const *readers,
+    size_t reader_count,
+    uint8_t out_identity[
+        NIYAH_DATASET_COLLECTION_IDENTITY_SHA256_SIZE]);
+
 NiyahStatus niyah_dataset_shard_reader_sample_with_loss(
     NiyahDatasetShardReader *reader,
     size_t sample_index,

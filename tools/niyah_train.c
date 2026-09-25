@@ -491,25 +491,90 @@ static int path_exists(const char *path)
     return 1;
 }
 
-static int validate_sample_context(const NiyahTrainingSample *samples,
-                                   size_t sample_count,
-                                   uint32_t context_length)
+typedef struct NiyahTrainShardProvider {
+    NiyahDatasetShardReader **readers;
+    const size_t *sample_offsets;
+    size_t shard_count;
+} NiyahTrainShardProvider;
+
+static NiyahStatus train_sample_provider(
+    size_t sample_index,
+    NiyahTrainingSample *out_sample,
+    void *user_data)
 {
-    size_t i;
-    for (i = 0U; i < sample_count; ++i) {
-        if (samples[i].token_count == 0U ||
-            samples[i].token_count > (size_t)context_length)
-            return 0;
+    NiyahTrainShardProvider *context =
+        (NiyahTrainShardProvider *)user_data;
+    const uint32_t *tokens = NULL;
+    const uint32_t *targets = NULL;
+    size_t token_count = 0U;
+    size_t loss_start = 0U;
+    size_t lo = 0U;
+    size_t hi;
+    size_t shard_index;
+    size_t local_index;
+    NiyahStatus status;
+
+    if (context == NULL ||
+        out_sample == NULL ||
+        context->readers == NULL ||
+        context->sample_offsets == NULL ||
+        context->shard_count == 0U)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (sample_index >=
+        context->sample_offsets[context->shard_count])
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    hi = context->shard_count;
+
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2U;
+
+        if (sample_index <
+            context->sample_offsets[mid + 1U])
+            hi = mid;
+        else
+            lo = mid + 1U;
     }
-    return 1;
+
+    shard_index = lo;
+
+    if (shard_index >= context->shard_count ||
+        context->readers[shard_index] == NULL ||
+        sample_index <
+            context->sample_offsets[shard_index])
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    local_index =
+        sample_index -
+        context->sample_offsets[shard_index];
+
+    status = niyah_dataset_shard_reader_sample_with_loss(
+        context->readers[shard_index],
+        local_index,
+        &tokens,
+        &targets,
+        &token_count,
+        &loss_start);
+
+    if (status != NIYAH_OK)
+        return status;
+
+    out_sample->tokens = tokens;
+    out_sample->targets = targets;
+    out_sample->token_count = token_count;
+    out_sample->loss_start = loss_start;
+
+    return NIYAH_OK;
 }
 
 int main(int argc, char **argv)
 {
     NiyahTrainOptions options;
     NiyahTokenizer *tokenizer = NULL;
-    NiyahDatasetShard *shards = NULL;
-    NiyahTrainingSample *samples = NULL;
+    NiyahDatasetShardReader **readers = NULL;
+    size_t *sample_offsets = NULL;
+    NiyahTrainShardProvider provider_context;
     NiyahDatasetCursor cursor;
     NiyahModel model;
     NiyahAdamWState optimizer_state;
@@ -519,9 +584,8 @@ int main(int argc, char **argv)
     NiyahCudaTrainingContext cuda_context;
 #endif
     size_t sample_count = 0U;
-    size_t sample_bytes = 0U;
+    size_t max_token_count = 0U;
     size_t shard_index;
-    size_t sample_offset = 0U;
     size_t vocab_size;
     uint8_t dataset_identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE];
     uint8_t checkpoint_identity[NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
@@ -530,6 +594,7 @@ int main(int argc, char **argv)
     int parsed;
     int exit_code = 1;
 
+    memset(&provider_context, 0, sizeof(provider_context));
     memset(&cursor, 0, sizeof(cursor));
     memset(&model, 0, sizeof(model));
     memset(&optimizer_state, 0, sizeof(optimizer_state));
@@ -570,80 +635,126 @@ int main(int argc, char **argv)
         return fail_status("tokenizer_load", status);
     }
 
-    if (options.shard_count > SIZE_MAX / sizeof(*shards)) {
-        exit_code = fail_status("shard_allocation", NIYAH_ERR_OVERFLOW);
-        goto cleanup;
-    }
-    shards = (NiyahDatasetShard *)calloc(options.shard_count, sizeof(*shards));
-    if (shards == NULL) {
-        exit_code = fail_status("shard_allocation", NIYAH_ERR_OUT_OF_MEMORY);
-        goto cleanup;
-    }
-
-    for (shard_index = 0U; shard_index < options.shard_count; ++shard_index) {
-        status = niyah_dataset_shard_load(
-            options.shard_paths[shard_index], tokenizer, &shards[shard_index]);
-        if (status != NIYAH_OK) {
-            exit_code = fail_status("shard_load", status);
-            goto cleanup;
-        }
-    }
-
-    if (options.shard_count == 1U) {
-        status = niyah_dataset_shard_identity_sha256(
-            &shards[0U], dataset_identity);
-    } else {
-        status = niyah_dataset_collection_identity_sha256(
-            shards, options.shard_count, dataset_identity);
-    }
-    if (status != NIYAH_OK) {
-        exit_code = fail_status("dataset_identity", status);
+    if (options.shard_count >
+            SIZE_MAX / sizeof(*readers) ||
+        options.shard_count >
+            SIZE_MAX / sizeof(*sample_offsets) - 1U) {
+        exit_code = fail_status(
+            "reader_allocation",
+            NIYAH_ERR_OVERFLOW);
         goto cleanup;
     }
 
+    readers = (NiyahDatasetShardReader **)calloc(
+        options.shard_count,
+        sizeof(*readers));
+    sample_offsets = (size_t *)calloc(
+        options.shard_count + 1U,
+        sizeof(*sample_offsets));
+
+    if (readers == NULL || sample_offsets == NULL) {
+        exit_code = fail_status(
+            "reader_allocation",
+            NIYAH_ERR_OUT_OF_MEMORY);
+        goto cleanup;
+    }
+
+    sample_offsets[0U] = 0U;
     sample_count = 0U;
-    for (shard_index = 0U; shard_index < options.shard_count; ++shard_index) {
+    max_token_count = 0U;
+
+    for (shard_index = 0U;
+         shard_index < options.shard_count;
+         ++shard_index) {
         size_t shard_samples = 0U;
-        status = niyah_training_samples_from_shard(
-            &shards[shard_index], NULL, 0U, &shard_samples);
+        size_t shard_sequence_length = 0U;
+        uint8_t tokenizer_identity[
+            NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE];
+        uint8_t shard_identity[
+            NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+
+        status = niyah_dataset_shard_reader_open(
+            options.shard_paths[shard_index],
+            tokenizer,
+            &readers[shard_index]);
+
         if (status != NIYAH_OK) {
-            exit_code = fail_status("sample_query", status);
+            fprintf(
+                stderr,
+                "reader_shard_index=%zu path=%s\n",
+                shard_index,
+                options.shard_paths[shard_index]);
+            exit_code = fail_status(
+                "shard_reader_open",
+                status);
             goto cleanup;
         }
-        if (sample_count > SIZE_MAX - shard_samples) {
-            exit_code = fail_status("sample_count", NIYAH_ERR_OVERFLOW);
+
+        status = niyah_dataset_shard_reader_info(
+            readers[shard_index],
+            &shard_samples,
+            &shard_sequence_length,
+            tokenizer_identity,
+            shard_identity);
+
+        if (status != NIYAH_OK) {
+            exit_code = fail_status(
+                "shard_reader_info",
+                status);
             goto cleanup;
         }
+
+        if (shard_samples == 0U ||
+            shard_sequence_length == 0U) {
+            exit_code = fail_status(
+                "shard_reader_info",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
+        if (sample_count >
+            SIZE_MAX - shard_samples) {
+            exit_code = fail_status(
+                "sample_count",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+
         sample_count += shard_samples;
+        sample_offsets[shard_index + 1U] =
+            sample_count;
+
+        if (shard_sequence_length >
+            max_token_count)
+            max_token_count =
+                shard_sequence_length;
+
+        if (options.shard_count == 1U) {
+            memcpy(
+                dataset_identity,
+                shard_identity,
+                sizeof(dataset_identity));
+        }
     }
-    if (sample_count > SIZE_MAX / sizeof(*samples)) {
-        exit_code = fail_status("sample_allocation", NIYAH_ERR_OVERFLOW);
-        goto cleanup;
-    }
-    sample_bytes = sample_count * sizeof(*samples);
-    samples = (NiyahTrainingSample *)calloc(1U, sample_bytes);
-    if (samples == NULL) {
-        exit_code = fail_status("sample_allocation", NIYAH_ERR_OUT_OF_MEMORY);
-        goto cleanup;
-    }
-    sample_offset = 0U;
-    for (shard_index = 0U; shard_index < options.shard_count; ++shard_index) {
-        size_t shard_samples = 0U;
-        status = niyah_training_samples_from_shard(
-            &shards[shard_index],
-            samples + sample_offset,
-            sample_count - sample_offset,
-            &shard_samples);
+
+    if (options.shard_count > 1U) {
+        status =
+            niyah_dataset_shard_reader_collection_identity_sha256(
+                readers,
+                options.shard_count,
+                dataset_identity);
+
         if (status != NIYAH_OK) {
-            exit_code = fail_status("sample_build", status);
+            exit_code = fail_status(
+                "dataset_identity",
+                status);
             goto cleanup;
         }
-        sample_offset += shard_samples;
     }
-    if (sample_offset != sample_count) {
-        exit_code = fail_status("sample_build", NIYAH_ERR_INVALID_CONFIG);
-        goto cleanup;
-    }
+
+    provider_context.readers = readers;
+    provider_context.sample_offsets = sample_offsets;
+    provider_context.shard_count = options.shard_count;
 
     if (options.mode == NIYAH_TRAIN_MODE_NEW) {
         vocab_size = niyah_tokenizer_vocab_size(tokenizer);
@@ -657,9 +768,12 @@ int main(int argc, char **argv)
             exit_code = fail_status("model_create", status);
             goto cleanup;
         }
-        if (!validate_sample_context(samples, sample_count,
-                                     model.config.context_length)) {
-            exit_code = fail_status("sample_context", NIYAH_ERR_INVALID_CONFIG);
+        if (max_token_count == 0U ||
+            max_token_count >
+                (size_t)model.config.context_length) {
+            exit_code = fail_status(
+                "sample_context",
+                NIYAH_ERR_INVALID_CONFIG);
             goto cleanup;
         }
         status = niyah_model_reset_parameters(&model, options.model_seed);
@@ -717,8 +831,9 @@ int main(int argc, char **argv)
                    NIYAH_DATASET_IDENTITY_SHA256_SIZE) != 0 ||
             memcmp(cursor.checkpoint_identity, checkpoint_identity,
                    NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE) != 0 ||
-            !validate_sample_context(samples, sample_count,
-                                     model.config.context_length)) {
+            max_token_count == 0U ||
+            max_token_count >
+                (size_t)model.config.context_length) {
             exit_code = fail_status("resume_compatibility",
                                     NIYAH_ERR_INVALID_CONFIG);
             goto cleanup;
@@ -727,37 +842,18 @@ int main(int argc, char **argv)
 
 #ifdef NIYAH_TRAIN_ENABLE_CUDA
     if (options.use_cuda) {
-        size_t max_tokens = 0U;
+        const size_t max_tokens = max_token_count;
         size_t cuda_workspace_count = 0U;
-        size_t sample_index;
 
-        for (sample_index = 0U;
-             sample_index < sample_count;
-             ++sample_index) {
-            size_t required_cuda_workspace = 0U;
-
-            if (niyah_cuda_train_backward_workspace_floats(
-                    &model.config,
-                    samples[sample_index].token_count,
-                    &required_cuda_workspace) != 0) {
-                fprintf(
-                    stderr,
-                    "cuda_training_stage=workspace_query status=CUDA_ERROR\n");
-                exit_code = 1;
-                goto cleanup;
-            }
-
-            if (samples[sample_index].token_count >
-                max_tokens) {
-                max_tokens =
-                    samples[sample_index].token_count;
-            }
-
-            if (required_cuda_workspace >
-                cuda_workspace_count) {
-                cuda_workspace_count =
-                    required_cuda_workspace;
-            }
+        if (niyah_cuda_train_backward_workspace_floats(
+                &model.config,
+                max_tokens,
+                &cuda_workspace_count) != 0) {
+            fprintf(
+                stderr,
+                "cuda_training_stage=workspace_query status=CUDA_ERROR\n");
+            exit_code = 1;
+            goto cleanup;
         }
 
         if (niyah_cuda_model_state_create(
@@ -782,6 +878,7 @@ int main(int argc, char **argv)
             exit_code = 1;
             goto cleanup;
         }
+
         cuda_context.train_ready = 1;
         cuda_context.optimizer_state =
             &optimizer_state;
@@ -798,24 +895,46 @@ int main(int argc, char **argv)
 #ifdef NIYAH_TRAIN_ENABLE_CUDA
     if (options.use_cuda) {
         status =
-            niyah_training_run_updates_with_progress_with_backward(
-                &model, samples, sample_count, &cursor,
-                &optimizer_state, &optimizer_config,
-                options.batch_size, options.accumulation_steps,
+            niyah_training_run_updates_with_progress_with_provider(
+                &model,
+                sample_count,
+                max_token_count,
+                train_sample_provider,
+                &provider_context,
+                &cursor,
+                &optimizer_state,
+                &optimizer_config,
+                options.batch_size,
+                options.accumulation_steps,
                 options.updates,
-                cuda_training_backward, &cuda_context,
+                cuda_training_backward,
+                &cuda_context,
                 print_training_progress,
-                &progress_context, &mean_loss);
+                &progress_context,
+                &mean_loss);
     } else
 #endif
     {
-        status = niyah_training_run_updates_with_progress(
-            &model, samples, sample_count, &cursor,
-            &optimizer_state, &optimizer_config,
-            options.batch_size, options.accumulation_steps,
-            options.updates, print_training_progress,
-            &progress_context, &mean_loss);
+        status =
+            niyah_training_run_updates_with_progress_with_provider(
+                &model,
+                sample_count,
+                max_token_count,
+                train_sample_provider,
+                &provider_context,
+                &cursor,
+                &optimizer_state,
+                &optimizer_config,
+                options.batch_size,
+                options.accumulation_steps,
+                options.updates,
+                NULL,
+                NULL,
+                print_training_progress,
+                &progress_context,
+                &mean_loss);
     }
+
     if (status != NIYAH_OK) {
         exit_code = fail_status("training", status);
         goto cleanup;
@@ -877,12 +996,17 @@ cleanup:
     niyah_dataset_cursor_destroy(&cursor);
     niyah_adamw_state_destroy(&optimizer_state);
     niyah_model_destroy(&model);
-    free(samples);
-    if (shards != NULL) {
-        for (shard_index = 0U; shard_index < options.shard_count; ++shard_index)
-            niyah_dataset_shard_destroy(&shards[shard_index]);
+
+    if (readers != NULL) {
+        for (shard_index = 0U;
+             shard_index < options.shard_count;
+             ++shard_index)
+            niyah_dataset_shard_reader_close(
+                readers[shard_index]);
     }
-    free(shards);
+
+    free(sample_offsets);
+    free(readers);
     niyah_tokenizer_destroy(tokenizer);
     train_options_destroy(&options);
     return exit_code;

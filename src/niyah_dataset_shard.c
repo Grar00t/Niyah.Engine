@@ -1742,6 +1742,66 @@ NiyahStatus niyah_dataset_shard_reader_info(
     return NIYAH_OK;
 }
 
+NiyahStatus niyah_dataset_shard_reader_collection_identity_sha256(
+    NiyahDatasetShardReader *const *readers,
+    size_t reader_count,
+    uint8_t out_identity[
+        NIYAH_DATASET_COLLECTION_IDENTITY_SHA256_SIZE])
+{
+    static const unsigned char domain[] =
+        "NIYAH-DATASET-COLLECTION-V1";
+    NiyahSha256 sha;
+    unsigned char count_bytes[8];
+    size_t i;
+
+    if (readers == NULL ||
+        out_identity == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (reader_count == 0U)
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    if (readers[0U] == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    niyah_sha256_init(&sha);
+    niyah_sha256_update(
+        &sha,
+        domain,
+        sizeof(domain) - 1U);
+
+    store_u64_le(
+        count_bytes,
+        (uint64_t)reader_count);
+    niyah_sha256_update(
+        &sha,
+        count_bytes,
+        sizeof(count_bytes));
+
+    for (i = 0U; i < reader_count; ++i) {
+        if (readers[i] == NULL)
+            return NIYAH_ERR_INVALID_ARGUMENT;
+
+        if (i != 0U &&
+            memcmp(
+                readers[0U]->tokenizer_identity,
+                readers[i]->tokenizer_identity,
+                NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE) != 0)
+            return NIYAH_ERR_INVALID_CONFIG;
+
+        niyah_sha256_update(
+            &sha,
+            readers[i]->shard_identity,
+            NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE);
+    }
+
+    niyah_sha256_final(
+        &sha,
+        out_identity);
+
+    return NIYAH_OK;
+}
+
 NiyahStatus niyah_dataset_shard_reader_sample_with_loss(
     NiyahDatasetShardReader *reader,
     size_t sample_index,
