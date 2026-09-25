@@ -19,6 +19,7 @@
 #define NIYAH_TRAIN_MODE_NONE 0
 #define NIYAH_TRAIN_MODE_NEW 1
 #define NIYAH_TRAIN_MODE_RESUME 2
+#define NIYAH_TRAIN_MODE_FINETUNE 3
 
 typedef struct NiyahTrainOptions {
     int mode;
@@ -79,13 +80,20 @@ static void usage(FILE *stream)
         "      --weight-decay F --max-grad-norm F [--warmup-steps N] [--progress-details]\n"
         "      [--backend cpu|cuda]\n"
         "\n"
+        "  niyah-train finetune --tokenizer TOK --shard SHARD [--shard SHARD ...]\n"
+        "      --checkpoint-in CKPT --checkpoint-out CKPT --cursor-out CURSOR\n"
+        "      --updates N --batch-size N --accumulation-steps N --data-seed N\n"
+        "      --learning-rate F --beta1 F --beta2 F --epsilon F\n"
+        "      --weight-decay F --max-grad-norm F [--warmup-steps N] [--progress-details]\n"
+        "      [--backend cpu|cuda]\n"
+        "\n"
         "  niyah-train resume --tokenizer TOK --shard SHARD [--shard SHARD ...]\n"
         "      --checkpoint-in CKPT --cursor-in CURSOR\n"
         "      --checkpoint-out CKPT --cursor-out CURSOR\n"
         "      --updates N --batch-size N --accumulation-steps N [--progress-details]\n"
         "      [--backend cpu|cuda]\n"
         "\n"
-        "Outputs are required to be new paths. Resume inputs are never overwritten.\n");
+        "Outputs are required to be new paths. Input checkpoints/cursors are never overwritten.\n");
 }
 
 static const char *status_name(NiyahStatus status)
@@ -399,6 +407,7 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
     }
     if (argc < 2) return 0;
     if (strcmp(argv[1], "new") == 0) options->mode = NIYAH_TRAIN_MODE_NEW;
+    else if (strcmp(argv[1], "finetune") == 0) options->mode = NIYAH_TRAIN_MODE_FINETUNE;
     else if (strcmp(argv[1], "resume") == 0) options->mode = NIYAH_TRAIN_MODE_RESUME;
     else return 0;
 
@@ -528,16 +537,27 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
     return 1;
 }
 
-static int new_fields_present(const NiyahTrainOptions *o)
+static int model_fields_present(const NiyahTrainOptions *o)
 {
-    return o->have_model_seed || o->have_data_seed ||
+    return o->have_model_seed ||
            o->have_context_length || o->have_embedding_dim ||
            o->have_layers || o->have_heads || o->have_kv_heads ||
            o->have_ffn_hidden_dim || o->have_rms_norm_eps ||
-           o->have_tie_word_embeddings || o->have_learning_rate ||
-           o->have_beta1 || o->have_beta2 || o->have_epsilon ||
-           o->have_weight_decay || o->have_max_grad_norm ||
-           o->have_warmup_steps;
+           o->have_tie_word_embeddings;
+}
+
+static int optimizer_fields_present(const NiyahTrainOptions *o)
+{
+    return o->have_learning_rate || o->have_beta1 || o->have_beta2 ||
+           o->have_epsilon || o->have_weight_decay ||
+           o->have_max_grad_norm || o->have_warmup_steps;
+}
+
+static int optimizer_fields_complete(const NiyahTrainOptions *o)
+{
+    return o->have_learning_rate && o->have_beta1 && o->have_beta2 &&
+           o->have_epsilon && o->have_weight_decay &&
+           o->have_max_grad_norm;
 }
 
 static int validate_options(const NiyahTrainOptions *o)
@@ -564,9 +584,20 @@ static int validate_options(const NiyahTrainOptions *o)
                o->have_weight_decay && o->have_max_grad_norm;
     }
 
+    if (o->mode == NIYAH_TRAIN_MODE_FINETUNE) {
+        if (o->checkpoint_in == NULL || o->cursor_in != NULL ||
+            !o->have_data_seed || model_fields_present(o) ||
+            !optimizer_fields_complete(o))
+            return 0;
+        if (strcmp(o->checkpoint_in, o->checkpoint_out) == 0)
+            return 0;
+        return 1;
+    }
+
     if (o->mode == NIYAH_TRAIN_MODE_RESUME) {
         if (o->checkpoint_in == NULL || o->cursor_in == NULL ||
-            new_fields_present(o))
+            o->have_data_seed || model_fields_present(o) ||
+            optimizer_fields_present(o))
             return 0;
         if (strcmp(o->checkpoint_in, o->checkpoint_out) == 0 ||
             strcmp(o->cursor_in, o->cursor_out) == 0)
@@ -898,6 +929,48 @@ int main(int argc, char **argv)
             exit_code = fail_status("cursor_bind", status);
             goto cleanup;
         }
+    } else if (options.mode == NIYAH_TRAIN_MODE_FINETUNE) {
+        status = niyah_checkpoint_load_with_tokenizer(
+            options.checkpoint_in, tokenizer,
+            &model, &optimizer_state, &optimizer_config);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("checkpoint_load", status);
+            goto cleanup;
+        }
+        if (max_token_count == 0U ||
+            max_token_count >
+                (size_t)model.config.context_length) {
+            exit_code = fail_status(
+                "sample_context",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+        niyah_adamw_state_destroy(&optimizer_state);
+        memset(&optimizer_state, 0, sizeof(optimizer_state));
+        status = niyah_adamw_config_validate(&options.optimizer_config);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("optimizer_config", status);
+            goto cleanup;
+        }
+        status = niyah_adamw_state_create(&optimizer_state, &model);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("optimizer_create", status);
+            goto cleanup;
+        }
+        optimizer_config = options.optimizer_config;
+        optimizer_state.warmup_steps = options.warmup_steps;
+        status = niyah_dataset_cursor_init(
+            &cursor, sample_count, options.data_seed);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("cursor_create", status);
+            goto cleanup;
+        }
+        status = niyah_dataset_cursor_bind_identity(
+            &cursor, dataset_identity);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("cursor_bind", status);
+            goto cleanup;
+        }
     } else {
         status = niyah_checkpoint_load_with_tokenizer(
             options.checkpoint_in, tokenizer,
@@ -1064,7 +1137,9 @@ int main(int argc, char **argv)
     }
 
     printf("mode=%s\n",
-           options.mode == NIYAH_TRAIN_MODE_NEW ? "new" : "resume");
+           options.mode == NIYAH_TRAIN_MODE_NEW ? "new" :
+           options.mode == NIYAH_TRAIN_MODE_FINETUNE ? "finetune" :
+           "resume");
     printf("backend=%s\n",
            options.use_cuda ? "cuda" : "cpu");
     printf("shards=%zu\n", options.shard_count);

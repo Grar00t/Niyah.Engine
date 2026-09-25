@@ -817,6 +817,19 @@ if(NIYAH_BUILD_TESTS)
                 WILL_FAIL TRUE)
     endif()
 
+    add_test(NAME niyah_train_finetune_test
+        COMMAND ${CMAKE_COMMAND}
+            -DNIYAH_TRAIN=$<TARGET_FILE:niyah_train>
+            -DTOKENIZER=${_NIYAH_TRAIN_TOK}
+            -DBASE_SHARD=${_NIYAH_TRAIN_SHARD}
+            -DFINETUNE_SHARD=${_NIYAH_TRAIN_SHARD_ALT}
+            -DBASE_CHECKPOINT=${_NIYAH_TRAIN_CKPT1}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_train_finetune.cmake)
+    set_tests_properties(niyah_train_finetune_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files
+        DEPENDS niyah_train_new_test)
+
     add_test(NAME niyah_train_resume_test
         COMMAND niyah_train resume
             --tokenizer "${_NIYAH_TRAIN_TOK}"
