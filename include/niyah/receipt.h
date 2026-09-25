@@ -44,6 +44,8 @@ typedef enum NiyahReceiptStatus {
     NIYAH_RECEIPT_INVALID_STATE,
     NIYAH_RECEIPT_INVALID_PARENT,
     NIYAH_RECEIPT_INVALID_CONFLICT_STATE,
+    NIYAH_RECEIPT_CHAIN_MISMATCH,
+    NIYAH_RECEIPT_ACTION_MISMATCH,
     NIYAH_RECEIPT_HASH_FAILURE
 } NiyahReceiptStatus;
 
@@ -96,6 +98,35 @@ NiyahReceiptStatus niyah_receipt_v1_encode(
 NiyahReceiptStatus niyah_receipt_v1_sha256(
     const NiyahReceiptV1 *receipt,
     NiyahCoordinationDigest *out_digest);
+
+
+/*
+ * Validate a receipt against the receiver's current state and
+ * feed it through the deterministic coordination gate.
+ *
+ * expected_parent_receipt_sha256:
+ *   Hash of the last accepted receipt. A zero digest is used
+ *   only when the incoming receipt is a genesis receipt.
+ *
+ * observed_revision:
+ *   Receiver's current source/state revision. This prevents a
+ *   valid old receipt from authorizing work on a newer base.
+ *
+ * No prose context is consulted by this operation.
+ */
+NiyahReceiptStatus
+niyah_receipt_v1_coordination_gate(
+    const NiyahReceiptV1 *receipt,
+    const NiyahCoordinationDigest *observed_revision,
+    const NiyahCoordinationDigest *
+        expected_parent_receipt_sha256,
+    uint32_t expected_project_id,
+    uint32_t allowed_scope,
+    NiyahCoordinationLobe verifier_lobe,
+    NiyahCoordinationLobe writer_lobe,
+    NiyahCoordinationAction action,
+    NiyahCoordinationLobe actor,
+    NiyahCoordinationGate *out_gate);
 
 
 const char *niyah_receipt_status_name(

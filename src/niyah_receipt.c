@@ -332,6 +332,111 @@ NiyahReceiptStatus niyah_receipt_v1_sha256(
 }
 
 
+
+NiyahReceiptStatus
+niyah_receipt_v1_coordination_gate(
+    const NiyahReceiptV1 *receipt,
+    const NiyahCoordinationDigest *observed_revision,
+    const NiyahCoordinationDigest *
+        expected_parent_receipt_sha256,
+    uint32_t expected_project_id,
+    uint32_t allowed_scope,
+    NiyahCoordinationLobe verifier_lobe,
+    NiyahCoordinationLobe writer_lobe,
+    NiyahCoordinationAction action,
+    NiyahCoordinationLobe actor,
+    NiyahCoordinationGate *out_gate)
+{
+    NiyahCoordinationEnvelope envelope;
+    NiyahReceiptStatus status;
+
+    if (out_gate == NULL ||
+        observed_revision == NULL ||
+        expected_parent_receipt_sha256 == NULL) {
+        return NIYAH_RECEIPT_INVALID_ARGUMENT;
+    }
+
+    *out_gate =
+        NIYAH_COORDINATION_INVALID_ENVELOPE;
+
+    status =
+        niyah_receipt_v1_validate(receipt);
+
+    if (status != NIYAH_RECEIPT_OK)
+        return status;
+
+    /*
+     * A receipt may be internally valid but still belong to an
+     * older handoff chain. Never silently rebase that context.
+     */
+    if (!niyah_coordination_digest_equal(
+            &receipt->parent_receipt_sha256,
+            expected_parent_receipt_sha256)) {
+        return NIYAH_RECEIPT_CHAIN_MISMATCH;
+    }
+
+    /*
+     * Prevent a receipt prepared for VERIFY from being reused as
+     * authorization for EXECUTE/PROMOTE, or vice versa.
+     */
+    if (receipt->next_action != action)
+        return NIYAH_RECEIPT_ACTION_MISMATCH;
+
+    memset(
+        &envelope,
+        0,
+        sizeof(envelope));
+
+    envelope.base_revision =
+        receipt->base_revision;
+
+    envelope.observed_revision =
+        *observed_revision;
+
+    envelope.project_id =
+        receipt->project_id;
+
+    envelope.expected_project_id =
+        expected_project_id;
+
+    envelope.requested_scope =
+        receipt->scope;
+
+    envelope.allowed_scope =
+        allowed_scope;
+
+    envelope.producer_lobe =
+        receipt->producer_lobe;
+
+    envelope.verifier_lobe =
+        verifier_lobe;
+
+    envelope.writer_lobe =
+        writer_lobe;
+
+    /*
+     * A receipt is proof-bearing for promotion only when its
+     * resulting claim state is explicitly VERIFIED.
+     */
+    envelope.proof_present =
+        receipt->state_after ==
+        NIYAH_RECEIPT_STATE_VERIFIED;
+
+    envelope.contradiction_present =
+        receipt->conflict_count != 0U ||
+        receipt->state_after ==
+            NIYAH_RECEIPT_STATE_CONFLICT;
+
+    *out_gate =
+        niyah_coordination_gate(
+            &envelope,
+            action,
+            actor);
+
+    return NIYAH_RECEIPT_OK;
+}
+
+
 const char *niyah_receipt_status_name(
     NiyahReceiptStatus status)
 {
@@ -362,6 +467,12 @@ const char *niyah_receipt_status_name(
 
         case NIYAH_RECEIPT_INVALID_CONFLICT_STATE:
             return "INVALID_CONFLICT_STATE";
+
+        case NIYAH_RECEIPT_CHAIN_MISMATCH:
+            return "CHAIN_MISMATCH";
+
+        case NIYAH_RECEIPT_ACTION_MISMATCH:
+            return "ACTION_MISMATCH";
 
         case NIYAH_RECEIPT_HASH_FAILURE:
             return "HASH_FAILURE";

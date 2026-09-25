@@ -319,6 +319,351 @@ static void test_canonical_magic_and_version(void)
 }
 
 
+
+static void test_coordination_binding_happy_path(void)
+{
+    NiyahReceiptV1 r =
+        base_receipt();
+
+    NiyahCoordinationDigest observed =
+        r.base_revision;
+
+    NiyahCoordinationDigest expected_parent =
+        r.parent_receipt_sha256;
+
+    NiyahCoordinationGate gate =
+        NIYAH_COORDINATION_INVALID_ENVELOPE;
+
+    CHECK(
+        niyah_receipt_v1_coordination_gate(
+            &r,
+            &observed,
+            &expected_parent,
+            r.project_id,
+            r.scope,
+            NIYAH_LOBE_VERIFIER,
+            NIYAH_LOBE_COMPUTE,
+            NIYAH_COORDINATION_PROMOTE,
+            NIYAH_LOBE_VERIFIER,
+            &gate) ==
+        NIYAH_RECEIPT_OK);
+
+    CHECK(
+        gate ==
+        NIYAH_COORDINATION_PASS);
+
+    puts("RECEIPT_COORDINATION_BINDING=PASS");
+}
+
+
+static void test_coordination_binding_stale_base(void)
+{
+    NiyahReceiptV1 r =
+        base_receipt();
+
+    NiyahCoordinationDigest observed =
+        r.base_revision;
+
+    NiyahCoordinationDigest expected_parent =
+        r.parent_receipt_sha256;
+
+    NiyahCoordinationGate gate =
+        NIYAH_COORDINATION_INVALID_ENVELOPE;
+
+    observed.bytes[5] ^=
+        UINT8_C(0x80);
+
+    CHECK(
+        niyah_receipt_v1_coordination_gate(
+            &r,
+            &observed,
+            &expected_parent,
+            r.project_id,
+            r.scope,
+            NIYAH_LOBE_VERIFIER,
+            NIYAH_LOBE_COMPUTE,
+            NIYAH_COORDINATION_PROMOTE,
+            NIYAH_LOBE_VERIFIER,
+            &gate) ==
+        NIYAH_RECEIPT_OK);
+
+    CHECK(
+        gate ==
+        NIYAH_COORDINATION_STALE_BASE);
+
+    puts("RECEIPT_STALE_BASE=REJECTED");
+}
+
+
+static void test_coordination_binding_chain(void)
+{
+    NiyahReceiptV1 r =
+        base_receipt();
+
+    NiyahCoordinationDigest observed =
+        r.base_revision;
+
+    NiyahCoordinationDigest expected_parent =
+        r.parent_receipt_sha256;
+
+    NiyahCoordinationGate gate =
+        NIYAH_COORDINATION_PASS;
+
+    expected_parent.bytes[17] ^=
+        UINT8_C(0x01);
+
+    CHECK(
+        niyah_receipt_v1_coordination_gate(
+            &r,
+            &observed,
+            &expected_parent,
+            r.project_id,
+            r.scope,
+            NIYAH_LOBE_VERIFIER,
+            NIYAH_LOBE_COMPUTE,
+            NIYAH_COORDINATION_PROMOTE,
+            NIYAH_LOBE_VERIFIER,
+            &gate) ==
+        NIYAH_RECEIPT_CHAIN_MISMATCH);
+
+    CHECK(
+        gate ==
+        NIYAH_COORDINATION_INVALID_ENVELOPE);
+
+    puts("RECEIPT_CHAIN_MISMATCH=REJECTED");
+}
+
+
+static void test_coordination_binding_action(void)
+{
+    NiyahReceiptV1 r =
+        base_receipt();
+
+    NiyahCoordinationDigest observed =
+        r.base_revision;
+
+    NiyahCoordinationDigest expected_parent =
+        r.parent_receipt_sha256;
+
+    NiyahCoordinationGate gate =
+        NIYAH_COORDINATION_PASS;
+
+    CHECK(
+        niyah_receipt_v1_coordination_gate(
+            &r,
+            &observed,
+            &expected_parent,
+            r.project_id,
+            r.scope,
+            NIYAH_LOBE_VERIFIER,
+            NIYAH_LOBE_COMPUTE,
+            NIYAH_COORDINATION_VERIFY,
+            NIYAH_LOBE_VERIFIER,
+            &gate) ==
+        NIYAH_RECEIPT_ACTION_MISMATCH);
+
+    CHECK(
+        gate ==
+        NIYAH_COORDINATION_INVALID_ENVELOPE);
+
+    puts("RECEIPT_ACTION_MISMATCH=REJECTED");
+}
+
+
+static void test_coordination_binding_unverified_promotion(void)
+{
+    NiyahReceiptV1 r =
+        base_receipt();
+
+    NiyahCoordinationDigest observed =
+        r.base_revision;
+
+    NiyahCoordinationDigest expected_parent =
+        r.parent_receipt_sha256;
+
+    NiyahCoordinationGate gate =
+        NIYAH_COORDINATION_INVALID_ENVELOPE;
+
+    r.state_after =
+        NIYAH_RECEIPT_STATE_UNVERIFIED;
+
+    CHECK(
+        niyah_receipt_v1_coordination_gate(
+            &r,
+            &observed,
+            &expected_parent,
+            r.project_id,
+            r.scope,
+            NIYAH_LOBE_VERIFIER,
+            NIYAH_LOBE_COMPUTE,
+            NIYAH_COORDINATION_PROMOTE,
+            NIYAH_LOBE_VERIFIER,
+            &gate) ==
+        NIYAH_RECEIPT_OK);
+
+    CHECK(
+        gate ==
+        NIYAH_COORDINATION_PROMOTION_WITHOUT_PROOF);
+
+    puts("UNVERIFIED_PROMOTION=REJECTED");
+}
+
+
+static void test_coordination_binding_conflict(void)
+{
+    NiyahReceiptV1 r =
+        base_receipt();
+
+    NiyahCoordinationDigest observed =
+        r.base_revision;
+
+    NiyahCoordinationDigest expected_parent =
+        r.parent_receipt_sha256;
+
+    NiyahCoordinationGate gate =
+        NIYAH_COORDINATION_INVALID_ENVELOPE;
+
+    r.state_after =
+        NIYAH_RECEIPT_STATE_CONFLICT;
+
+    r.conflict_count = 2U;
+
+    CHECK(
+        niyah_receipt_v1_coordination_gate(
+            &r,
+            &observed,
+            &expected_parent,
+            r.project_id,
+            r.scope,
+            NIYAH_LOBE_VERIFIER,
+            NIYAH_LOBE_COMPUTE,
+            NIYAH_COORDINATION_PROMOTE,
+            NIYAH_LOBE_VERIFIER,
+            &gate) ==
+        NIYAH_RECEIPT_OK);
+
+    CHECK(
+        gate ==
+        NIYAH_COORDINATION_CONTRADICTION);
+
+    puts("RECEIPT_CONTRADICTION=REJECTED");
+}
+
+
+static void test_coordination_binding_self_verification(void)
+{
+    NiyahReceiptV1 r =
+        base_receipt();
+
+    NiyahCoordinationDigest observed =
+        r.base_revision;
+
+    NiyahCoordinationDigest expected_parent =
+        r.parent_receipt_sha256;
+
+    NiyahCoordinationGate gate =
+        NIYAH_COORDINATION_INVALID_ENVELOPE;
+
+    CHECK(
+        niyah_receipt_v1_coordination_gate(
+            &r,
+            &observed,
+            &expected_parent,
+            r.project_id,
+            r.scope,
+            NIYAH_LOBE_COMPUTE,
+            NIYAH_LOBE_COMPUTE,
+            NIYAH_COORDINATION_PROMOTE,
+            NIYAH_LOBE_COMPUTE,
+            &gate) ==
+        NIYAH_RECEIPT_OK);
+
+    CHECK(
+        gate ==
+        NIYAH_COORDINATION_SELF_VERIFICATION);
+
+    puts("RECEIPT_SELF_VERIFICATION=REJECTED");
+}
+
+
+static void test_coordination_binding_scope(void)
+{
+    NiyahReceiptV1 r =
+        base_receipt();
+
+    NiyahCoordinationDigest observed =
+        r.base_revision;
+
+    NiyahCoordinationDigest expected_parent =
+        r.parent_receipt_sha256;
+
+    NiyahCoordinationGate gate =
+        NIYAH_COORDINATION_INVALID_ENVELOPE;
+
+    CHECK(
+        niyah_receipt_v1_coordination_gate(
+            &r,
+            &observed,
+            &expected_parent,
+            r.project_id,
+            NIYAH_SCOPE_ENGINE_CORE,
+            NIYAH_LOBE_VERIFIER,
+            NIYAH_LOBE_COMPUTE,
+            NIYAH_COORDINATION_PROMOTE,
+            NIYAH_LOBE_VERIFIER,
+            &gate) ==
+        NIYAH_RECEIPT_OK);
+
+    CHECK(
+        gate ==
+        NIYAH_COORDINATION_WRONG_SCOPE);
+
+    puts("RECEIPT_SCOPE_VIOLATION=REJECTED");
+}
+
+
+static void test_coordination_binding_writer(void)
+{
+    NiyahReceiptV1 r =
+        base_receipt();
+
+    NiyahCoordinationDigest observed =
+        r.base_revision;
+
+    NiyahCoordinationDigest expected_parent =
+        r.parent_receipt_sha256;
+
+    NiyahCoordinationGate gate =
+        NIYAH_COORDINATION_INVALID_ENVELOPE;
+
+    r.next_action =
+        NIYAH_COORDINATION_EXECUTE;
+
+    r.state_after =
+        NIYAH_RECEIPT_STATE_UNVERIFIED;
+
+    CHECK(
+        niyah_receipt_v1_coordination_gate(
+            &r,
+            &observed,
+            &expected_parent,
+            r.project_id,
+            r.scope,
+            NIYAH_LOBE_VERIFIER,
+            NIYAH_LOBE_CHRONICLE,
+            NIYAH_COORDINATION_EXECUTE,
+            NIYAH_LOBE_COMPUTE,
+            &gate) ==
+        NIYAH_RECEIPT_OK);
+
+    CHECK(
+        gate ==
+        NIYAH_COORDINATION_WRITER_VIOLATION);
+
+    puts("RECEIPT_WRITER_VIOLATION=REJECTED");
+}
+
+
 int main(void)
 {
     test_deterministic_encoding_and_hash();
@@ -328,6 +673,16 @@ int main(void)
     test_conflict_is_explicit();
     test_bounded_representation();
     test_canonical_magic_and_version();
+
+    test_coordination_binding_happy_path();
+    test_coordination_binding_stale_base();
+    test_coordination_binding_chain();
+    test_coordination_binding_action();
+    test_coordination_binding_unverified_promotion();
+    test_coordination_binding_conflict();
+    test_coordination_binding_self_verification();
+    test_coordination_binding_scope();
+    test_coordination_binding_writer();
 
     if (failures != 0) {
         fprintf(
