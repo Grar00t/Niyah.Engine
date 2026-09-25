@@ -16,6 +16,159 @@ static int overlap(size_t a, size_t an, size_t b, size_t bn)
     return a < b + bn && b < a + an;
 }
 
+
+__global__ static void niyah_cuda_gradient_accumulate_kernel(
+    float *accumulated,
+    const float *gradient,
+    float scale,
+    size_t count)
+{
+    size_t i =
+        (size_t)blockIdx.x * (size_t)blockDim.x +
+        (size_t)threadIdx.x;
+
+    const size_t stride =
+        (size_t)blockDim.x * (size_t)gridDim.x;
+
+    for (; i < count; i += stride) {
+        accumulated[i] += gradient[i] * scale;
+    }
+}
+
+
+extern "C" int niyah_cuda_train_state_zero_accumulated_gradients(
+    NiyahCudaTrainState *state)
+{
+    if (state == NULL ||
+        state->device_accumulated_gradients == NULL ||
+        state->gradient_capacity == 0U ||
+        state->gradient_capacity > ((size_t)-1) / sizeof(float)) {
+        return 1;
+    }
+
+    return cudaMemset(
+               state->device_accumulated_gradients,
+               0,
+               state->gradient_capacity * sizeof(float)) == cudaSuccess
+        ? 0
+        : 1;
+}
+
+
+extern "C" int niyah_cuda_train_state_accumulate_gradients(
+    NiyahCudaTrainState *state,
+    float scale)
+{
+    const unsigned int threads = 256U;
+    unsigned int blocks;
+
+    if (state == NULL ||
+        state->device_gradients == NULL ||
+        state->device_accumulated_gradients == NULL ||
+        state->gradient_capacity == 0U) {
+        return 1;
+    }
+
+    blocks = (unsigned int)(
+        (state->gradient_capacity + (size_t)threads - 1U) /
+        (size_t)threads);
+
+    if (blocks == 0U) {
+        return 1;
+    }
+
+    if (blocks > 65535U) {
+        blocks = 65535U;
+    }
+
+    niyah_cuda_gradient_accumulate_kernel<<<blocks, threads>>>(
+        (float *)state->device_accumulated_gradients,
+        (const float *)state->device_gradients,
+        scale,
+        state->gradient_capacity);
+
+    return cudaGetLastError() == cudaSuccess ? 0 : 1;
+}
+
+
+
+__global__ static void niyah_cuda_gradient_scale_kernel(
+    float *values,
+    float scale,
+    size_t count)
+{
+    size_t i =
+        (size_t)blockIdx.x * (size_t)blockDim.x +
+        (size_t)threadIdx.x;
+
+    const size_t stride =
+        (size_t)blockDim.x * (size_t)gridDim.x;
+
+    for (; i < count; i += stride) {
+        values[i] *= scale;
+    }
+}
+
+
+extern "C" int niyah_cuda_train_state_scale_accumulated_gradients(
+    NiyahCudaTrainState *state,
+    float scale)
+{
+    const unsigned int threads = 256U;
+    unsigned int blocks;
+
+    if (state == NULL ||
+        state->device_accumulated_gradients == NULL ||
+        state->gradient_capacity == 0U) {
+        return 1;
+    }
+
+    blocks = (unsigned int)(
+        (state->gradient_capacity + (size_t)threads - 1U) /
+        (size_t)threads);
+
+    if (blocks == 0U) {
+        return 1;
+    }
+
+    if (blocks > 65535U) {
+        blocks = 65535U;
+    }
+
+    niyah_cuda_gradient_scale_kernel<<<blocks, threads>>>(
+        (float *)state->device_accumulated_gradients,
+        scale,
+        state->gradient_capacity);
+
+    return cudaGetLastError() == cudaSuccess ? 0 : 1;
+}
+
+
+extern "C" int
+niyah_cuda_train_state_copy_accumulated_gradients_to_host(
+    const NiyahCudaTrainState *state,
+    float *host_gradients,
+    size_t gradient_count)
+{
+    if (state == NULL ||
+        state->device_accumulated_gradients == NULL ||
+        host_gradients == NULL ||
+        gradient_count == 0U ||
+        gradient_count > state->gradient_capacity ||
+        gradient_count > ((size_t)-1) / sizeof(float)) {
+        return 1;
+    }
+
+    return cudaMemcpy(
+               host_gradients,
+               state->device_accumulated_gradients,
+               gradient_count * sizeof(float),
+               cudaMemcpyDeviceToHost) == cudaSuccess
+        ? 0
+        : 1;
+}
+
+
 extern "C" int niyah_cuda_train_state_copy_workspace_from_host(
     NiyahCudaTrainState *state,
     size_t offset,

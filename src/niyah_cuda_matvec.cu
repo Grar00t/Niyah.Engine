@@ -639,6 +639,9 @@ extern "C" void niyah_cuda_train_state_destroy(
     if (state->device_workspace != NULL) {
         (void)cudaFree(state->device_workspace);
     }
+    if (state->device_accumulated_gradients != NULL) {
+        (void)cudaFree(state->device_accumulated_gradients);
+    }
     if (state->device_gradients != NULL) {
         (void)cudaFree(state->device_gradients);
     }
@@ -678,6 +681,12 @@ extern "C" int niyah_cuda_train_state_create(
         goto fail;
     }
 
+    if (cudaMalloc(
+            &state->device_accumulated_gradients,
+            gradient_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
     if (cudaMalloc(&state->device_workspace, workspace_bytes) != cudaSuccess) {
         goto fail;
     }
@@ -691,6 +700,10 @@ extern "C" int niyah_cuda_train_state_create(
     }
 
     if (cudaMemset(state->device_gradients, 0, gradient_bytes) != cudaSuccess ||
+        cudaMemset(
+            state->device_accumulated_gradients,
+            0,
+            gradient_bytes) != cudaSuccess ||
         cudaMemset(state->device_workspace, 0, workspace_bytes) != cudaSuccess) {
         goto fail;
     }
