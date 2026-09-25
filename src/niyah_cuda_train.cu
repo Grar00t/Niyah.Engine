@@ -31,7 +31,10 @@ __global__ static void niyah_cuda_gradient_accumulate_kernel(
         (size_t)blockDim.x * (size_t)gridDim.x;
 
     for (; i < count; i += stride) {
-        accumulated[i] += gradient[i] * scale;
+        const float scaled =
+            __fmul_rn(gradient[i], scale);
+        accumulated[i] =
+            __fadd_rn(accumulated[i], scaled);
     }
 }
 
@@ -105,7 +108,8 @@ __global__ static void niyah_cuda_gradient_scale_kernel(
         (size_t)blockDim.x * (size_t)gridDim.x;
 
     for (; i < count; i += stride) {
-        values[i] *= scale;
+        values[i] =
+            __fmul_rn(values[i], scale);
     }
 }
 

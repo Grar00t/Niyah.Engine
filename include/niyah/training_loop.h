@@ -27,6 +27,25 @@ typedef NiyahStatus (*NiyahTrainingBackwardFn)(
     float *out_loss,
     void *user_data);
 
+/* Optional backend-side gradient accumulator.
+ *
+ * The training loop retains ownership of sample ordering, cursor rollback,
+ * loss weighting, and the optimizer update. A backend may keep gradients
+ * off-host until finalize() is invoked once per optimizer update.
+ */
+typedef struct NiyahTrainingGradientAccumulatorOps {
+    NiyahStatus (*begin)(void *user_data);
+    NiyahStatus (*accumulate)(
+        float scale,
+        void *user_data);
+    NiyahStatus (*scale)(
+        float scale,
+        void *user_data);
+    NiyahStatus (*finalize)(
+        NiyahModelGradients *out_gradients,
+        void *user_data);
+} NiyahTrainingGradientAccumulatorOps;
+
 /* Resolve one training sample by global dataset index.
  *
  * Providers may reuse backing storage between calls. Pointers returned in
@@ -168,6 +187,32 @@ NiyahStatus niyah_training_run_updates_with_progress_with_provider(
     size_t updates,
     NiyahTrainingBackwardFn backward_fn,
     void *backward_user_data,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss);
+
+/* Provider-backed runner with backend-side gradient accumulation.
+ *
+ * backward_fn produces the backend's current sample gradient.
+ * gradient_accumulator performs accumulation and finalization.
+ * CPU/public legacy runners retain their existing host path.
+ */
+NiyahStatus
+niyah_training_run_updates_with_progress_with_provider_and_accumulator(
+    NiyahModel *model,
+    size_t sample_count,
+    size_t max_token_count,
+    NiyahTrainingSampleProviderFn sample_provider,
+    void *sample_provider_user_data,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    const NiyahTrainingGradientAccumulatorOps *gradient_accumulator,
     NiyahTrainingProgressFn progress_fn,
     void *progress_user_data,
     float *out_mean_loss);

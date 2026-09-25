@@ -923,3 +923,36 @@ set(CPACK_PACKAGE_FILE_NAME
     "Niyah.Engine-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 include(CPack)
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(
+        niyah_training_gradient_accumulator_test
+        tests/test_training_gradient_accumulator.c
+    )
+
+    target_link_libraries(
+        niyah_training_gradient_accumulator_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_training_gradient_accumulator_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_training_gradient_accumulator_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_test(
+        NAME niyah_training_gradient_accumulator_test
+        COMMAND niyah_training_gradient_accumulator_test
+    )
+endif()

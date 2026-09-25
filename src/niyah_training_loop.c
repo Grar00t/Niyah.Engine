@@ -414,7 +414,8 @@ static NiyahStatus niyah_training_accumulated_step_impl(
     NiyahTrainingSampleProviderFn sample_provider,
     void *sample_provider_user_data,
     NiyahTrainingBackwardFn backward_fn,
-    void *backward_user_data)
+    void *backward_user_data,
+    const NiyahTrainingGradientAccumulatorOps *gradient_accumulator)
 {
     uint64_t old_epoch;
     size_t old_position;
@@ -449,14 +450,31 @@ static NiyahStatus niyah_training_accumulated_step_impl(
         accumulated_gradients->count != model->weight_count)
         return NIYAH_ERR_INVALID_ARGUMENT;
 
+    if (gradient_accumulator != NULL &&
+        (backward_fn == NULL ||
+         gradient_accumulator->begin == NULL ||
+         gradient_accumulator->accumulate == NULL ||
+         gradient_accumulator->scale == NULL ||
+         gradient_accumulator->finalize == NULL))
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
     old_epoch = cursor->epoch;
     old_position = cursor->position;
     niyah_model_gradients_zero(accumulated_gradients);
+
+    if (gradient_accumulator != NULL) {
+        status = gradient_accumulator->begin(
+            backward_user_data);
+        if (status != NIYAH_OK)
+            return rollback_cursor(
+                cursor, old_epoch, old_position, status);
+    }
 
     for (consumed = 0U; consumed < total_samples; ++consumed) {
         size_t sample_index;
         NiyahTrainingSample sample;
         float loss;
+        float sample_gradient_scale = 1.0f;
 
         status = niyah_dataset_cursor_next(cursor, &sample_index);
         if (status != NIYAH_OK)
@@ -531,9 +549,15 @@ static NiyahStatus niyah_training_accumulated_step_impl(
                 common_supervised_targets = supervised_count;
             } else if (!token_weighting_active &&
                        supervised_count != common_supervised_targets) {
-                status = gradients_scale(
-                    accumulated_gradients,
-                    (float)common_supervised_targets);
+                if (gradient_accumulator != NULL) {
+                    status = gradient_accumulator->scale(
+                        (float)common_supervised_targets,
+                        backward_user_data);
+                } else {
+                    status = gradients_scale(
+                        accumulated_gradients,
+                        (float)common_supervised_targets);
+                }
                 if (status != NIYAH_OK)
                     return rollback_cursor(
                         cursor, old_epoch, old_position, status);
@@ -548,11 +572,20 @@ static NiyahStatus niyah_training_accumulated_step_impl(
             }
 
             if (token_weighting_active) {
-                status = gradients_scale(
-                    sample_gradients, (float)supervised_count);
-                if (status != NIYAH_OK)
-                    return rollback_cursor(
-                        cursor, old_epoch, old_position, status);
+                sample_gradient_scale =
+                    (float)supervised_count;
+
+                if (gradient_accumulator == NULL) {
+                    status = gradients_scale(
+                        sample_gradients,
+                        sample_gradient_scale);
+                    if (status != NIYAH_OK)
+                        return rollback_cursor(
+                            cursor,
+                            old_epoch,
+                            old_position,
+                            status);
+                }
 
                 loss_sum +=
                     (double)loss * (double)supervised_count;
@@ -566,10 +599,19 @@ static NiyahStatus niyah_training_accumulated_step_impl(
                     NIYAH_ERR_OVERFLOW);
         }
 
-        status = gradients_accumulate(
-            accumulated_gradients, sample_gradients);
+        if (gradient_accumulator != NULL) {
+            status = gradient_accumulator->accumulate(
+                sample_gradient_scale,
+                backward_user_data);
+        } else {
+            status = gradients_accumulate(
+                accumulated_gradients,
+                sample_gradients);
+        }
+
         if (status != NIYAH_OK)
-            return rollback_cursor(cursor, old_epoch, old_position, status);
+            return rollback_cursor(
+                cursor, old_epoch, old_position, status);
     }
 
     if (total_supervised_targets == 0U)
@@ -577,13 +619,32 @@ static NiyahStatus niyah_training_accumulated_step_impl(
             cursor, old_epoch, old_position,
             NIYAH_ERR_INVALID_CONFIG);
 
-    status = gradients_scale(
-        accumulated_gradients,
-        token_weighting_active
-            ? 1.0f / (float)total_supervised_targets
-            : 1.0f / (float)total_samples);
+    {
+        const float final_gradient_scale =
+            token_weighting_active
+                ? 1.0f / (float)total_supervised_targets
+                : 1.0f / (float)total_samples;
+
+        if (gradient_accumulator != NULL) {
+            status = gradient_accumulator->scale(
+                final_gradient_scale,
+                backward_user_data);
+
+            if (status == NIYAH_OK) {
+                status = gradient_accumulator->finalize(
+                    accumulated_gradients,
+                    backward_user_data);
+            }
+        } else {
+            status = gradients_scale(
+                accumulated_gradients,
+                final_gradient_scale);
+        }
+    }
+
     if (status != NIYAH_OK)
-        return rollback_cursor(cursor, old_epoch, old_position, status);
+        return rollback_cursor(
+            cursor, old_epoch, old_position, status);
 
     status = niyah_adamw_step(
         model, accumulated_gradients, optimizer_state, optimizer_config);
@@ -618,7 +679,8 @@ static NiyahStatus niyah_training_run_updates_with_progress_impl(
     void *backward_user_data,
     NiyahTrainingProgressFn progress_fn,
     void *progress_user_data,
-    float *out_mean_loss)
+    float *out_mean_loss,
+    const NiyahTrainingGradientAccumulatorOps *gradient_accumulator)
 {
     NiyahModelGradients sample_gradients;
     NiyahModelGradients accumulated_gradients;
@@ -709,7 +771,8 @@ static NiyahStatus niyah_training_run_updates_with_progress_impl(
             max_token_count,
             sample_provider,
             sample_provider_user_data,
-            backward_fn, backward_user_data);
+            backward_fn, backward_user_data,
+        gradient_accumulator);
         if (status != NIYAH_OK) {
             free(workspace);
             niyah_model_gradients_destroy(&accumulated_gradients);
@@ -803,6 +866,7 @@ NiyahStatus niyah_training_accumulated_step(
         NULL,
         NULL,
         NULL,
+        NULL,
         NULL);
 }
 
@@ -837,7 +901,8 @@ NiyahStatus niyah_training_run_updates_with_progress(
         NULL,
         progress_fn,
         progress_user_data,
-        out_mean_loss);
+        out_mean_loss,
+        NULL);
 }
 
 NiyahStatus niyah_training_run_updates_with_progress_with_backward(
@@ -876,7 +941,8 @@ NiyahStatus niyah_training_run_updates_with_progress_with_backward(
         backward_user_data,
         progress_fn,
         progress_user_data,
-        out_mean_loss);
+        out_mean_loss,
+        NULL);
 }
 
 NiyahStatus niyah_training_run_updates_with_progress_with_provider(
@@ -917,5 +983,52 @@ NiyahStatus niyah_training_run_updates_with_progress_with_provider(
         backward_user_data,
         progress_fn,
         progress_user_data,
-        out_mean_loss);
+        out_mean_loss,
+        NULL);
+}
+
+NiyahStatus
+niyah_training_run_updates_with_progress_with_provider_and_accumulator(
+    NiyahModel *model,
+    size_t sample_count,
+    size_t max_token_count,
+    NiyahTrainingSampleProviderFn sample_provider,
+    void *sample_provider_user_data,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    const NiyahTrainingGradientAccumulatorOps *gradient_accumulator,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss)
+{
+    if (sample_provider == NULL ||
+        backward_fn == NULL ||
+        gradient_accumulator == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    return niyah_training_run_updates_with_progress_impl(
+        model,
+        NULL,
+        sample_count,
+        cursor,
+        optimizer_state,
+        optimizer_config,
+        batch_size,
+        accumulation_steps,
+        updates,
+        max_token_count,
+        sample_provider,
+        sample_provider_user_data,
+        backward_fn,
+        backward_user_data,
+        progress_fn,
+        progress_user_data,
+        out_mean_loss,
+        gradient_accumulator);
 }

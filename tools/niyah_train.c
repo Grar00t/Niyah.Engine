@@ -186,6 +186,106 @@ static NiyahStatus cuda_training_failure(const char *stage)
     return NIYAH_ERR_INVALID_CONFIG;
 }
 
+
+static NiyahStatus cuda_gradient_accumulator_begin(
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    if (context == NULL ||
+        context->train_ready == 0)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (niyah_cuda_train_state_zero_accumulated_gradients(
+            &context->train_state) != 0) {
+        return cuda_training_failure(
+            "gradient_accumulator_zero");
+    }
+
+    return NIYAH_OK;
+}
+
+
+static NiyahStatus cuda_gradient_accumulator_accumulate(
+    float scale,
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    if (context == NULL ||
+        context->train_ready == 0)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (niyah_cuda_train_state_accumulate_gradients(
+            &context->train_state,
+            scale) != 0) {
+        return cuda_training_failure(
+            "gradient_accumulator_add");
+    }
+
+    return NIYAH_OK;
+}
+
+
+static NiyahStatus cuda_gradient_accumulator_scale(
+    float scale,
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    if (context == NULL ||
+        context->train_ready == 0)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (niyah_cuda_train_state_scale_accumulated_gradients(
+            &context->train_state,
+            scale) != 0) {
+        return cuda_training_failure(
+            "gradient_accumulator_scale");
+    }
+
+    return NIYAH_OK;
+}
+
+
+static NiyahStatus cuda_gradient_accumulator_finalize(
+    NiyahModelGradients *out_gradients,
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    if (context == NULL ||
+        context->train_ready == 0 ||
+        out_gradients == NULL ||
+        out_gradients->values == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    if (niyah_cuda_train_state_copy_accumulated_gradients_to_host(
+            &context->train_state,
+            out_gradients->values,
+            out_gradients->count) != 0) {
+        return cuda_training_failure(
+            "gradient_accumulator_d2h");
+    }
+
+    return NIYAH_OK;
+}
+
+
+static const NiyahTrainingGradientAccumulatorOps
+cuda_gradient_accumulator_ops = {
+    cuda_gradient_accumulator_begin,
+    cuda_gradient_accumulator_accumulate,
+    cuda_gradient_accumulator_scale,
+    cuda_gradient_accumulator_finalize
+};
+
+
 static NiyahStatus cuda_training_backward(
     const NiyahModel *model,
     const NiyahTrainingSample *sample,
@@ -235,13 +335,6 @@ static NiyahStatus cuda_training_backward(
             NULL,
             out_loss) != 0) {
         return cuda_training_failure("backward");
-    }
-
-    if (niyah_cuda_train_state_copy_gradients_to_host(
-            &context->train_state,
-            gradients->values,
-            gradients->count) != 0) {
-        return cuda_training_failure("gradient_d2h");
     }
 
     return NIYAH_OK;
@@ -895,7 +988,7 @@ int main(int argc, char **argv)
 #ifdef NIYAH_TRAIN_ENABLE_CUDA
     if (options.use_cuda) {
         status =
-            niyah_training_run_updates_with_progress_with_provider(
+            niyah_training_run_updates_with_progress_with_provider_and_accumulator(
                 &model,
                 sample_count,
                 max_token_count,
@@ -909,6 +1002,7 @@ int main(int argc, char **argv)
                 options.updates,
                 cuda_training_backward,
                 &cuda_context,
+                &cuda_gradient_accumulator_ops,
                 print_training_progress,
                 &progress_context,
                 &mean_loss);
