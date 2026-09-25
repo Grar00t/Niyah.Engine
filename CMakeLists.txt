@@ -92,6 +92,7 @@ add_library(niyah STATIC
     src/niyah_optimizer.c
     src/niyah_checkpoint.c
     src/niyah_coordination.c
+    src/niyah_receipt.c
 )
 
 target_include_directories(niyah
@@ -988,5 +989,38 @@ if(NIYAH_BUILD_TESTS)
     add_test(
         NAME niyah_coordination_test
         COMMAND niyah_coordination_test
+    )
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(
+        niyah_receipt_test
+        tests/test_receipt.c
+    )
+
+    target_link_libraries(
+        niyah_receipt_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_receipt_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_receipt_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_test(
+        NAME niyah_receipt_test
+        COMMAND niyah_receipt_test
     )
 endif()
