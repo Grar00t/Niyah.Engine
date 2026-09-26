@@ -1,0 +1,26 @@
+name: SHA-256 regression
+
+on:
+  pull_request:
+    paths:
+      - "src/niyah_checkpoint.c"
+      - "src/niyah_sha256.c"
+      - "tests/test_sha256.c"
+      - ".github/workflows/sha256-regression.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sha256-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build focused SHA-256 test
+        run: >-
+          cc -std=c11 -Wall -Wextra -Wpedantic -Werror
+          -Isrc tests/test_sha256.c src/niyah_sha256.c
+          -o /tmp/niyah-test-sha256
+      - name: Run focused SHA-256 test
+        run: /tmp/niyah-test-sha256
