@@ -21,7 +21,7 @@ if(NIYAH_ENABLE_SANITIZERS)
     set(_NIYAH_SAVED_REQUIRED_LINK_OPTIONS "${CMAKE_REQUIRED_LINK_OPTIONS}")
     set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -fsanitize=address,undefined")
     list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=address,undefined")
-    check_c_source_compiles("int main(void) { return 0;}"
+    check_c_source_compiles("int main(void) { return 0; }"
                             NIYAH_HAS_ADDRESS_UNDEFINED_SANITIZERS)
     set(CMAKE_REQUIRED_FLAGS "${_NIYAH_SAVED_REQUIRED_FLAGS}")
     set(CMAKE_REQUIRED_LINK_OPTIONS "${_NIYAH_SAVED_REQUIRED_LINK_OPTIONS}")
@@ -184,106 +184,213 @@ if(NIYAH_BUILD_TESTS)
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_prepare.cmake)
 
+
     if(NIYAH_ENABLE_CUDA)
         add_executable(niyah_cuda_matvec_test tests/test_cuda_matvec.c)
-        target_include_directories(niyah_cuda_matvec_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-        target_link_libraries(niyah_cuda_matvec_test PRIVATE niyah niyah_cuda_backend)
+        target_include_directories(niyah_cuda_matvec_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_matvec_test
+            PRIVATE
+                niyah
+                niyah_cuda_backend
+        )
+
         if(MSVC)
             target_compile_options(niyah_cuda_matvec_test PRIVATE /W4 /WX)
         else()
-            target_compile_options(niyah_cuda_matvec_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+            target_compile_options(niyah_cuda_matvec_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
         endif()
+
         add_test(NAME niyah_cuda_matvec_test COMMAND niyah_cuda_matvec_test)
 
         add_executable(niyah_cuda_model_test tests/test_cuda_model.c)
-        target_include_directories(niyah_cuda_model_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-        target_link_libraries(niyah_cuda_model_test PRIVATE niyah niyah_cuda_backend)
+        target_include_directories(niyah_cuda_model_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_model_test
+            PRIVATE
+                niyah
+                niyah_cuda_backend
+        )
+
         if(MSVC)
             target_compile_options(niyah_cuda_model_test PRIVATE /W4 /WX)
         else()
-            target_compile_options(niyah_cuda_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+            target_compile_options(niyah_cuda_model_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
         endif()
+
         add_test(NAME niyah_cuda_model_test COMMAND niyah_cuda_model_test)
 
-        add_executable(niyah_cuda_decode_state_test tests/test_cuda_decode_state.c)
-        target_include_directories(niyah_cuda_decode_state_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-        target_link_libraries(niyah_cuda_decode_state_test PRIVATE niyah niyah_cuda_backend)
-        if(MSVC)
-            target_compile_options(niyah_cuda_decode_state_test PRIVATE /W4 /WX)
-        else()
-            target_compile_options(niyah_cuda_decode_state_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
-        endif()
-        add_test(NAME niyah_cuda_decode_state_test COMMAND niyah_cuda_decode_state_test)
+        add_executable(niyah_cuda_decode_state_test
+            tests/test_cuda_decode_state.c
+        )
+        target_include_directories(niyah_cuda_decode_state_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_decode_state_test
+            PRIVATE
+                niyah
+                niyah_cuda_backend
+        )
 
-        add_executable(niyah_cuda_device_matvec_test tests/test_cuda_device_matvec.c)
-        target_include_directories(niyah_cuda_device_matvec_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-        target_link_libraries(niyah_cuda_device_matvec_test PRIVATE niyah niyah_cuda_backend CUDA::cudart)
         if(MSVC)
-            target_compile_options(niyah_cuda_device_matvec_test PRIVATE /W4 /WX)
+            target_compile_options(niyah_cuda_decode_state_test
+                PRIVATE /W4 /WX)
         else()
-            target_compile_options(niyah_cuda_device_matvec_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+            target_compile_options(niyah_cuda_decode_state_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
         endif()
-        add_test(NAME niyah_cuda_device_matvec_test COMMAND niyah_cuda_device_matvec_test)
 
-        add_executable(niyah_cuda_decode_token_test tests/test_cuda_decode_token.c)
-        target_include_directories(niyah_cuda_decode_token_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-        target_link_libraries(niyah_cuda_decode_token_test PRIVATE niyah niyah_cuda_backend CUDA::cudart)
-        if(MSVC)
-            target_compile_options(niyah_cuda_decode_token_test PRIVATE /W4 /WX)
-        else()
-            target_compile_options(niyah_cuda_decode_token_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
-        endif()
-        add_test(NAME niyah_cuda_decode_token_test COMMAND niyah_cuda_decode_token_test)
+        add_test(
+            NAME niyah_cuda_decode_state_test
+            COMMAND niyah_cuda_decode_state_test
+        )
 
-        add_executable(niyah_cuda_generation_test tests/test_cuda_generation.c)
-        target_include_directories(niyah_cuda_generation_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-        target_link_libraries(niyah_cuda_generation_test PRIVATE niyah_cuda_backend niyah CUDA::cudart)
+        add_executable(niyah_cuda_device_matvec_test
+            tests/test_cuda_device_matvec.c
+        )
+        target_include_directories(niyah_cuda_device_matvec_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_device_matvec_test
+            PRIVATE
+                niyah
+                niyah_cuda_backend
+                CUDA::cudart
+        )
+
         if(MSVC)
-            target_compile_options(niyah_cuda_generation_test PRIVATE /W4 /WX)
+            target_compile_options(niyah_cuda_device_matvec_test
+                PRIVATE /W4 /WX)
         else()
-            target_compile_options(niyah_cuda_generation_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+            target_compile_options(niyah_cuda_device_matvec_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
         endif()
-        add_test(NAME niyah_cuda_generation_test COMMAND niyah_cuda_generation_test)
+
+        add_test(
+            NAME niyah_cuda_device_matvec_test
+            COMMAND niyah_cuda_device_matvec_test
+        )
+
+        add_executable(niyah_cuda_decode_token_test
+            tests/test_cuda_decode_token.c
+        )
+        target_include_directories(niyah_cuda_decode_token_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_decode_token_test
+            PRIVATE
+                niyah
+                niyah_cuda_backend
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_decode_token_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_decode_token_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_decode_token_test
+            COMMAND niyah_cuda_decode_token_test
+        )
+
+        add_executable(niyah_cuda_generation_test
+            tests/test_cuda_generation.c
+        )
+        target_include_directories(niyah_cuda_generation_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_generation_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_generation_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_generation_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_generation_test
+            COMMAND niyah_cuda_generation_test
+        )
     endif()
 
     add_executable(niyah_model_test tests/test_model.c)
     target_link_libraries(niyah_model_test PRIVATE niyah)
+
     add_executable(niyah_tokenizer_test tests/test_tokenizer.c)
     target_link_libraries(niyah_tokenizer_test PRIVATE niyah)
+
     add_executable(niyah_dataset_test tests/test_dataset.c)
     target_link_libraries(niyah_dataset_test PRIVATE niyah)
+
     add_executable(niyah_dataset_shard_test tests/test_dataset_shard.c)
     target_link_libraries(niyah_dataset_shard_test PRIVATE niyah)
+
     add_executable(niyah_dataset_collection_test tests/test_dataset_collection.c)
     target_link_libraries(niyah_dataset_collection_test PRIVATE niyah)
+
     add_executable(niyah_transformer_test tests/test_transformer.c)
     target_link_libraries(niyah_transformer_test PRIVATE niyah)
+
     add_executable(niyah_decode_test tests/test_decode.c)
     target_link_libraries(niyah_decode_test PRIVATE niyah)
+
     add_executable(niyah_generation_test tests/test_generation.c)
     target_link_libraries(niyah_generation_test PRIVATE niyah)
+
     add_executable(niyah_train_test tests/test_train.c)
     target_link_libraries(niyah_train_test PRIVATE niyah)
+
     add_executable(niyah_eval_test tests/test_eval.c)
     target_link_libraries(niyah_eval_test PRIVATE niyah)
+
     add_executable(niyah_baseline_test tests/test_baseline.c)
     target_link_libraries(niyah_baseline_test PRIVATE niyah)
+
     add_executable(niyah_training_loop_test tests/test_training_loop.c)
     target_link_libraries(niyah_training_loop_test PRIVATE niyah)
+
     add_executable(niyah_backward_test tests/test_backward.c)
     target_link_libraries(niyah_backward_test PRIVATE niyah)
+
     add_executable(niyah_text_pipeline_test tests/test_text_pipeline.c)
     target_link_libraries(niyah_text_pipeline_test PRIVATE niyah)
+
     add_executable(niyah_optimizer_test tests/test_optimizer.c)
     target_link_libraries(niyah_optimizer_test PRIVATE niyah)
+
     add_executable(niyah_lr_schedule_test tests/test_lr_schedule.c)
     target_link_libraries(niyah_lr_schedule_test PRIVATE niyah)
+
     add_executable(niyah_checkpoint_test tests/test_checkpoint.c)
     target_link_libraries(niyah_checkpoint_test PRIVATE niyah)
+
     add_executable(niyah_checkpoint_model_only_test tests/test_checkpoint_model_only.c)
     target_link_libraries(niyah_checkpoint_model_only_test PRIVATE niyah)
+
     add_executable(niyah_segment_embeddings_test tests/test_segment_embeddings.c)
     target_link_libraries(niyah_segment_embeddings_test PRIVATE niyah)
+
     add_executable(niyah_training_fixture tests/make_training_fixture.c)
     target_link_libraries(niyah_training_fixture PRIVATE niyah)
 
@@ -369,7 +476,8 @@ if(NIYAH_BUILD_TESTS)
             "${_NIYAH_TRAIN_SHARD_ALT}"
             "${_NIYAH_TRAIN_CKPT1}" "${_NIYAH_TRAIN_CUR1}"
             "${_NIYAH_TRAIN_CKPT2}" "${_NIYAH_TRAIN_CUR2}")
-    set_tests_properties(niyah_training_fixture_test PROPERTIES FIXTURES_SETUP niyah_train_files)
+    set_tests_properties(niyah_training_fixture_test PROPERTIES
+        FIXTURES_SETUP niyah_train_files)
 
     add_test(NAME niyah_train_new_test
         COMMAND niyah_train new
@@ -396,7 +504,8 @@ if(NIYAH_BUILD_TESTS)
             --epsilon 0.00000001
             --weight-decay 0.0
             --max-grad-norm 1.0)
-    set_tests_properties(niyah_train_new_test PROPERTIES FIXTURES_REQUIRED niyah_train_files)
+    set_tests_properties(niyah_train_new_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
 
     add_test(NAME niyah_cli_run_test
         COMMAND ${CMAKE_COMMAND}
@@ -432,7 +541,10 @@ if(NIYAH_BUILD_TESTS)
                 --prompt x
                 --max-new-tokens 1
                 --backend cuda)
-        set_tests_properties(niyah_cli_cuda_unavailable_test PROPERTIES WILL_FAIL TRUE)
+        set_tests_properties(
+            niyah_cli_cuda_unavailable_test
+            PROPERTIES
+                WILL_FAIL TRUE)
     endif()
 
     add_test(NAME niyah_train_resume_test
@@ -446,7 +558,9 @@ if(NIYAH_BUILD_TESTS)
             --updates 2
             --batch-size 1
             --accumulation-steps 1)
-    set_tests_properties(niyah_train_resume_test PROPERTIES FIXTURES_REQUIRED niyah_train_files DEPENDS niyah_train_new_test)
+    set_tests_properties(niyah_train_resume_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files
+        DEPENDS niyah_train_new_test)
 
     add_test(NAME niyah_train_resume_equivalence_test
         COMMAND ${CMAKE_COMMAND}
@@ -455,7 +569,8 @@ if(NIYAH_BUILD_TESTS)
             -DSHARD=${_NIYAH_TRAIN_SHARD}
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_train_resume_equivalence.cmake)
-    set_tests_properties(niyah_train_resume_equivalence_test PROPERTIES FIXTURES_REQUIRED niyah_train_files)
+    set_tests_properties(niyah_train_resume_equivalence_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
 
     add_test(NAME niyah_train_warmup_contract_test
         COMMAND ${CMAKE_COMMAND}
@@ -464,7 +579,8 @@ if(NIYAH_BUILD_TESTS)
             -DSHARD=${_NIYAH_TRAIN_SHARD}
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_train_warmup_contract.cmake)
-    set_tests_properties(niyah_train_warmup_contract_test PROPERTIES FIXTURES_REQUIRED niyah_train_files)
+    set_tests_properties(niyah_train_warmup_contract_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
 
     add_test(NAME niyah_train_progress_details_test
         COMMAND ${CMAKE_COMMAND}
@@ -473,7 +589,8 @@ if(NIYAH_BUILD_TESTS)
             -DSHARD=${_NIYAH_TRAIN_SHARD}
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_train_progress_details.cmake)
-    set_tests_properties(niyah_train_progress_details_test PROPERTIES FIXTURES_REQUIRED niyah_train_files)
+    set_tests_properties(niyah_train_progress_details_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
 
     add_test(NAME niyah_train_resume_dataset_mismatch_test
         COMMAND ${CMAKE_COMMAND}
@@ -484,7 +601,8 @@ if(NIYAH_BUILD_TESTS)
             "-DNIYAH_TRAIN_CKPT=${_NIYAH_TRAIN_CKPT3}"
             "-DNIYAH_TRAIN_CUR=${_NIYAH_TRAIN_CUR3}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_train_resume_mismatch.cmake")
-    set_tests_properties(niyah_train_resume_dataset_mismatch_test PROPERTIES FIXTURES_REQUIRED niyah_train_files)
+    set_tests_properties(niyah_train_resume_dataset_mismatch_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
 
     add_test(NAME niyah_train_multishard_test
         COMMAND ${CMAKE_COMMAND}
@@ -494,7 +612,8 @@ if(NIYAH_BUILD_TESTS)
             "-DNIYAH_TRAIN_SHARD_B=${_NIYAH_TRAIN_SHARD_ALT}"
             "-DNIYAH_TRAIN_MULTI_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/niyah_train_multishard"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_train_multishard.cmake")
-    set_tests_properties(niyah_train_multishard_test PROPERTIES FIXTURES_REQUIRED niyah_train_files)
+    set_tests_properties(niyah_train_multishard_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
 
     add_test(NAME niyah_train_pair_mismatch_test
         COMMAND ${CMAKE_COMMAND}
@@ -503,36 +622,37 @@ if(NIYAH_BUILD_TESTS)
             "-DNIYAH_TRAIN_SHARD=${_NIYAH_TRAIN_SHARD}"
             "-DNIYAH_TRAIN_PAIR_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/niyah_train_pair"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_train_pair_mismatch.cmake")
-    set_tests_properties(niyah_train_pair_mismatch_test PROPERTIES FIXTURES_REQUIRED niyah_train_files)
-
-    add_executable(niyah_sha256_test
-        tests/test_sha256.c
-        src/niyah_sha256.c)
-    target_include_directories(niyah_sha256_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    if(MSVC)
-        target_compile_options(niyah_sha256_test PRIVATE /W4 /WX)
-    else()
-        target_compile_options(niyah_sha256_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    endif()
-    add_test(NAME niyah_sha256_test COMMAND niyah_sha256_test)
+    set_tests_properties(niyah_train_pair_mismatch_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files)
 endif()
 
 include(GNUInstallDirs)
 
-install(TARGETS niyah ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-install(TARGETS niyah_cli niyah_train niyah_probe RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(TARGETS niyah
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+)
+
+install(TARGETS niyah_cli niyah_train niyah_probe
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/niyah"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    FILES_MATCHING PATTERN "*.h")
+    FILES_MATCHING PATTERN "*.h"
+)
+
 install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
     "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
-    DESTINATION "${CMAKE_INSTALL_DOCDIR}")
+    DESTINATION "${CMAKE_INSTALL_DOCDIR}"
+)
 
 set(CPACK_PACKAGE_NAME "Niyah.Engine")
 set(CPACK_PACKAGE_VENDOR "Niyah.Engine")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Native C11 autoregressive language-model runtime and training engine")
-set(CPACK_PACKAGE_FILE_NAME "Niyah.Engine-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Native C11 autoregressive language-model runtime and training engine")
+set(CPACK_PACKAGE_FILE_NAME
+    "Niyah.Engine-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 include(CPack)
