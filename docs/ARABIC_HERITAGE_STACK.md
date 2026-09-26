@@ -119,12 +119,12 @@ Until separately approved, do not:
 
 ## Sources used for this audit
 
-Primary upstream references checked on 2026-09-24:
+Primary upstream references checked on 2026-09-24 and pinned here to immutable commits:
 
-- CAMeL Tools repository: https://github.com/CAMeL-Lab/camel_tools
-- CAMeL morphology DB documentation: https://github.com/CAMeL-Lab/camel_tools/blob/master/docs/source/api/morphology/database.rst
-- CAMeL data package catalogue: https://github.com/CAMeL-Lab/camel-tools-data/blob/main/catalogue-1.3.json
-- Arramooz repository: https://github.com/linuxscout/arramooz
-- Sarf repository: https://github.com/alsaydi/sarf
+- CAMeL Tools repository: https://github.com/CAMeL-Lab/camel_tools/tree/be79ca9fc493f0df795375a7255bafef246a802d
+- CAMeL morphology DB documentation: https://github.com/CAMeL-Lab/camel_tools/blob/be79ca9fc493f0df795375a7255bafef246a802d/docs/source/api/morphology/database.rst
+- CAMeL data package catalogue (`catalogue-1.3.json`): https://github.com/CAMeL-Lab/camel-tools-data/blob/9b1965c681735a22b92adc313bf9a3b093c676a3/catalogue-1.3.json
+- Arramooz repository snapshot: https://github.com/linuxscout/arramooz/tree/b055c5dea51b8a9152e7e66a7ca3b6f713fb187d
+- Sarf repository snapshot: https://github.com/alsaydi/sarf/tree/367f3b4b181149bb54f97259466cb6834e37babd
 
 This document is an engineering/provenance policy, not legal advice. If a dataset will be redistributed commercially or used to publish model weights, the exact license obligations should be reviewed for that distribution path.
