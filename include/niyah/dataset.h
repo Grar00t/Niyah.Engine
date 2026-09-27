@@ -188,6 +188,48 @@ NiyahStatus niyah_dataset_shard_load(
     const NiyahTokenizer *tokenizer,
     NiyahDatasetShard *out_shard);
 
+/* Bounded-memory reader for persisted NIYAHSRD V1/V2/V3 shards.
+ *
+ * Open performs the same tokenizer, token, geometry, CRC32, EOF, and
+ * content-identity validation as eager loading without retaining the full
+ * token stream or per-sample geometry.
+ *
+ * Sample token/target pointers borrow reusable reader storage and remain
+ * valid only until the next sample read or reader close.
+ */
+typedef struct NiyahDatasetShardReader NiyahDatasetShardReader;
+
+NiyahStatus niyah_dataset_shard_reader_open(
+    const char *path,
+    const NiyahTokenizer *tokenizer,
+    NiyahDatasetShardReader **out_reader);
+
+void niyah_dataset_shard_reader_close(
+    NiyahDatasetShardReader *reader);
+
+NiyahStatus niyah_dataset_shard_reader_info(
+    const NiyahDatasetShardReader *reader,
+    size_t *out_sample_count,
+    size_t *out_sequence_length,
+    uint8_t out_tokenizer_identity[
+        NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE],
+    uint8_t out_shard_identity[
+        NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE]);
+
+NiyahStatus niyah_dataset_shard_reader_collection_identity_sha256(
+    NiyahDatasetShardReader *const *readers,
+    size_t reader_count,
+    uint8_t out_identity[
+        NIYAH_DATASET_COLLECTION_IDENTITY_SHA256_SIZE]);
+
+NiyahStatus niyah_dataset_shard_reader_sample_with_loss(
+    NiyahDatasetShardReader *reader,
+    size_t sample_index,
+    const uint32_t **out_tokens,
+    const uint32_t **out_targets,
+    size_t *out_token_count,
+    size_t *out_loss_start);
+
 #ifdef __cplusplus
 }
 #endif

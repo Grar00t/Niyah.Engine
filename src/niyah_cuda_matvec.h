@@ -47,6 +47,166 @@ int niyah_cuda_model_state_matvec_device(
     size_t rows,
     size_t cols);
 
+
+typedef struct NiyahCudaTrainState {
+    void *device_gradients;
+    void *device_accumulated_gradients;
+    void *device_workspace;
+    void *device_tokens;
+    void *device_targets;
+    size_t gradient_capacity;
+    size_t workspace_capacity;
+    size_t token_capacity;
+} NiyahCudaTrainState;
+
+int niyah_cuda_train_state_create(
+    NiyahCudaTrainState *state,
+    const NiyahModel *model,
+    size_t max_tokens,
+    size_t workspace_floats);
+
+void niyah_cuda_train_state_destroy(
+    NiyahCudaTrainState *state);
+
+int niyah_cuda_train_state_zero_gradients(
+    NiyahCudaTrainState *state);
+
+int niyah_cuda_train_state_copy_gradients_to_host(
+    const NiyahCudaTrainState *state,
+    float *host_gradients,
+    size_t gradient_count);
+
+
+int niyah_cuda_train_state_zero_accumulated_gradients(
+    NiyahCudaTrainState *state);
+
+int niyah_cuda_train_state_accumulate_gradients(
+    NiyahCudaTrainState *state,
+    float scale);
+
+int niyah_cuda_train_state_scale_accumulated_gradients(
+    NiyahCudaTrainState *state,
+    float scale);
+
+int niyah_cuda_train_state_copy_accumulated_gradients_to_host(
+    const NiyahCudaTrainState *state,
+    float *host_gradients,
+    size_t gradient_count);
+
+
+int niyah_cuda_train_state_copy_workspace_from_host(
+    NiyahCudaTrainState *state,
+    size_t workspace_offset,
+    const float *host_values,
+    size_t value_count);
+
+int niyah_cuda_train_state_copy_workspace_to_host(
+    const NiyahCudaTrainState *state,
+    size_t workspace_offset,
+    float *host_values,
+    size_t value_count);
+
+int niyah_cuda_train_state_zero_workspace(
+    NiyahCudaTrainState *state,
+    size_t workspace_offset,
+    size_t value_count);
+
+int niyah_cuda_train_state_copy_gradient_range_to_host(
+    const NiyahCudaTrainState *state,
+    size_t gradient_offset,
+    float *host_values,
+    size_t value_count);
+
+int niyah_cuda_train_linear_forward(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaTrainState *train_state,
+    size_t weight_offset,
+    size_t x_workspace_offset,
+    size_t y_workspace_offset,
+    size_t token_count,
+    size_t rows,
+    size_t cols);
+
+int niyah_cuda_train_linear_backward(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaTrainState *train_state,
+    size_t weight_offset,
+    size_t x_workspace_offset,
+    size_t dy_workspace_offset,
+    size_t dx_workspace_offset,
+    size_t token_count,
+    size_t rows,
+    size_t cols);
+
+int niyah_cuda_train_attention_backward(
+    NiyahCudaTrainState *train_state,
+    size_t q_workspace_offset,
+    size_t k_workspace_offset,
+    size_t v_workspace_offset,
+    size_t da_workspace_offset,
+    size_t dq_workspace_offset,
+    size_t dk_workspace_offset,
+    size_t dv_workspace_offset,
+    size_t token_count,
+    size_t n_heads,
+    size_t n_kv_heads,
+    size_t head_dim);
+
+int niyah_cuda_train_silu_mul_backward(
+    NiyahCudaTrainState *train_state,
+    size_t gate_workspace_offset,
+    size_t up_workspace_offset,
+    size_t dact_workspace_offset,
+    size_t dgate_workspace_offset,
+    size_t dup_workspace_offset,
+    size_t value_count);
+
+int niyah_cuda_train_rmsnorm_backward(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaTrainState *train_state,
+    size_t weight_offset,
+    size_t x_workspace_offset,
+    size_t dy_workspace_offset,
+    size_t dx_workspace_offset,
+    size_t token_count,
+    size_t width,
+    float eps);
+
+int niyah_cuda_train_rope_backward(
+    NiyahCudaTrainState *train_state,
+    size_t workspace_offset,
+    size_t token_count,
+    size_t n_heads,
+    size_t head_dim);
+
+int niyah_cuda_train_add_inplace(
+    NiyahCudaTrainState *train_state,
+    size_t dst_workspace_offset,
+    size_t src_workspace_offset,
+    size_t value_count);
+
+int niyah_cuda_train_add(
+    NiyahCudaTrainState *train_state,
+    size_t dst_workspace_offset,
+    size_t a_workspace_offset,
+    size_t b_workspace_offset,
+    size_t value_count);
+
+int niyah_cuda_train_backward_workspace_floats(
+    const NiyahModelConfig *config,
+    size_t token_count,
+    size_t *out_floats);
+
+int niyah_cuda_train_backward_full(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaTrainState *train_state,
+    const uint32_t *tokens,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t loss_start,
+    const uint32_t *segment_ids,
+    float *out_loss);
+
 typedef struct NiyahCudaDecodeState {
     void *device_keys;
     void *device_values;

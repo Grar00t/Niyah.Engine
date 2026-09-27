@@ -8,6 +8,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(NIYAH_BUILD_TESTS "Build Niyah.Engine tests" ON)
 option(NIYAH_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(NIYAH_ENABLE_CUDA "Build the optional CUDA backend" OFF)
+option(NIYAH_ENABLE_OPENMP "Enable OpenMP CPU kernels" OFF)
 
 if(NIYAH_ENABLE_SANITIZERS)
     if(MSVC)
@@ -59,7 +60,12 @@ if(NIYAH_ENABLE_CUDA)
             ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
-    target_link_libraries(niyah_cuda_backend PRIVATE CUDA::cudart)
+    target_sources(niyah_cuda_backend
+    PRIVATE
+        src/niyah_cuda_train.cu
+)
+
+target_link_libraries(niyah_cuda_backend PRIVATE CUDA::cudart)
     set_target_properties(niyah_cuda_backend PROPERTIES
         CUDA_STANDARD 14
         CUDA_STANDARD_REQUIRED ON
@@ -85,6 +91,9 @@ add_library(niyah STATIC
     src/niyah_training_loop.c
     src/niyah_optimizer.c
     src/niyah_checkpoint.c
+    src/niyah_coordination.c
+    src/niyah_receipt.c
+    src/niyah_receipt_chain.c
 )
 
 target_include_directories(niyah
@@ -135,11 +144,35 @@ endif()
 
 if(NOT MSVC)
     target_link_libraries(niyah PUBLIC m)
+
+if(NIYAH_ENABLE_OPENMP)
+    find_package(OpenMP REQUIRED)
+    target_link_libraries(niyah PUBLIC OpenMP::OpenMP_C)
+    target_compile_definitions(niyah PRIVATE NIYAH_ENABLE_OPENMP=1)
+endif()
 endif()
 
 add_executable(niyah_train tools/niyah_train.c)
 set_target_properties(niyah_train PROPERTIES OUTPUT_NAME "niyah-train")
 target_link_libraries(niyah_train PRIVATE niyah)
+
+if(NIYAH_ENABLE_CUDA)
+    target_include_directories(
+        niyah_train
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(
+        niyah_train
+        PRIVATE
+            niyah_cuda_backend
+    )
+    target_compile_definitions(
+        niyah_train
+        PRIVATE
+            NIYAH_TRAIN_ENABLE_CUDA=1
+    )
+endif()
 
 if(MSVC)
     target_compile_options(niyah_train PRIVATE /W4 /WX)
@@ -331,6 +364,243 @@ if(NIYAH_BUILD_TESTS)
         add_test(
             NAME niyah_cuda_generation_test
             COMMAND niyah_cuda_generation_test
+        )
+
+        add_executable(niyah_cuda_train_linear_test
+            tests/test_cuda_train_linear.c
+        )
+        target_include_directories(niyah_cuda_train_linear_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_train_linear_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_train_linear_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_train_linear_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_linear_test
+            COMMAND niyah_cuda_train_linear_test
+        )
+
+        add_executable(niyah_cuda_train_rmsnorm_test
+            tests/test_cuda_train_rmsnorm.c
+        )
+        target_include_directories(niyah_cuda_train_rmsnorm_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_train_rmsnorm_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_train_rmsnorm_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_train_rmsnorm_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_rmsnorm_test
+            COMMAND niyah_cuda_train_rmsnorm_test
+        )
+
+        add_executable(niyah_cuda_train_rope_test
+            tests/test_cuda_train_rope.c
+        )
+        target_include_directories(niyah_cuda_train_rope_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_train_rope_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_train_rope_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_train_rope_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_rope_test
+            COMMAND niyah_cuda_train_rope_test
+        )
+
+        add_executable(niyah_cuda_train_residual_test
+            tests/test_cuda_train_residual.c
+        )
+        target_include_directories(niyah_cuda_train_residual_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_train_residual_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(niyah_cuda_train_residual_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_cuda_train_residual_test
+                PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_residual_test
+            COMMAND niyah_cuda_train_residual_test
+        )
+
+        add_executable(niyah_cuda_train_ffn_backward_test
+            tests/test_cuda_train_ffn_backward.c
+        )
+        target_include_directories(niyah_cuda_train_ffn_backward_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(niyah_cuda_train_ffn_backward_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(
+                niyah_cuda_train_ffn_backward_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(
+                niyah_cuda_train_ffn_backward_test
+                PRIVATE
+                    -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_ffn_backward_test
+            COMMAND niyah_cuda_train_ffn_backward_test
+        )
+
+        add_executable(
+            niyah_cuda_train_attention_backward_test
+            tests/test_cuda_train_attention_backward.c
+        )
+        target_include_directories(
+            niyah_cuda_train_attention_backward_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(
+            niyah_cuda_train_attention_backward_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(
+                niyah_cuda_train_attention_backward_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(
+                niyah_cuda_train_attention_backward_test
+                PRIVATE
+                    -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_attention_backward_test
+            COMMAND niyah_cuda_train_attention_backward_test
+        )
+
+        add_executable(
+            niyah_cuda_train_full_backward_test
+            tests/test_cuda_train_full_backward.c
+        )
+        target_include_directories(
+            niyah_cuda_train_full_backward_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(
+            niyah_cuda_train_full_backward_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(
+                niyah_cuda_train_full_backward_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(
+                niyah_cuda_train_full_backward_test
+                PRIVATE
+                    -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_full_backward_test
+            COMMAND niyah_cuda_train_full_backward_test
+        )
+
+        add_executable(
+            niyah_cuda_train_accumulate_test
+            tests/test_cuda_train_accumulate.c
+        )
+        target_include_directories(
+            niyah_cuda_train_accumulate_test
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(
+            niyah_cuda_train_accumulate_test
+            PRIVATE
+                niyah_cuda_backend
+                niyah
+                CUDA::cudart
+        )
+
+        if(MSVC)
+            target_compile_options(
+                niyah_cuda_train_accumulate_test
+                PRIVATE /W4 /WX)
+        else()
+            target_compile_options(
+                niyah_cuda_train_accumulate_test
+                PRIVATE
+                    -Wall -Wextra -Wpedantic -Werror)
+        endif()
+
+        add_test(
+            NAME niyah_cuda_train_accumulate_test
+            COMMAND niyah_cuda_train_accumulate_test
         )
     endif()
 
@@ -547,6 +817,19 @@ if(NIYAH_BUILD_TESTS)
                 WILL_FAIL TRUE)
     endif()
 
+    add_test(NAME niyah_train_finetune_test
+        COMMAND ${CMAKE_COMMAND}
+            -DNIYAH_TRAIN=$<TARGET_FILE:niyah_train>
+            -DTOKENIZER=${_NIYAH_TRAIN_TOK}
+            -DBASE_SHARD=${_NIYAH_TRAIN_SHARD}
+            -DFINETUNE_SHARD=${_NIYAH_TRAIN_SHARD_ALT}
+            -DBASE_CHECKPOINT=${_NIYAH_TRAIN_CKPT1}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_niyah_train_finetune.cmake)
+    set_tests_properties(niyah_train_finetune_test PROPERTIES
+        FIXTURES_REQUIRED niyah_train_files
+        DEPENDS niyah_train_new_test)
+
     add_test(NAME niyah_train_resume_test
         COMMAND niyah_train resume
             --tokenizer "${_NIYAH_TRAIN_TOK}"
@@ -656,3 +939,135 @@ set(CPACK_PACKAGE_FILE_NAME
     "Niyah.Engine-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 include(CPack)
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(
+        niyah_training_gradient_accumulator_test
+        tests/test_training_gradient_accumulator.c
+    )
+
+    target_link_libraries(
+        niyah_training_gradient_accumulator_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_training_gradient_accumulator_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_training_gradient_accumulator_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_test(
+        NAME niyah_training_gradient_accumulator_test
+        COMMAND niyah_training_gradient_accumulator_test
+    )
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(
+        niyah_coordination_test
+        tests/test_coordination.c
+    )
+
+    target_link_libraries(
+        niyah_coordination_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_coordination_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_coordination_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_test(
+        NAME niyah_coordination_test
+        COMMAND niyah_coordination_test
+    )
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(
+        niyah_receipt_test
+        tests/test_receipt.c
+    )
+
+    target_link_libraries(
+        niyah_receipt_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_receipt_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_receipt_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_test(
+        NAME niyah_receipt_test
+        COMMAND niyah_receipt_test
+    )
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(
+        niyah_receipt_chain_test
+        tests/test_receipt_chain.c
+    )
+
+    target_link_libraries(
+        niyah_receipt_chain_test
+        PRIVATE niyah
+    )
+
+    if(MSVC)
+        target_compile_options(
+            niyah_receipt_chain_test
+            PRIVATE /W4 /WX
+        )
+    else()
+        target_compile_options(
+            niyah_receipt_chain_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
+        )
+    endif()
+
+    add_test(
+        NAME niyah_receipt_chain_test
+        COMMAND niyah_receipt_chain_test
+    )
+endif()

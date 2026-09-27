@@ -706,20 +706,33 @@ static NiyahStatus niyah_read_header(FILE *file,
     NiyahStatus status;
 
     memset(out, 0, sizeof(*out));
-    status = niyah_read_exact(file, bytes, sizeof(bytes), crc, 1);
+
+    /*
+     * Historical compatibility:
+     * pre-segment checkpoints used a 68-byte header;
+     * d3b5350 added n_segments and grew it to 72 bytes without
+     * changing checkpoint version.  Parse the 68-byte layout first
+     * and accept it only when its computed model geometry matches.
+     */
+    status = niyah_read_exact(file, bytes, 68U, crc, 1);
     if (status != NIYAH_OK) {
         return status;
     }
-    if (memcmp(bytes, NIYAH_CHECKPOINT_MAGIC, sizeof(NIYAH_CHECKPOINT_MAGIC)) != 0) {
+
+    if (memcmp(bytes, NIYAH_CHECKPOINT_MAGIC,
+               sizeof(NIYAH_CHECKPOINT_MAGIC)) != 0) {
         return NIYAH_ERR_CORRUPT_DATA;
     }
+
     version = niyah_load_u32_le(bytes + 8U);
     if (version != required_version) {
         return NIYAH_ERR_UNSUPPORTED_VERSION;
     }
+
     flags = niyah_load_u32_le(bytes + 12U);
     out->section_count = niyah_load_u32_le(bytes + 16U);
     reserved = niyah_load_u32_le(bytes + 20U);
+
     if (flags != NIYAH_CHECKPOINT_HEADER_FLAGS ||
         reserved != NIYAH_CHECKPOINT_RESERVED ||
         out->section_count > NIYAH_CHECKPOINT_MAX_SECTIONS) {
@@ -733,19 +746,52 @@ static NiyahStatus niyah_read_header(FILE *file,
     out->config.n_heads = niyah_load_u32_le(bytes + 40U);
     out->config.n_kv_heads = niyah_load_u32_le(bytes + 44U);
     out->config.ffn_hidden_dim = niyah_load_u32_le(bytes + 48U);
-    out->config.rms_norm_eps = niyah_bits_float(niyah_load_u32_le(bytes + 52U));
+    out->config.rms_norm_eps =
+        niyah_bits_float(niyah_load_u32_le(bytes + 52U));
+
     tie = niyah_load_u32_le(bytes + 56U);
     if (tie > UINT32_C(1)) {
         return NIYAH_ERR_CORRUPT_DATA;
     }
     out->config.tie_word_embeddings = tie != 0U ? 1 : 0;
+
+    /* Try legacy 68-byte layout: no segment embeddings. */
+    out->config.n_segments = 0U;
+    weight_count_u64 = niyah_load_u64_le(bytes + 60U);
+
+    if (!((sizeof(size_t) < sizeof(uint64_t) &&
+           weight_count_u64 > (uint64_t)SIZE_MAX) ||
+          weight_count_u64 > UINT64_MAX / UINT64_C(4))) {
+        out->weight_count = (size_t)weight_count_u64;
+        out->tensor_bytes = weight_count_u64 * UINT64_C(4);
+
+        status = niyah_model_config_validate(&out->config);
+        if (status == NIYAH_OK) {
+            status = niyah_model_layout_compute(
+                &out->config, &out->layout);
+            if (status == NIYAH_OK &&
+                out->layout.total_floats == out->weight_count) {
+                return NIYAH_OK;
+            }
+        }
+    }
+
+    /* Not legacy geometry: consume the 4-byte extension and parse
+     * the post-d3b5350 72-byte layout. */
+    status = niyah_read_exact(file, bytes + 68U, 4U, crc, 1);
+    if (status != NIYAH_OK) {
+        return status;
+    }
+
     out->config.n_segments = niyah_load_u32_le(bytes + 60U);
     weight_count_u64 = niyah_load_u64_le(bytes + 64U);
+
     if ((sizeof(size_t) < sizeof(uint64_t) &&
          weight_count_u64 > (uint64_t)SIZE_MAX) ||
         weight_count_u64 > UINT64_MAX / UINT64_C(4)) {
         return NIYAH_ERR_CORRUPT_DATA;
     }
+
     out->weight_count = (size_t)weight_count_u64;
     out->tensor_bytes = weight_count_u64 * UINT64_C(4);
 
@@ -753,10 +799,13 @@ static NiyahStatus niyah_read_header(FILE *file,
     if (status != NIYAH_OK) {
         return NIYAH_ERR_CORRUPT_DATA;
     }
+
     status = niyah_model_layout_compute(&out->config, &out->layout);
-    if (status != NIYAH_OK || out->layout.total_floats != out->weight_count) {
+    if (status != NIYAH_OK ||
+        out->layout.total_floats != out->weight_count) {
         return NIYAH_ERR_CORRUPT_DATA;
     }
+
     return NIYAH_OK;
 }
 
