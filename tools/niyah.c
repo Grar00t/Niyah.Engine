@@ -93,6 +93,7 @@ static void usage(FILE *stream)
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
         "      [--prompt-prefix TEXT] [--prompt-suffix TEXT]\n"
+        "      [auto: CKPT.prompt-prefix / CKPT.prompt-suffix]\n"
         "      [--backend cpu|cuda]\n");
 }
 
@@ -500,6 +501,78 @@ static int read_file_bytes(
 
     *out_bytes = bytes;
     *out_size = size;
+    return 1;
+}
+
+static int read_prompt_sidecar(
+    const char *checkpoint_path,
+    const char *suffix,
+    char **out_text)
+{
+    char *path = NULL;
+    char *text = NULL;
+    uint8_t *bytes = NULL;
+    size_t checkpoint_size;
+    size_t suffix_size;
+    size_t path_size;
+    size_t text_size = 0U;
+    size_t i;
+
+    if (checkpoint_path == NULL || suffix == NULL || out_text == NULL)
+        return 0;
+
+    *out_text = NULL;
+    checkpoint_size = strlen(checkpoint_path);
+    suffix_size = strlen(suffix);
+
+    if (checkpoint_size > SIZE_MAX - suffix_size - 1U)
+        return 0;
+
+    path_size = checkpoint_size + suffix_size;
+    path = (char *)malloc(path_size + 1U);
+    if (path == NULL)
+        return 0;
+
+    memcpy(path, checkpoint_path, checkpoint_size);
+    memcpy(path + checkpoint_size, suffix, suffix_size);
+    path[path_size] = '\0';
+
+    if (!path_exists(path)) {
+        free(path);
+        return 1;
+    }
+
+    if (!read_file_bytes(path, &bytes, &text_size)) {
+        free(path);
+        return 0;
+    }
+
+    for (i = 0U; i < text_size; ++i) {
+        if (bytes[i] == 0U) {
+            free(bytes);
+            free(path);
+            return 0;
+        }
+    }
+
+    if (text_size == SIZE_MAX) {
+        free(bytes);
+        free(path);
+        return 0;
+    }
+
+    text = (char *)malloc(text_size + 1U);
+    if (text == NULL) {
+        free(bytes);
+        free(path);
+        return 0;
+    }
+
+    memcpy(text, bytes, text_size);
+    text[text_size] = '\0';
+    free(bytes);
+    free(path);
+    *out_text = text;
     return 1;
 }
 
@@ -1660,6 +1733,8 @@ static int run_command(int argc, char **argv)
 #endif
     uint8_t *decoded = NULL;
     char *runtime_prompt = NULL;
+    char *sidecar_prompt_prefix = NULL;
+    char *sidecar_prompt_suffix = NULL;
     size_t prompt_count = 0U;
     size_t encoded_prompt_count = 0U;
     size_t workspace_count = 0U;
@@ -1706,6 +1781,28 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
+    if (options.prompt_prefix == NULL &&
+        !read_prompt_sidecar(
+            options.checkpoint_path,
+            ".prompt-prefix",
+            &sidecar_prompt_prefix)) {
+        exit_code = fail_status(
+            "prompt_contract",
+            NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    if (options.prompt_suffix == NULL &&
+        !read_prompt_sidecar(
+            options.checkpoint_path,
+            ".prompt-suffix",
+            &sidecar_prompt_suffix)) {
+        exit_code = fail_status(
+            "prompt_contract",
+            NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
     vocab_size = niyah_tokenizer_vocab_size(tokenizer);
     if (vocab_size == 0U ||
         vocab_size != (size_t)model.config.vocab_size) {
@@ -1717,9 +1814,17 @@ static int run_command(int argc, char **argv)
 
     {
         const char *prefix =
-            options.prompt_prefix != NULL ? options.prompt_prefix : "";
+            options.prompt_prefix != NULL
+                ? options.prompt_prefix
+                : (sidecar_prompt_prefix != NULL
+                    ? sidecar_prompt_prefix
+                    : "");
         const char *suffix =
-            options.prompt_suffix != NULL ? options.prompt_suffix : "";
+            options.prompt_suffix != NULL
+                ? options.prompt_suffix
+                : (sidecar_prompt_suffix != NULL
+                    ? sidecar_prompt_suffix
+                    : "");
         const size_t prefix_size = strlen(prefix);
         const size_t prompt_size = strlen(options.prompt);
         const size_t suffix_size = strlen(suffix);
@@ -2012,6 +2117,8 @@ cleanup:
     free(generated_tokens);
     free(prompt_tokens);
     free(runtime_prompt);
+    free(sidecar_prompt_suffix);
+    free(sidecar_prompt_prefix);
     niyah_kv_cache_destroy(&cache);
     niyah_model_destroy(&model);
     niyah_tokenizer_destroy(tokenizer);

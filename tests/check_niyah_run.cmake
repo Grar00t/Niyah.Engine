@@ -18,6 +18,8 @@ set(TOK "${PREFIX}.tok")
 set(SHARD "${PREFIX}.srd")
 set(SHARD_ALT "${PREFIX}_alt.srd")
 set(CKPT "${PREFIX}.ckpt")
+set(PROMPT_PREFIX "${CKPT}.prompt-prefix")
+set(PROMPT_SUFFIX "${CKPT}.prompt-suffix")
 set(CURSOR "${PREFIX}.cursor")
 set(OUTPUT "${PREFIX}.out")
 
@@ -26,6 +28,8 @@ file(REMOVE
     "${SHARD}"
     "${SHARD_ALT}"
     "${CKPT}"
+    "${PROMPT_PREFIX}"
+    "${PROMPT_SUFFIX}"
     "${CURSOR}"
     "${OUTPUT}")
 
@@ -96,6 +100,49 @@ file(SIZE "${OUTPUT}" output_size)
 if(output_size LESS 1)
     message(FATAL_ERROR "runtime output empty")
 endif()
+
+file(WRITE "${PROMPT_PREFIX}" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+file(WRITE "${PROMPT_SUFFIX}" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" run
+        --tokenizer "${TOK}"
+        --checkpoint "${CKPT}"
+        --prompt "a"
+        --max-new-tokens 1
+        --temperature 0
+        --seed 1
+        --backend "${BACKEND}"
+    RESULT_VARIABLE sidecar_result
+    ERROR_VARIABLE sidecar_error
+    OUTPUT_QUIET
+)
+if(sidecar_result EQUAL 0)
+    message(FATAL_ERROR "runtime prompt sidecars were ignored")
+endif()
+string(FIND "${sidecar_error}" "error_stage=context_capacity" sidecar_error_index)
+if(sidecar_error_index EQUAL -1)
+    message(FATAL_ERROR "prompt sidecar rejection used unexpected error: ${sidecar_error}")
+endif()
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" run
+        --tokenizer "${TOK}"
+        --checkpoint "${CKPT}"
+        --prompt "a"
+        --prompt-prefix ""
+        --prompt-suffix ""
+        --max-new-tokens 1
+        --temperature 0
+        --seed 1
+        --backend "${BACKEND}"
+    RESULT_VARIABLE sidecar_override_result
+    OUTPUT_QUIET
+)
+if(NOT sidecar_override_result EQUAL 0)
+    message(FATAL_ERROR "explicit prompt flags did not override sidecars")
+endif()
+file(REMOVE "${PROMPT_PREFIX}" "${PROMPT_SUFFIX}")
 
 execute_process(
     COMMAND "${NIYAH_CLI}" run
