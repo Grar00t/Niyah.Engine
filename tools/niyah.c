@@ -93,6 +93,7 @@ static void usage(FILE *stream)
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
         "      [--prompt-prefix TEXT] [--prompt-suffix TEXT]\n"
+        "      [auto: CKPT.prompt-prefix / CKPT.prompt-suffix]\n"
         "      [--backend cpu|cuda]\n");
 }
 
@@ -500,6 +501,122 @@ static int read_file_bytes(
 
     *out_bytes = bytes;
     *out_size = size;
+    return 1;
+}
+
+static int read_prompt_sidecar(
+    const char *checkpoint_path,
+    const char *suffix,
+    char **out_text,
+    int *out_present)
+{
+    FILE *file = NULL;
+    char *path = NULL;
+    char *text = NULL;
+    size_t checkpoint_size;
+    size_t suffix_size;
+    size_t path_size;
+    size_t text_size;
+    long end;
+    size_t i;
+
+    if (checkpoint_path == NULL || suffix == NULL ||
+        out_text == NULL || out_present == NULL)
+        return 0;
+
+    *out_text = NULL;
+    *out_present = 0;
+    checkpoint_size = strlen(checkpoint_path);
+    suffix_size = strlen(suffix);
+
+    if (checkpoint_size > SIZE_MAX - suffix_size - 1U)
+        return 0;
+
+    path_size = checkpoint_size + suffix_size;
+    path = (char *)malloc(path_size + 1U);
+    if (path == NULL)
+        return 0;
+
+    memcpy(path, checkpoint_path, checkpoint_size);
+    memcpy(path + checkpoint_size, suffix, suffix_size);
+    path[path_size] = '\0';
+
+    errno = 0;
+    file = niyah_cli_fopen(path, "rb");
+    if (file == NULL) {
+        const int open_error = errno;
+        free(path);
+        return open_error == ENOENT;
+    }
+
+    if (fseek(file, 0L, SEEK_END) != 0) {
+        (void)fclose(file);
+        free(path);
+        return 0;
+    }
+    end = ftell(file);
+    if (end < 0L || (uint64_t)end > (uint64_t)SIZE_MAX - 1U) {
+        (void)fclose(file);
+        free(path);
+        return 0;
+    }
+    text_size = (size_t)end;
+
+    if (fseek(file, 0L, SEEK_SET) != 0) {
+        (void)fclose(file);
+        free(path);
+        return 0;
+    }
+
+    {
+        const int probe = fgetc(file);
+        if (probe == EOF && ferror(file)) {
+            (void)fclose(file);
+            free(path);
+            return 0;
+        }
+        if (probe != EOF && fseek(file, 0L, SEEK_SET) != 0) {
+            (void)fclose(file);
+            free(path);
+            return 0;
+        }
+        if (probe == EOF)
+            text_size = 0U;
+    }
+
+    text = (char *)malloc(text_size + 1U);
+    if (text == NULL) {
+        (void)fclose(file);
+        free(path);
+        return 0;
+    }
+
+    if (text_size != 0U &&
+        fread(text, 1U, text_size, file) != text_size) {
+        free(text);
+        (void)fclose(file);
+        free(path);
+        return 0;
+    }
+
+    if (fclose(file) != 0) {
+        free(text);
+        free(path);
+        return 0;
+    }
+
+    for (i = 0U; i < text_size; ++i) {
+        if ((unsigned char)text[i] == 0U) {
+            free(text);
+            free(path);
+            return 0;
+        }
+    }
+
+    text[text_size] = '\0';
+    free(path);
+    *out_text = text;
+    *out_present = 1;
     return 1;
 }
 
@@ -1660,6 +1777,12 @@ static int run_command(int argc, char **argv)
 #endif
     uint8_t *decoded = NULL;
     char *runtime_prompt = NULL;
+    char *sidecar_prompt_prefix = NULL;
+    char *sidecar_prompt_suffix = NULL;
+    char *sidecar_prompt_sha = NULL;
+    int sidecar_prefix_present = 0;
+    int sidecar_suffix_present = 0;
+    int sidecar_sha_present = 0;
     size_t prompt_count = 0U;
     size_t encoded_prompt_count = 0U;
     size_t workspace_count = 0U;
@@ -1706,6 +1829,68 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
+    if (options.prompt_prefix == NULL &&
+        !read_prompt_sidecar(
+            options.checkpoint_path,
+            ".prompt-prefix",
+            &sidecar_prompt_prefix,
+            &sidecar_prefix_present)) {
+        exit_code = fail_status("prompt_contract", NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    if (options.prompt_suffix == NULL &&
+        !read_prompt_sidecar(
+            options.checkpoint_path,
+            ".prompt-suffix",
+            &sidecar_prompt_suffix,
+            &sidecar_suffix_present)) {
+        exit_code = fail_status("prompt_contract", NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
+    if (sidecar_prefix_present || sidecar_suffix_present) {
+        uint8_t checkpoint_identity[NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
+        char checkpoint_hex[65];
+        size_t identity_size;
+
+        if (!read_prompt_sidecar(
+                options.checkpoint_path,
+                ".prompt-sha256",
+                &sidecar_prompt_sha,
+                &sidecar_sha_present) ||
+            !sidecar_sha_present) {
+            exit_code = fail_status("prompt_contract", NIYAH_ERR_IO);
+            goto cleanup;
+        }
+
+        identity_size = strlen(sidecar_prompt_sha);
+        while (identity_size != 0U &&
+               (sidecar_prompt_sha[identity_size - 1U] == '\n' ||
+                sidecar_prompt_sha[identity_size - 1U] == '\r')) {
+            sidecar_prompt_sha[--identity_size] = '\0';
+        }
+        if (identity_size != 64U) {
+            exit_code = fail_status(
+                "prompt_contract", NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
+        status = niyah_checkpoint_identity_sha256(
+            options.checkpoint_path,
+            checkpoint_identity);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("prompt_contract", status);
+            goto cleanup;
+        }
+        sha256_to_hex(checkpoint_identity, checkpoint_hex);
+        if (strcmp(sidecar_prompt_sha, checkpoint_hex) != 0) {
+            exit_code = fail_status(
+                "prompt_contract", NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+    }
+
     vocab_size = niyah_tokenizer_vocab_size(tokenizer);
     if (vocab_size == 0U ||
         vocab_size != (size_t)model.config.vocab_size) {
@@ -1717,9 +1902,17 @@ static int run_command(int argc, char **argv)
 
     {
         const char *prefix =
-            options.prompt_prefix != NULL ? options.prompt_prefix : "";
+            options.prompt_prefix != NULL
+                ? options.prompt_prefix
+                : (sidecar_prompt_prefix != NULL
+                    ? sidecar_prompt_prefix
+                    : "");
         const char *suffix =
-            options.prompt_suffix != NULL ? options.prompt_suffix : "";
+            options.prompt_suffix != NULL
+                ? options.prompt_suffix
+                : (sidecar_prompt_suffix != NULL
+                    ? sidecar_prompt_suffix
+                    : "");
         const size_t prefix_size = strlen(prefix);
         const size_t prompt_size = strlen(options.prompt);
         const size_t suffix_size = strlen(suffix);
@@ -2012,6 +2205,9 @@ cleanup:
     free(generated_tokens);
     free(prompt_tokens);
     free(runtime_prompt);
+    free(sidecar_prompt_sha);
+    free(sidecar_prompt_suffix);
+    free(sidecar_prompt_prefix);
     niyah_kv_cache_destroy(&cache);
     niyah_model_destroy(&model);
     niyah_tokenizer_destroy(tokenizer);
