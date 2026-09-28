@@ -141,7 +141,7 @@ niyah run \
 
 `--backend cuda` requires a build configured with the optional CUDA backend.
 
-If `--prompt-prefix` or `--prompt-suffix` is omitted, `niyah run` looks for raw UTF-8 sidecars named `<checkpoint>.prompt-prefix` and `<checkpoint>.prompt-suffix`. This lets a packaged checkpoint carry the exact prompt contract used during supervised training without hardcoding language-specific labels in the engine. Explicit CLI flags override the corresponding sidecars; pass an explicit empty string to disable one sidecar. Checkpoints without sidecars keep the previous raw-prompt behavior.
+If `--prompt-prefix` or `--prompt-suffix` is omitted, `niyah run` looks for raw UTF-8 sidecars named `<checkpoint>.prompt-prefix` and `<checkpoint>.prompt-suffix`. Any applied sidecar requires `<checkpoint>.prompt-sha256` containing the exact SHA-256 of the checkpoint bytes; a missing, unreadable, malformed, or mismatched binding fails closed. Empty prefix/suffix sidecars are valid. Explicit CLI flags override the corresponding sidecars; pass an explicit empty string to disable one sidecar. Checkpoints without sidecars keep the previous raw-prompt behavior.
 
 ## `niyah-train`
 

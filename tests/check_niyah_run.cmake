@@ -20,6 +20,7 @@ set(SHARD_ALT "${PREFIX}_alt.srd")
 set(CKPT "${PREFIX}.ckpt")
 set(PROMPT_PREFIX "${CKPT}.prompt-prefix")
 set(PROMPT_SUFFIX "${CKPT}.prompt-suffix")
+set(PROMPT_SHA "${CKPT}.prompt-sha256")
 set(CURSOR "${PREFIX}.cursor")
 set(OUTPUT "${PREFIX}.out")
 
@@ -28,10 +29,12 @@ file(REMOVE
     "${SHARD}"
     "${SHARD_ALT}"
     "${CKPT}"
-    "${PROMPT_PREFIX}"
-    "${PROMPT_SUFFIX}"
     "${CURSOR}"
     "${OUTPUT}")
+file(REMOVE_RECURSE
+    "${PROMPT_PREFIX}"
+    "${PROMPT_SUFFIX}"
+    "${PROMPT_SHA}")
 
 execute_process(
     COMMAND "${NIYAH_FIXTURE}"
@@ -101,48 +104,68 @@ if(output_size LESS 1)
     message(FATAL_ERROR "runtime output empty")
 endif()
 
+file(MAKE_DIRECTORY "${PROMPT_PREFIX}")
+execute_process(
+    COMMAND "${NIYAH_CLI}" run --tokenizer "${TOK}" --checkpoint "${CKPT}"
+        --prompt "a" --max-new-tokens 1 --temperature 0 --seed 1 --backend "${BACKEND}"
+    RESULT_VARIABLE unreadable_result ERROR_VARIABLE unreadable_error OUTPUT_QUIET)
+if(unreadable_result EQUAL 0 OR NOT unreadable_error MATCHES "error_stage=prompt_contract")
+    message(FATAL_ERROR "unreadable prompt sidecar did not fail closed: ${unreadable_error}")
+endif()
+file(REMOVE_RECURSE "${PROMPT_PREFIX}")
+
 file(WRITE "${PROMPT_PREFIX}" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 file(WRITE "${PROMPT_SUFFIX}" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 execute_process(
-    COMMAND "${NIYAH_CLI}" run
-        --tokenizer "${TOK}"
-        --checkpoint "${CKPT}"
-        --prompt "a"
-        --max-new-tokens 1
-        --temperature 0
-        --seed 1
-        --backend "${BACKEND}"
-    RESULT_VARIABLE sidecar_result
-    ERROR_VARIABLE sidecar_error
-    OUTPUT_QUIET
-)
-if(sidecar_result EQUAL 0)
-    message(FATAL_ERROR "runtime prompt sidecars were ignored")
-endif()
-string(FIND "${sidecar_error}" "error_stage=context_capacity" sidecar_error_index)
-if(sidecar_error_index EQUAL -1)
-    message(FATAL_ERROR "prompt sidecar rejection used unexpected error: ${sidecar_error}")
+    COMMAND "${NIYAH_CLI}" run --tokenizer "${TOK}" --checkpoint "${CKPT}"
+        --prompt "a" --max-new-tokens 1 --temperature 0 --seed 1 --backend "${BACKEND}"
+    RESULT_VARIABLE unbound_result ERROR_VARIABLE unbound_error OUTPUT_QUIET)
+if(unbound_result EQUAL 0 OR NOT unbound_error MATCHES "error_stage=prompt_contract")
+    message(FATAL_ERROR "unbound prompt contract was accepted: ${unbound_error}")
 endif()
 
+file(SHA256 "${CKPT}" checkpoint_sha256)
+file(WRITE "${PROMPT_SHA}" "${checkpoint_sha256}\n")
 execute_process(
-    COMMAND "${NIYAH_CLI}" run
-        --tokenizer "${TOK}"
-        --checkpoint "${CKPT}"
-        --prompt "a"
-        --prompt-prefix ""
-        --prompt-suffix ""
-        --max-new-tokens 1
-        --temperature 0
-        --seed 1
-        --backend "${BACKEND}"
-    RESULT_VARIABLE sidecar_override_result
-    OUTPUT_QUIET
-)
+    COMMAND "${NIYAH_CLI}" run --tokenizer "${TOK}" --checkpoint "${CKPT}"
+        --prompt "a" --max-new-tokens 1 --temperature 0 --seed 1 --backend "${BACKEND}"
+    RESULT_VARIABLE sidecar_result ERROR_VARIABLE sidecar_error OUTPUT_QUIET)
+if(sidecar_result EQUAL 0 OR NOT sidecar_error MATCHES "error_stage=context_capacity")
+    message(FATAL_ERROR "bound prompt sidecars were not applied: ${sidecar_error}")
+endif()
+
+file(WRITE "${PROMPT_SHA}" "0000000000000000000000000000000000000000000000000000000000000000\n")
+execute_process(
+    COMMAND "${NIYAH_CLI}" run --tokenizer "${TOK}" --checkpoint "${CKPT}"
+        --prompt "a" --max-new-tokens 1 --temperature 0 --seed 1 --backend "${BACKEND}"
+    RESULT_VARIABLE stale_result ERROR_VARIABLE stale_error OUTPUT_QUIET)
+if(stale_result EQUAL 0 OR NOT stale_error MATCHES "error_stage=prompt_contract")
+    message(FATAL_ERROR "stale prompt contract identity was accepted: ${stale_error}")
+endif()
+
+file(WRITE "${PROMPT_SHA}" "${checkpoint_sha256}")
+file(WRITE "${PROMPT_PREFIX}" "")
+file(WRITE "${PROMPT_SUFFIX}" "")
+execute_process(
+    COMMAND "${NIYAH_CLI}" run --tokenizer "${TOK}" --checkpoint "${CKPT}"
+        --prompt "a" --max-new-tokens 1 --temperature 0 --seed 1 --backend "${BACKEND}"
+    RESULT_VARIABLE empty_result OUTPUT_QUIET)
+if(NOT empty_result EQUAL 0)
+    message(FATAL_ERROR "empty prompt sidecars were rejected")
+endif()
+
+file(WRITE "${PROMPT_PREFIX}" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+file(WRITE "${PROMPT_SUFFIX}" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+execute_process(
+    COMMAND "${NIYAH_CLI}" run --tokenizer "${TOK}" --checkpoint "${CKPT}"
+        --prompt "a" --prompt-prefix "" --prompt-suffix "" --max-new-tokens 1
+        --temperature 0 --seed 1 --backend "${BACKEND}"
+    RESULT_VARIABLE sidecar_override_result OUTPUT_QUIET)
 if(NOT sidecar_override_result EQUAL 0)
     message(FATAL_ERROR "explicit prompt flags did not override sidecars")
 endif()
-file(REMOVE "${PROMPT_PREFIX}" "${PROMPT_SUFFIX}")
+file(REMOVE "${PROMPT_PREFIX}" "${PROMPT_SUFFIX}" "${PROMPT_SHA}")
 
 execute_process(
     COMMAND "${NIYAH_CLI}" run
