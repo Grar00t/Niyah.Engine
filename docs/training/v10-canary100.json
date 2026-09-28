@@ -1,0 +1,35 @@
+{
+  "schema": "niyah.training.receipt.v1",
+  "status": "PASS",
+  "source_commit": "3ace25669b2481161b2125a94562f537d2c4e534",
+  "mode": "new",
+  "backend": "cuda",
+  "updates": 100,
+  "batch_size": 4,
+  "accumulation_steps": 1,
+  "optimizer_step": 100,
+  "cursor_position": 400,
+  "tokenizer_sha256": "d47a69a1ec180f577aeebe3905d6aed22d4b8ea3408b66fe4b8571fccc2fa841",
+  "shards": 33,
+  "loss": {
+    "first": 9.447824480,
+    "last": 8.428232190,
+    "first10_mean": 9.413444996,
+    "last10_mean": 8.491244984,
+    "mean_delta": -0.922200012,
+    "mean": 8.76192188,
+    "finite": true
+  },
+  "checkpoint": {
+    "bytes": 377592032,
+    "sha256": "4127fbdef90b5aa36ad1098e3439c8dd4ef2e779bec21e783ac4506fb2679a90"
+  },
+  "cursor": {
+    "bytes": 120,
+    "sha256": "43de8ce5fa076104adf84c83f8b3777e0087c86cbb2761f527fb29777241668f"
+  },
+  "checkpoint_load_gate": "PASS",
+  "source_code_changed": false,
+  "tokenizer_changed": false,
+  "shards_changed": false
+}

@@ -4,6 +4,10 @@
 #include "niyah/tokenizer.h"
 #include "niyah/training_loop.h"
 
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+#include "niyah_cuda_matvec.h"
+#endif
+
 #include <errno.h>
 #include <inttypes.h>
 #include <math.h>
@@ -15,6 +19,7 @@
 #define NIYAH_TRAIN_MODE_NONE 0
 #define NIYAH_TRAIN_MODE_NEW 1
 #define NIYAH_TRAIN_MODE_RESUME 2
+#define NIYAH_TRAIN_MODE_FINETUNE 3
 
 typedef struct NiyahTrainOptions {
     int mode;
@@ -52,6 +57,7 @@ typedef struct NiyahTrainOptions {
     uint64_t warmup_steps;
     int have_warmup_steps;
     int progress_details;
+    int use_cuda;
 } NiyahTrainOptions;
 
 static void train_options_destroy(NiyahTrainOptions *options)
@@ -72,13 +78,22 @@ static void usage(FILE *stream)
         "      --rms-norm-eps F --tie-word-embeddings 0|1\n"
         "      --learning-rate F --beta1 F --beta2 F --epsilon F\n"
         "      --weight-decay F --max-grad-norm F [--warmup-steps N] [--progress-details]\n"
+        "      [--backend cpu|cuda]\n"
+        "\n"
+        "  niyah-train finetune --tokenizer TOK --shard SHARD [--shard SHARD ...]\n"
+        "      --checkpoint-in CKPT --checkpoint-out CKPT --cursor-out CURSOR\n"
+        "      --updates N --batch-size N --accumulation-steps N --data-seed N\n"
+        "      --learning-rate F --beta1 F --beta2 F --epsilon F\n"
+        "      --weight-decay F --max-grad-norm F [--warmup-steps N] [--progress-details]\n"
+        "      [--backend cpu|cuda]\n"
         "\n"
         "  niyah-train resume --tokenizer TOK --shard SHARD [--shard SHARD ...]\n"
         "      --checkpoint-in CKPT --cursor-in CURSOR\n"
         "      --checkpoint-out CKPT --cursor-out CURSOR\n"
         "      --updates N --batch-size N --accumulation-steps N [--progress-details]\n"
+        "      [--backend cpu|cuda]\n"
         "\n"
-        "Outputs are required to be new paths. Resume inputs are never overwritten.\n");
+        "Outputs are required to be new paths. Input checkpoints/cursors are never overwritten.\n");
 }
 
 static const char *status_name(NiyahStatus status)
@@ -160,6 +175,180 @@ static void print_training_progress(size_t update_index, size_t updates,
     fflush(stderr);
 }
 
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+typedef struct NiyahCudaTrainingContext {
+    NiyahCudaModelState model_state;
+    NiyahCudaTrainState train_state;
+    NiyahAdamWState *optimizer_state;
+    uint64_t synced_optimizer_step;
+    int model_ready;
+    int train_ready;
+} NiyahCudaTrainingContext;
+
+static NiyahStatus cuda_training_failure(const char *stage)
+{
+    fprintf(
+        stderr,
+        "cuda_training_stage=%s status=CUDA_ERROR\n",
+        stage);
+    return NIYAH_ERR_INVALID_CONFIG;
+}
+
+
+static NiyahStatus cuda_gradient_accumulator_begin(
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    if (context == NULL ||
+        context->train_ready == 0)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (niyah_cuda_train_state_zero_accumulated_gradients(
+            &context->train_state) != 0) {
+        return cuda_training_failure(
+            "gradient_accumulator_zero");
+    }
+
+    return NIYAH_OK;
+}
+
+
+static NiyahStatus cuda_gradient_accumulator_accumulate(
+    float scale,
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    if (context == NULL ||
+        context->train_ready == 0)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (niyah_cuda_train_state_accumulate_gradients(
+            &context->train_state,
+            scale) != 0) {
+        return cuda_training_failure(
+            "gradient_accumulator_add");
+    }
+
+    return NIYAH_OK;
+}
+
+
+static NiyahStatus cuda_gradient_accumulator_scale(
+    float scale,
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    if (context == NULL ||
+        context->train_ready == 0)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (niyah_cuda_train_state_scale_accumulated_gradients(
+            &context->train_state,
+            scale) != 0) {
+        return cuda_training_failure(
+            "gradient_accumulator_scale");
+    }
+
+    return NIYAH_OK;
+}
+
+
+static NiyahStatus cuda_gradient_accumulator_finalize(
+    NiyahModelGradients *out_gradients,
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    if (context == NULL ||
+        context->train_ready == 0 ||
+        out_gradients == NULL ||
+        out_gradients->values == NULL) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    if (niyah_cuda_train_state_copy_accumulated_gradients_to_host(
+            &context->train_state,
+            out_gradients->values,
+            out_gradients->count) != 0) {
+        return cuda_training_failure(
+            "gradient_accumulator_d2h");
+    }
+
+    return NIYAH_OK;
+}
+
+
+static const NiyahTrainingGradientAccumulatorOps
+cuda_gradient_accumulator_ops = {
+    cuda_gradient_accumulator_begin,
+    cuda_gradient_accumulator_accumulate,
+    cuda_gradient_accumulator_scale,
+    cuda_gradient_accumulator_finalize
+};
+
+
+static NiyahStatus cuda_training_backward(
+    const NiyahModel *model,
+    const NiyahTrainingSample *sample,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count,
+    float *out_loss,
+    void *user_data)
+{
+    NiyahCudaTrainingContext *context =
+        (NiyahCudaTrainingContext *)user_data;
+
+    (void)workspace;
+    (void)workspace_count;
+
+    if (model == NULL ||
+        sample == NULL ||
+        gradients == NULL ||
+        gradients->values == NULL ||
+        out_loss == NULL ||
+        context == NULL ||
+        context->optimizer_state == NULL ||
+        context->model_ready == 0 ||
+        context->train_ready == 0) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+
+    if (context->synced_optimizer_step !=
+        context->optimizer_state->step) {
+        if (niyah_cuda_model_state_sync(
+                &context->model_state,
+                model) != 0) {
+            return cuda_training_failure("model_sync");
+        }
+
+        context->synced_optimizer_step =
+            context->optimizer_state->step;
+    }
+
+    if (niyah_cuda_train_backward_full(
+            &context->model_state,
+            &context->train_state,
+            sample->tokens,
+            sample->targets,
+            sample->token_count,
+            sample->loss_start,
+            NULL,
+            out_loss) != 0) {
+        return cuda_training_failure("backward");
+    }
+
+    return NIYAH_OK;
+}
+#endif
+
 static int parse_u64(const char *text, uint64_t *out)
 {
     char *end = NULL;
@@ -218,6 +407,7 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
     }
     if (argc < 2) return 0;
     if (strcmp(argv[1], "new") == 0) options->mode = NIYAH_TRAIN_MODE_NEW;
+    else if (strcmp(argv[1], "finetune") == 0) options->mode = NIYAH_TRAIN_MODE_FINETUNE;
     else if (strcmp(argv[1], "resume") == 0) options->mode = NIYAH_TRAIN_MODE_RESUME;
     else return 0;
 
@@ -329,6 +519,17 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
             options->have_warmup_steps = 1;
         } else if (strcmp(key, "--progress-details") == 0) {
             options->progress_details = 1;
+        } else if (strcmp(key, "--backend") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+
+            if (strcmp(value, "cpu") == 0) {
+                options->use_cuda = 0;
+            } else if (strcmp(value, "cuda") == 0) {
+                options->use_cuda = 1;
+            } else {
+                return 0;
+            }
         } else {
             return 0;
         }
@@ -336,16 +537,27 @@ static int parse_options(int argc, char **argv, NiyahTrainOptions *options)
     return 1;
 }
 
-static int new_fields_present(const NiyahTrainOptions *o)
+static int model_fields_present(const NiyahTrainOptions *o)
 {
-    return o->have_model_seed || o->have_data_seed ||
+    return o->have_model_seed ||
            o->have_context_length || o->have_embedding_dim ||
            o->have_layers || o->have_heads || o->have_kv_heads ||
            o->have_ffn_hidden_dim || o->have_rms_norm_eps ||
-           o->have_tie_word_embeddings || o->have_learning_rate ||
-           o->have_beta1 || o->have_beta2 || o->have_epsilon ||
-           o->have_weight_decay || o->have_max_grad_norm ||
-           o->have_warmup_steps;
+           o->have_tie_word_embeddings;
+}
+
+static int optimizer_fields_present(const NiyahTrainOptions *o)
+{
+    return o->have_learning_rate || o->have_beta1 || o->have_beta2 ||
+           o->have_epsilon || o->have_weight_decay ||
+           o->have_max_grad_norm || o->have_warmup_steps;
+}
+
+static int optimizer_fields_complete(const NiyahTrainOptions *o)
+{
+    return o->have_learning_rate && o->have_beta1 && o->have_beta2 &&
+           o->have_epsilon && o->have_weight_decay &&
+           o->have_max_grad_norm;
 }
 
 static int validate_options(const NiyahTrainOptions *o)
@@ -372,9 +584,20 @@ static int validate_options(const NiyahTrainOptions *o)
                o->have_weight_decay && o->have_max_grad_norm;
     }
 
+    if (o->mode == NIYAH_TRAIN_MODE_FINETUNE) {
+        if (o->checkpoint_in == NULL || o->cursor_in != NULL ||
+            !o->have_data_seed || model_fields_present(o) ||
+            !optimizer_fields_complete(o))
+            return 0;
+        if (strcmp(o->checkpoint_in, o->checkpoint_out) == 0)
+            return 0;
+        return 1;
+    }
+
     if (o->mode == NIYAH_TRAIN_MODE_RESUME) {
         if (o->checkpoint_in == NULL || o->cursor_in == NULL ||
-            new_fields_present(o))
+            o->have_data_seed || model_fields_present(o) ||
+            optimizer_fields_present(o))
             return 0;
         if (strcmp(o->checkpoint_in, o->checkpoint_out) == 0 ||
             strcmp(o->cursor_in, o->cursor_out) == 0)
@@ -392,34 +615,101 @@ static int path_exists(const char *path)
     return 1;
 }
 
-static int validate_sample_context(const NiyahTrainingSample *samples,
-                                   size_t sample_count,
-                                   uint32_t context_length)
+typedef struct NiyahTrainShardProvider {
+    NiyahDatasetShardReader **readers;
+    const size_t *sample_offsets;
+    size_t shard_count;
+} NiyahTrainShardProvider;
+
+static NiyahStatus train_sample_provider(
+    size_t sample_index,
+    NiyahTrainingSample *out_sample,
+    void *user_data)
 {
-    size_t i;
-    for (i = 0U; i < sample_count; ++i) {
-        if (samples[i].token_count == 0U ||
-            samples[i].token_count > (size_t)context_length)
-            return 0;
+    NiyahTrainShardProvider *context =
+        (NiyahTrainShardProvider *)user_data;
+    const uint32_t *tokens = NULL;
+    const uint32_t *targets = NULL;
+    size_t token_count = 0U;
+    size_t loss_start = 0U;
+    size_t lo = 0U;
+    size_t hi;
+    size_t shard_index;
+    size_t local_index;
+    NiyahStatus status;
+
+    if (context == NULL ||
+        out_sample == NULL ||
+        context->readers == NULL ||
+        context->sample_offsets == NULL ||
+        context->shard_count == 0U)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (sample_index >=
+        context->sample_offsets[context->shard_count])
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    hi = context->shard_count;
+
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2U;
+
+        if (sample_index <
+            context->sample_offsets[mid + 1U])
+            hi = mid;
+        else
+            lo = mid + 1U;
     }
-    return 1;
+
+    shard_index = lo;
+
+    if (shard_index >= context->shard_count ||
+        context->readers[shard_index] == NULL ||
+        sample_index <
+            context->sample_offsets[shard_index])
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    local_index =
+        sample_index -
+        context->sample_offsets[shard_index];
+
+    status = niyah_dataset_shard_reader_sample_with_loss(
+        context->readers[shard_index],
+        local_index,
+        &tokens,
+        &targets,
+        &token_count,
+        &loss_start);
+
+    if (status != NIYAH_OK)
+        return status;
+
+    out_sample->tokens = tokens;
+    out_sample->targets = targets;
+    out_sample->token_count = token_count;
+    out_sample->loss_start = loss_start;
+
+    return NIYAH_OK;
 }
 
 int main(int argc, char **argv)
 {
     NiyahTrainOptions options;
     NiyahTokenizer *tokenizer = NULL;
-    NiyahDatasetShard *shards = NULL;
-    NiyahTrainingSample *samples = NULL;
+    NiyahDatasetShardReader **readers = NULL;
+    size_t *sample_offsets = NULL;
+    NiyahTrainShardProvider provider_context;
     NiyahDatasetCursor cursor;
     NiyahModel model;
     NiyahAdamWState optimizer_state;
     NiyahAdamWConfig optimizer_config;
     NiyahTrainProgressContext progress_context;
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    NiyahCudaTrainingContext cuda_context;
+#endif
     size_t sample_count = 0U;
-    size_t sample_bytes = 0U;
+    size_t max_token_count = 0U;
     size_t shard_index;
-    size_t sample_offset = 0U;
     size_t vocab_size;
     uint8_t dataset_identity[NIYAH_DATASET_IDENTITY_SHA256_SIZE];
     uint8_t checkpoint_identity[NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
@@ -428,11 +718,15 @@ int main(int argc, char **argv)
     int parsed;
     int exit_code = 1;
 
+    memset(&provider_context, 0, sizeof(provider_context));
     memset(&cursor, 0, sizeof(cursor));
     memset(&model, 0, sizeof(model));
     memset(&optimizer_state, 0, sizeof(optimizer_state));
     memset(&optimizer_config, 0, sizeof(optimizer_config));
     memset(&progress_context, 0, sizeof(progress_context));
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    memset(&cuda_context, 0, sizeof(cuda_context));
+#endif
 
     parsed = parse_options(argc, argv, &options);
     if (parsed == 2) {
@@ -444,6 +738,15 @@ int main(int argc, char **argv)
         train_options_destroy(&options);
         return 2;
     }
+
+#ifndef NIYAH_TRAIN_ENABLE_CUDA
+    if (options.use_cuda) {
+        fprintf(stderr, "backend_unavailable=cuda\n");
+        train_options_destroy(&options);
+        return 2;
+    }
+#endif
+
     if (path_exists(options.checkpoint_out) || path_exists(options.cursor_out)) {
         fprintf(stderr, "output_path_exists=1\n");
         train_options_destroy(&options);
@@ -456,80 +759,126 @@ int main(int argc, char **argv)
         return fail_status("tokenizer_load", status);
     }
 
-    if (options.shard_count > SIZE_MAX / sizeof(*shards)) {
-        exit_code = fail_status("shard_allocation", NIYAH_ERR_OVERFLOW);
-        goto cleanup;
-    }
-    shards = (NiyahDatasetShard *)calloc(options.shard_count, sizeof(*shards));
-    if (shards == NULL) {
-        exit_code = fail_status("shard_allocation", NIYAH_ERR_OUT_OF_MEMORY);
-        goto cleanup;
-    }
-
-    for (shard_index = 0U; shard_index < options.shard_count; ++shard_index) {
-        status = niyah_dataset_shard_load(
-            options.shard_paths[shard_index], tokenizer, &shards[shard_index]);
-        if (status != NIYAH_OK) {
-            exit_code = fail_status("shard_load", status);
-            goto cleanup;
-        }
-    }
-
-    if (options.shard_count == 1U) {
-        status = niyah_dataset_shard_identity_sha256(
-            &shards[0U], dataset_identity);
-    } else {
-        status = niyah_dataset_collection_identity_sha256(
-            shards, options.shard_count, dataset_identity);
-    }
-    if (status != NIYAH_OK) {
-        exit_code = fail_status("dataset_identity", status);
+    if (options.shard_count >
+            SIZE_MAX / sizeof(*readers) ||
+        options.shard_count >
+            SIZE_MAX / sizeof(*sample_offsets) - 1U) {
+        exit_code = fail_status(
+            "reader_allocation",
+            NIYAH_ERR_OVERFLOW);
         goto cleanup;
     }
 
+    readers = (NiyahDatasetShardReader **)calloc(
+        options.shard_count,
+        sizeof(*readers));
+    sample_offsets = (size_t *)calloc(
+        options.shard_count + 1U,
+        sizeof(*sample_offsets));
+
+    if (readers == NULL || sample_offsets == NULL) {
+        exit_code = fail_status(
+            "reader_allocation",
+            NIYAH_ERR_OUT_OF_MEMORY);
+        goto cleanup;
+    }
+
+    sample_offsets[0U] = 0U;
     sample_count = 0U;
-    for (shard_index = 0U; shard_index < options.shard_count; ++shard_index) {
+    max_token_count = 0U;
+
+    for (shard_index = 0U;
+         shard_index < options.shard_count;
+         ++shard_index) {
         size_t shard_samples = 0U;
-        status = niyah_training_samples_from_shard(
-            &shards[shard_index], NULL, 0U, &shard_samples);
+        size_t shard_sequence_length = 0U;
+        uint8_t tokenizer_identity[
+            NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE];
+        uint8_t shard_identity[
+            NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+
+        status = niyah_dataset_shard_reader_open(
+            options.shard_paths[shard_index],
+            tokenizer,
+            &readers[shard_index]);
+
         if (status != NIYAH_OK) {
-            exit_code = fail_status("sample_query", status);
+            fprintf(
+                stderr,
+                "reader_shard_index=%zu path=%s\n",
+                shard_index,
+                options.shard_paths[shard_index]);
+            exit_code = fail_status(
+                "shard_reader_open",
+                status);
             goto cleanup;
         }
-        if (sample_count > SIZE_MAX - shard_samples) {
-            exit_code = fail_status("sample_count", NIYAH_ERR_OVERFLOW);
+
+        status = niyah_dataset_shard_reader_info(
+            readers[shard_index],
+            &shard_samples,
+            &shard_sequence_length,
+            tokenizer_identity,
+            shard_identity);
+
+        if (status != NIYAH_OK) {
+            exit_code = fail_status(
+                "shard_reader_info",
+                status);
             goto cleanup;
         }
+
+        if (shard_samples == 0U ||
+            shard_sequence_length == 0U) {
+            exit_code = fail_status(
+                "shard_reader_info",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+
+        if (sample_count >
+            SIZE_MAX - shard_samples) {
+            exit_code = fail_status(
+                "sample_count",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+
         sample_count += shard_samples;
+        sample_offsets[shard_index + 1U] =
+            sample_count;
+
+        if (shard_sequence_length >
+            max_token_count)
+            max_token_count =
+                shard_sequence_length;
+
+        if (options.shard_count == 1U) {
+            memcpy(
+                dataset_identity,
+                shard_identity,
+                sizeof(dataset_identity));
+        }
     }
-    if (sample_count > SIZE_MAX / sizeof(*samples)) {
-        exit_code = fail_status("sample_allocation", NIYAH_ERR_OVERFLOW);
-        goto cleanup;
-    }
-    sample_bytes = sample_count * sizeof(*samples);
-    samples = (NiyahTrainingSample *)calloc(1U, sample_bytes);
-    if (samples == NULL) {
-        exit_code = fail_status("sample_allocation", NIYAH_ERR_OUT_OF_MEMORY);
-        goto cleanup;
-    }
-    sample_offset = 0U;
-    for (shard_index = 0U; shard_index < options.shard_count; ++shard_index) {
-        size_t shard_samples = 0U;
-        status = niyah_training_samples_from_shard(
-            &shards[shard_index],
-            samples + sample_offset,
-            sample_count - sample_offset,
-            &shard_samples);
+
+    if (options.shard_count > 1U) {
+        status =
+            niyah_dataset_shard_reader_collection_identity_sha256(
+                readers,
+                options.shard_count,
+                dataset_identity);
+
         if (status != NIYAH_OK) {
-            exit_code = fail_status("sample_build", status);
+            exit_code = fail_status(
+                "dataset_identity",
+                status);
             goto cleanup;
         }
-        sample_offset += shard_samples;
     }
-    if (sample_offset != sample_count) {
-        exit_code = fail_status("sample_build", NIYAH_ERR_INVALID_CONFIG);
-        goto cleanup;
-    }
+
+    provider_context.readers = readers;
+    provider_context.sample_offsets = sample_offsets;
+    provider_context.shard_count = options.shard_count;
 
     if (options.mode == NIYAH_TRAIN_MODE_NEW) {
         vocab_size = niyah_tokenizer_vocab_size(tokenizer);
@@ -543,9 +892,12 @@ int main(int argc, char **argv)
             exit_code = fail_status("model_create", status);
             goto cleanup;
         }
-        if (!validate_sample_context(samples, sample_count,
-                                     model.config.context_length)) {
-            exit_code = fail_status("sample_context", NIYAH_ERR_INVALID_CONFIG);
+        if (max_token_count == 0U ||
+            max_token_count >
+                (size_t)model.config.context_length) {
+            exit_code = fail_status(
+                "sample_context",
+                NIYAH_ERR_INVALID_CONFIG);
             goto cleanup;
         }
         status = niyah_model_reset_parameters(&model, options.model_seed);
@@ -553,6 +905,48 @@ int main(int argc, char **argv)
             exit_code = fail_status("model_init", status);
             goto cleanup;
         }
+        status = niyah_adamw_config_validate(&options.optimizer_config);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("optimizer_config", status);
+            goto cleanup;
+        }
+        status = niyah_adamw_state_create(&optimizer_state, &model);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("optimizer_create", status);
+            goto cleanup;
+        }
+        optimizer_config = options.optimizer_config;
+        optimizer_state.warmup_steps = options.warmup_steps;
+        status = niyah_dataset_cursor_init(
+            &cursor, sample_count, options.data_seed);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("cursor_create", status);
+            goto cleanup;
+        }
+        status = niyah_dataset_cursor_bind_identity(
+            &cursor, dataset_identity);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("cursor_bind", status);
+            goto cleanup;
+        }
+    } else if (options.mode == NIYAH_TRAIN_MODE_FINETUNE) {
+        status = niyah_checkpoint_load_with_tokenizer(
+            options.checkpoint_in, tokenizer,
+            &model, &optimizer_state, &optimizer_config);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("checkpoint_load", status);
+            goto cleanup;
+        }
+        if (max_token_count == 0U ||
+            max_token_count >
+                (size_t)model.config.context_length) {
+            exit_code = fail_status(
+                "sample_context",
+                NIYAH_ERR_INVALID_CONFIG);
+            goto cleanup;
+        }
+        niyah_adamw_state_destroy(&optimizer_state);
+        memset(&optimizer_state, 0, sizeof(optimizer_state));
         status = niyah_adamw_config_validate(&options.optimizer_config);
         if (status != NIYAH_OK) {
             exit_code = fail_status("optimizer_config", status);
@@ -603,25 +997,111 @@ int main(int argc, char **argv)
                    NIYAH_DATASET_IDENTITY_SHA256_SIZE) != 0 ||
             memcmp(cursor.checkpoint_identity, checkpoint_identity,
                    NIYAH_DATASET_CHECKPOINT_IDENTITY_SHA256_SIZE) != 0 ||
-            !validate_sample_context(samples, sample_count,
-                                     model.config.context_length)) {
+            max_token_count == 0U ||
+            max_token_count >
+                (size_t)model.config.context_length) {
             exit_code = fail_status("resume_compatibility",
                                     NIYAH_ERR_INVALID_CONFIG);
             goto cleanup;
         }
     }
 
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    if (options.use_cuda) {
+        const size_t max_tokens = max_token_count;
+        size_t cuda_workspace_count = 0U;
+
+        if (niyah_cuda_train_backward_workspace_floats(
+                &model.config,
+                max_tokens,
+                &cuda_workspace_count) != 0) {
+            fprintf(
+                stderr,
+                "cuda_training_stage=workspace_query status=CUDA_ERROR\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+
+        if (niyah_cuda_model_state_create(
+                &cuda_context.model_state,
+                &model) != 0) {
+            fprintf(
+                stderr,
+                "cuda_training_stage=model_create status=CUDA_ERROR\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+        cuda_context.model_ready = 1;
+
+        if (niyah_cuda_train_state_create(
+                &cuda_context.train_state,
+                &model,
+                max_tokens,
+                cuda_workspace_count) != 0) {
+            fprintf(
+                stderr,
+                "cuda_training_stage=train_state_create status=CUDA_ERROR\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+
+        cuda_context.train_ready = 1;
+        cuda_context.optimizer_state =
+            &optimizer_state;
+        cuda_context.synced_optimizer_step =
+            optimizer_state.step;
+    }
+#endif
+
     progress_context.optimizer_state = &optimizer_state;
     progress_context.optimizer_config = &optimizer_config;
     progress_context.cursor = &cursor;
     progress_context.details = options.progress_details;
 
-    status = niyah_training_run_updates_with_progress(
-        &model, samples, sample_count, &cursor,
-        &optimizer_state, &optimizer_config,
-        options.batch_size, options.accumulation_steps,
-        options.updates, print_training_progress,
-        &progress_context, &mean_loss);
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    if (options.use_cuda) {
+        status =
+            niyah_training_run_updates_with_progress_with_provider_and_accumulator(
+                &model,
+                sample_count,
+                max_token_count,
+                train_sample_provider,
+                &provider_context,
+                &cursor,
+                &optimizer_state,
+                &optimizer_config,
+                options.batch_size,
+                options.accumulation_steps,
+                options.updates,
+                cuda_training_backward,
+                &cuda_context,
+                &cuda_gradient_accumulator_ops,
+                print_training_progress,
+                &progress_context,
+                &mean_loss);
+    } else
+#endif
+    {
+        status =
+            niyah_training_run_updates_with_progress_with_provider(
+                &model,
+                sample_count,
+                max_token_count,
+                train_sample_provider,
+                &provider_context,
+                &cursor,
+                &optimizer_state,
+                &optimizer_config,
+                options.batch_size,
+                options.accumulation_steps,
+                options.updates,
+                NULL,
+                NULL,
+                print_training_progress,
+                &progress_context,
+                &mean_loss);
+    }
+
     if (status != NIYAH_OK) {
         exit_code = fail_status("training", status);
         goto cleanup;
@@ -657,7 +1137,11 @@ int main(int argc, char **argv)
     }
 
     printf("mode=%s\n",
-           options.mode == NIYAH_TRAIN_MODE_NEW ? "new" : "resume");
+           options.mode == NIYAH_TRAIN_MODE_NEW ? "new" :
+           options.mode == NIYAH_TRAIN_MODE_FINETUNE ? "finetune" :
+           "resume");
+    printf("backend=%s\n",
+           options.use_cuda ? "cuda" : "cpu");
     printf("shards=%zu\n", options.shard_count);
     printf("samples=%zu\n", sample_count);
     printf("updates=%zu\n", options.updates);
@@ -672,15 +1156,26 @@ int main(int argc, char **argv)
     exit_code = 0;
 
 cleanup:
+#ifdef NIYAH_TRAIN_ENABLE_CUDA
+    if (cuda_context.train_ready)
+        niyah_cuda_train_state_destroy(&cuda_context.train_state);
+    if (cuda_context.model_ready)
+        niyah_cuda_model_state_destroy(&cuda_context.model_state);
+#endif
     niyah_dataset_cursor_destroy(&cursor);
     niyah_adamw_state_destroy(&optimizer_state);
     niyah_model_destroy(&model);
-    free(samples);
-    if (shards != NULL) {
-        for (shard_index = 0U; shard_index < options.shard_count; ++shard_index)
-            niyah_dataset_shard_destroy(&shards[shard_index]);
+
+    if (readers != NULL) {
+        for (shard_index = 0U;
+             shard_index < options.shard_count;
+             ++shard_index)
+            niyah_dataset_shard_reader_close(
+                readers[shard_index]);
     }
-    free(shards);
+
+    free(sample_offsets);
+    free(readers);
     niyah_tokenizer_destroy(tokenizer);
     train_options_destroy(&options);
     return exit_code;

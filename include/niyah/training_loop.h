@@ -18,6 +18,44 @@ typedef struct NiyahTrainingSample {
     size_t loss_start;
 } NiyahTrainingSample;
 
+typedef NiyahStatus (*NiyahTrainingBackwardFn)(
+    const NiyahModel *model,
+    const NiyahTrainingSample *sample,
+    NiyahModelGradients *gradients,
+    float *workspace,
+    size_t workspace_count,
+    float *out_loss,
+    void *user_data);
+
+/* Optional backend-side gradient accumulator.
+ *
+ * The training loop retains ownership of sample ordering, cursor rollback,
+ * loss weighting, and the optimizer update. A backend may keep gradients
+ * off-host until finalize() is invoked once per optimizer update.
+ */
+typedef struct NiyahTrainingGradientAccumulatorOps {
+    NiyahStatus (*begin)(void *user_data);
+    NiyahStatus (*accumulate)(
+        float scale,
+        void *user_data);
+    NiyahStatus (*scale)(
+        float scale,
+        void *user_data);
+    NiyahStatus (*finalize)(
+        NiyahModelGradients *out_gradients,
+        void *user_data);
+} NiyahTrainingGradientAccumulatorOps;
+
+/* Resolve one training sample by global dataset index.
+ *
+ * Providers may reuse backing storage between calls. Pointers returned in
+ * out_sample must remain valid until the provider is invoked again.
+ */
+typedef NiyahStatus (*NiyahTrainingSampleProviderFn)(
+    size_t sample_index,
+    NiyahTrainingSample *out_sample,
+    void *user_data);
+
 /* Build zero-copy training sample descriptors over one loaded dataset shard.
  *
  * Query mode: samples == NULL and sample_capacity == 0 returns the required
@@ -106,6 +144,75 @@ NiyahStatus niyah_training_run_updates_with_progress(
     size_t batch_size,
     size_t accumulation_steps,
     size_t updates,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss);
+
+NiyahStatus niyah_training_run_updates_with_progress_with_backward(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss);
+
+/* Provider-backed update runner for datasets too large to materialize as one
+ * NiyahTrainingSample array.
+ *
+ * max_token_count is the upper bound for every sample returned by provider
+ * and is used to size the backward workspace without scanning the dataset.
+ *
+ * backward_fn == NULL selects the native CPU backward path. A non-NULL
+ * callback may dispatch to another backend such as CUDA.
+ */
+NiyahStatus niyah_training_run_updates_with_progress_with_provider(
+    NiyahModel *model,
+    size_t sample_count,
+    size_t max_token_count,
+    NiyahTrainingSampleProviderFn sample_provider,
+    void *sample_provider_user_data,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss);
+
+/* Provider-backed runner with backend-side gradient accumulation.
+ *
+ * backward_fn produces the backend's current sample gradient.
+ * gradient_accumulator performs accumulation and finalization.
+ * CPU/public legacy runners retain their existing host path.
+ */
+NiyahStatus
+niyah_training_run_updates_with_progress_with_provider_and_accumulator(
+    NiyahModel *model,
+    size_t sample_count,
+    size_t max_token_count,
+    NiyahTrainingSampleProviderFn sample_provider,
+    void *sample_provider_user_data,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    const NiyahTrainingGradientAccumulatorOps *gradient_accumulator,
     NiyahTrainingProgressFn progress_fn,
     void *progress_user_data,
     float *out_mean_loss);

@@ -721,6 +721,112 @@ cleanup:
     (void)remove(v1_path);
 }
 
+
+static void test_legacy_v2_68_byte_header_load(void)
+{
+    static const uint8_t corpus[] =
+        "legacy checkpoint compatibility tokenizer corpus";
+    const char *current_path = "niyah_checkpoint_current_v2_72.bin";
+    const char *legacy_path = "niyah_checkpoint_legacy_v2_68.bin";
+
+    NiyahTokenizerTrainConfig tc;
+    NiyahTokenizer *tokenizer = NULL;
+    NiyahModelConfig mc;
+    NiyahModel model;
+    NiyahAdamWState state;
+    NiyahAdamWConfig config;
+    NiyahModel loaded;
+    NiyahAdamWState loaded_state;
+    NiyahAdamWConfig loaded_config;
+    unsigned char *current = NULL;
+    unsigned char *legacy = NULL;
+    size_t current_size = 0U;
+    size_t legacy_size = 0U;
+    size_t bytes = 0U;
+    NiyahStatus status;
+
+    memset(&model, 0, sizeof(model));
+    memset(&state, 0, sizeof(state));
+    memset(&loaded, 0, sizeof(loaded));
+    memset(&loaded_state, 0, sizeof(loaded_state));
+    memset(&loaded_config, 0, sizeof(loaded_config));
+
+    tc.target_vocab_size = 260U;
+    tc.min_pair_frequency = 1U;
+
+    CHECK(niyah_tokenizer_train(
+              corpus, sizeof(corpus) - 1U,
+              &tc, &tokenizer) == NIYAH_OK);
+    if (tokenizer == NULL) goto cleanup;
+
+    mc = test_model_config(1);
+    mc.vocab_size = (uint32_t)niyah_tokenizer_vocab_size(tokenizer);
+    mc.n_segments = 0U;
+    config = test_optimizer_config();
+
+    CHECK(niyah_model_create(&model, &mc) == NIYAH_OK);
+    if (model.weights == NULL) goto cleanup;
+
+    CHECK(niyah_model_reset_parameters(
+              &model, UINT64_C(680072)) == NIYAH_OK);
+    CHECK(niyah_adamw_state_create(&state, &model) == NIYAH_OK);
+    if (state.m == NULL || state.v == NULL) goto cleanup;
+
+    CHECK(niyah_checkpoint_save_with_tokenizer(
+              current_path, &model, &state, &config,
+              tokenizer) == NIYAH_OK);
+
+    current = read_bytes(current_path, &current_size);
+    CHECK(current != NULL);
+    if (current == NULL) goto cleanup;
+
+    CHECK(current_size > 80U);
+    CHECK(load_u32_le(current + 8U) == UINT32_C(2));
+    CHECK(load_u32_le(current + 60U) == UINT32_C(0));
+
+    /*
+     * Reconstruct the historical pre-d3b5350 V2 header:
+     * remove the n_segments u32 at offset 60, shifting the old
+     * weight_count and every following byte four bytes earlier.
+     */
+    legacy_size = current_size - 4U;
+    legacy = (unsigned char *)malloc(legacy_size);
+    CHECK(legacy != NULL);
+    if (legacy == NULL) goto cleanup;
+
+    memcpy(legacy, current, 60U);
+    memcpy(legacy + 60U, current + 64U, current_size - 64U);
+
+    rewrite_crc(legacy, legacy_size, legacy_size - 8U);
+    CHECK(write_bytes(legacy_path, legacy, legacy_size));
+
+    status = niyah_checkpoint_load_with_tokenizer(
+        legacy_path, tokenizer,
+        &loaded, &loaded_state, &loaded_config);
+
+    CHECK(status == NIYAH_OK);
+    if (status == NIYAH_OK) {
+        bytes = model.weight_count * sizeof(float);
+        CHECK(loaded.config.n_segments == 0U);
+        CHECK(config_equal(&model.config, &loaded.config));
+        CHECK(model.weight_count == loaded.weight_count);
+        CHECK(memcmp(model.weights, loaded.weights, bytes) == 0);
+        CHECK(memcmp(state.m, loaded_state.m, bytes) == 0);
+        CHECK(memcmp(state.v, loaded_state.v, bytes) == 0);
+        CHECK(optimizer_config_equal(&config, &loaded_config));
+    }
+
+cleanup:
+    free(legacy);
+    free(current);
+    destroy_loaded(&loaded, &loaded_state);
+    niyah_adamw_state_destroy(&state);
+    niyah_model_destroy(&model);
+    niyah_tokenizer_destroy(tokenizer);
+    (void)remove(current_path);
+    (void)remove(legacy_path);
+}
+
 int main(void)
 {
     test_locate_sections_rejects_short_buffer();
@@ -729,6 +835,7 @@ int main(void)
     roundtrip_case(0, "niyah_checkpoint_untied.bin");
     test_resume_equivalence();
     test_tokenizer_identity_binding();
+    test_legacy_v2_68_byte_header_load();
     test_format_and_malformed();
     test_save_preflight_no_truncate();
 

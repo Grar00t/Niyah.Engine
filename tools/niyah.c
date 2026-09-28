@@ -63,6 +63,8 @@ typedef struct NiyahRunOptions {
     const char *tokenizer_path;
     const char *checkpoint_path;
     const char *prompt;
+    const char *prompt_prefix;
+    const char *prompt_suffix;
     size_t max_new_tokens;
     float temperature;
     uint64_t seed;
@@ -90,6 +92,7 @@ static void usage(FILE *stream)
         "\n"
         "  niyah run --tokenizer TOK --checkpoint CKPT --prompt TEXT\n"
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
+        "      [--prompt-prefix TEXT] [--prompt-suffix TEXT]\n"
         "      [--backend cpu|cuda]\n");
 }
 
@@ -1585,6 +1588,14 @@ static int parse_run_options(
             value = next_value(argc, argv, &i);
             if (value == NULL) return 0;
             options->prompt = value;
+        } else if (strcmp(key, "--prompt-prefix") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->prompt_prefix = value;
+        } else if (strcmp(key, "--prompt-suffix") == 0) {
+            value = next_value(argc, argv, &i);
+            if (value == NULL) return 0;
+            options->prompt_suffix = value;
         } else if (strcmp(key, "--max-new-tokens") == 0) {
             value = next_value(argc, argv, &i);
             if (value == NULL ||
@@ -1648,6 +1659,7 @@ static int run_command(int argc, char **argv)
     float *cuda_logits = NULL;
 #endif
     uint8_t *decoded = NULL;
+    char *runtime_prompt = NULL;
     size_t prompt_count = 0U;
     size_t encoded_prompt_count = 0U;
     size_t workspace_count = 0U;
@@ -1703,10 +1715,54 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
+    {
+        const char *prefix =
+            options.prompt_prefix != NULL ? options.prompt_prefix : "";
+        const char *suffix =
+            options.prompt_suffix != NULL ? options.prompt_suffix : "";
+        const size_t prefix_size = strlen(prefix);
+        const size_t prompt_size = strlen(options.prompt);
+        const size_t suffix_size = strlen(suffix);
+        size_t runtime_prompt_size;
+
+        if (prefix_size > SIZE_MAX - prompt_size ||
+            prefix_size + prompt_size > SIZE_MAX - suffix_size ||
+            prefix_size + prompt_size + suffix_size == SIZE_MAX) {
+            exit_code = fail_status(
+                "prompt_format",
+                NIYAH_ERR_OVERFLOW);
+            goto cleanup;
+        }
+
+        runtime_prompt_size =
+            prefix_size + prompt_size + suffix_size;
+        if (runtime_prompt_size == 0U) {
+            exit_code = fail_status(
+                "prompt_format",
+                NIYAH_ERR_INVALID_ARGUMENT);
+            goto cleanup;
+        }
+
+        runtime_prompt = (char *)malloc(runtime_prompt_size + 1U);
+        if (runtime_prompt == NULL) {
+            exit_code = fail_status(
+                "prompt_format",
+                NIYAH_ERR_OUT_OF_MEMORY);
+            goto cleanup;
+        }
+
+        memcpy(runtime_prompt, prefix, prefix_size);
+        memcpy(runtime_prompt + prefix_size,
+               options.prompt, prompt_size);
+        memcpy(runtime_prompt + prefix_size + prompt_size,
+               suffix, suffix_size);
+        runtime_prompt[runtime_prompt_size] = '\0';
+    }
+
     status = niyah_tokenizer_encode(
         tokenizer,
-        (const uint8_t *)options.prompt,
-        strlen(options.prompt),
+        (const uint8_t *)runtime_prompt,
+        strlen(runtime_prompt),
         NULL,
         0U,
         &encoded_prompt_count);
@@ -1748,8 +1804,8 @@ static int run_command(int argc, char **argv)
 
     status = niyah_tokenizer_encode(
         tokenizer,
-        (const uint8_t *)options.prompt,
-        strlen(options.prompt),
+        (const uint8_t *)runtime_prompt,
+        strlen(runtime_prompt),
         prompt_tokens + 1U,
         encoded_prompt_count,
         &encoded_prompt_count);
@@ -1955,6 +2011,7 @@ cleanup:
     free(workspace);
     free(generated_tokens);
     free(prompt_tokens);
+    free(runtime_prompt);
     niyah_kv_cache_destroy(&cache);
     niyah_model_destroy(&model);
     niyah_tokenizer_destroy(tokenizer);

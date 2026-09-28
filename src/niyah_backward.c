@@ -419,14 +419,28 @@ static void niyah_linear_backward_accum(const float *weight,
     size_t r;
     size_t c;
 
+#ifdef NIYAH_ENABLE_OPENMP
+#pragma omp parallel for schedule(static) if(rows >= 64U && cols >= 64U)
+#endif
     for (r = 0U; r < rows; ++r) {
         const float dyr = dy[r];
-        const float *wr = weight + r * cols;
         float *dwr = dweight + r * cols;
-        for (c = 0U; c < cols; ++c) {
-            dwr[c] += dyr * x[c];
-            dx[c] += wr[c] * dyr;
+        size_t inner_c;
+        for (inner_c = 0U; inner_c < cols; ++inner_c) {
+            dwr[inner_c] += dyr * x[inner_c];
         }
+    }
+
+#ifdef NIYAH_ENABLE_OPENMP
+#pragma omp parallel for schedule(static) if(rows >= 64U && cols >= 64U)
+#endif
+    for (c = 0U; c < cols; ++c) {
+        float value = dx[c];
+        size_t inner_r;
+        for (inner_r = 0U; inner_r < rows; ++inner_r) {
+            value += weight[inner_r * cols + c] * dy[inner_r];
+        }
+        dx[c] = value;
     }
 }
 

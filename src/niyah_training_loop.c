@@ -42,16 +42,54 @@ NiyahStatus niyah_training_samples_from_shard(
     samples[0U].token_count = token_count;
     samples[0U].loss_start = loss_start;
 
-    for (i = 1U; i < shard->sample_count; ++i) {
-        status = niyah_dataset_shard_sample_with_loss(
-            shard, i, &tokens, &targets,
-            &token_count, &loss_start);
-        if (status != NIYAH_OK)
-            return status;
-        samples[i].tokens = tokens;
-        samples[i].targets = targets;
-        samples[i].token_count = token_count;
-        samples[i].loss_start = loss_start;
+    if (shard->has_explicit_samples != 0) {
+        /*
+         * Sample 0 above already validated the complete explicit
+         * geometry through niyah_dataset_shard_sample_with_loss().
+         * Do not repeat the O(sample_count) geometry validation for
+         * every descriptor.
+         */
+        for (i = 1U;
+             i < shard->sample_count;
+             ++i) {
+            const size_t start =
+                shard->sample_offsets[i];
+
+            samples[i].tokens =
+                shard->tokens + start;
+            samples[i].targets =
+                shard->tokens + start + 1U;
+            samples[i].token_count =
+                shard->sample_lengths[i];
+            samples[i].loss_start =
+                shard->has_loss_starts != 0
+                    ? shard->sample_loss_starts[i]
+                    : 0U;
+        }
+    } else {
+        for (i = 1U;
+             i < shard->sample_count;
+             ++i) {
+            status =
+                niyah_dataset_shard_sample_with_loss(
+                    shard,
+                    i,
+                    &tokens,
+                    &targets,
+                    &token_count,
+                    &loss_start);
+            if (status != NIYAH_OK)
+                return status;
+
+            samples[i].tokens =
+                tokens;
+            samples[i].targets =
+                targets;
+            samples[i].token_count =
+                token_count;
+            samples[i].loss_start =
+                loss_start;
+        }
     }
 
     return NIYAH_OK;
@@ -83,6 +121,84 @@ static NiyahStatus validate_samples(const NiyahModel *model,
             return NIYAH_ERR_INVALID_CONFIG;
     }
 
+    return NIYAH_OK;
+}
+
+static NiyahStatus validate_training_sample(
+    const NiyahModel *model,
+    const NiyahTrainingSample *sample)
+{
+    if (model == NULL || sample == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (sample->tokens == NULL ||
+        sample->targets == NULL ||
+        sample->token_count == 0U)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (sample->token_count >
+            model->config.context_length ||
+        sample->loss_start >= sample->token_count)
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    return NIYAH_OK;
+}
+
+static NiyahStatus validate_training_source(
+    const NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    const NiyahDatasetCursor *cursor,
+    NiyahTrainingSampleProviderFn sample_provider)
+{
+    if (sample_provider == NULL)
+        return validate_samples(
+            model, samples, sample_count, cursor);
+
+    if (model == NULL || cursor == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (samples != NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (sample_count == 0U ||
+        cursor->sample_count != sample_count ||
+        cursor->order == NULL)
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    return NIYAH_OK;
+}
+
+static NiyahStatus resolve_training_sample(
+    const NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    size_t sample_index,
+    NiyahTrainingSampleProviderFn sample_provider,
+    void *sample_provider_user_data,
+    NiyahTrainingSample *out_sample)
+{
+    NiyahStatus status;
+
+    if (out_sample == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    if (sample_index >= sample_count)
+        return NIYAH_ERR_INVALID_CONFIG;
+
+    if (sample_provider != NULL) {
+        status = sample_provider(
+            sample_index,
+            out_sample,
+            sample_provider_user_data);
+        if (status != NIYAH_OK)
+            return status;
+
+        return validate_training_sample(
+            model, out_sample);
+    }
+
+    *out_sample = samples[sample_index];
     return NIYAH_OK;
 }
 
@@ -279,7 +395,7 @@ static NiyahStatus gradients_scale(NiyahModelGradients *gradients,
     return NIYAH_OK;
 }
 
-NiyahStatus niyah_training_accumulated_step(
+static NiyahStatus niyah_training_accumulated_step_impl(
     NiyahModel *model,
     const NiyahTrainingSample *samples,
     size_t sample_count,
@@ -293,12 +409,21 @@ NiyahStatus niyah_training_accumulated_step(
     size_t batch_size,
     size_t accumulation_steps,
     size_t *out_samples_consumed,
-    float *out_mean_loss)
+    float *out_mean_loss,
+    size_t max_token_count,
+    NiyahTrainingSampleProviderFn sample_provider,
+    void *sample_provider_user_data,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    const NiyahTrainingGradientAccumulatorOps *gradient_accumulator)
 {
     uint64_t old_epoch;
     size_t old_position;
     size_t total_samples;
     size_t consumed;
+    size_t total_supervised_targets = 0U;
+    size_t common_supervised_targets = 0U;
+    int token_weighting_active = 0;
     double loss_sum = 0.0;
     NiyahStatus status;
 
@@ -308,8 +433,10 @@ NiyahStatus niyah_training_accumulated_step(
         out_mean_loss == NULL)
         return NIYAH_ERR_INVALID_ARGUMENT;
 
-    status = validate_samples(model, samples, sample_count, cursor);
-    if (status != NIYAH_OK) return status;
+    status = validate_training_source(
+        model, samples, sample_count, cursor, sample_provider);
+    if (status != NIYAH_OK)
+        return status;
 
     if (batch_size == 0U || accumulation_steps == 0U)
         return NIYAH_ERR_INVALID_CONFIG;
@@ -323,13 +450,31 @@ NiyahStatus niyah_training_accumulated_step(
         accumulated_gradients->count != model->weight_count)
         return NIYAH_ERR_INVALID_ARGUMENT;
 
+    if (gradient_accumulator != NULL &&
+        (backward_fn == NULL ||
+         gradient_accumulator->begin == NULL ||
+         gradient_accumulator->accumulate == NULL ||
+         gradient_accumulator->scale == NULL ||
+         gradient_accumulator->finalize == NULL))
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
     old_epoch = cursor->epoch;
     old_position = cursor->position;
     niyah_model_gradients_zero(accumulated_gradients);
 
+    if (gradient_accumulator != NULL) {
+        status = gradient_accumulator->begin(
+            backward_user_data);
+        if (status != NIYAH_OK)
+            return rollback_cursor(
+                cursor, old_epoch, old_position, status);
+    }
+
     for (consumed = 0U; consumed < total_samples; ++consumed) {
         size_t sample_index;
+        NiyahTrainingSample sample;
         float loss;
+        float sample_gradient_scale = 1.0f;
 
         status = niyah_dataset_cursor_next(cursor, &sample_index);
         if (status != NIYAH_OK)
@@ -338,41 +483,177 @@ NiyahStatus niyah_training_accumulated_step(
             return rollback_cursor(
                 cursor, old_epoch, old_position, NIYAH_ERR_INVALID_CONFIG);
 
-        status = niyah_train_backward_masked(
+        status = resolve_training_sample(
             model,
-            samples[sample_index].tokens,
-            samples[sample_index].targets,
-            samples[sample_index].token_count,
-            samples[sample_index].loss_start,
-            &loss,
-            sample_gradients,
-            workspace,
-            workspace_count);
+            samples,
+            sample_count,
+            sample_index,
+            sample_provider,
+            sample_provider_user_data,
+            &sample);
         if (status != NIYAH_OK)
-            return rollback_cursor(cursor, old_epoch, old_position, status);
-
-        status = gradients_accumulate(
-            accumulated_gradients, sample_gradients);
-        if (status != NIYAH_OK)
-            return rollback_cursor(cursor, old_epoch, old_position, status);
-
-        loss_sum += (double)loss;
-        if (!isfinite(loss_sum))
             return rollback_cursor(
-                cursor, old_epoch, old_position, NIYAH_ERR_OVERFLOW);
+                cursor, old_epoch, old_position, status);
+
+        if (sample_provider != NULL &&
+            sample.token_count > max_token_count)
+            return rollback_cursor(
+                cursor, old_epoch, old_position,
+                NIYAH_ERR_INVALID_CONFIG);
+
+        if (backward_fn != NULL) {
+            status = backward_fn(
+                model,
+                &sample,
+                sample_gradients,
+                workspace,
+                workspace_count,
+                &loss,
+                backward_user_data);
+        } else {
+            status = niyah_train_backward_masked(
+                model,
+                sample.tokens,
+                sample.targets,
+                sample.token_count,
+                sample.loss_start,
+                &loss,
+                sample_gradients,
+                workspace,
+                workspace_count);
+        }
+        if (status != NIYAH_OK)
+            return rollback_cursor(cursor, old_epoch, old_position, status);
+
+        {
+            const size_t supervised_count =
+                sample.token_count -
+                sample.loss_start;
+
+            if (supervised_count >
+                    SIZE_MAX - total_supervised_targets)
+                return rollback_cursor(
+                    cursor, old_epoch, old_position,
+                    NIYAH_ERR_OVERFLOW);
+
+            total_supervised_targets += supervised_count;
+
+            /*
+             * Preserve the historical byte-identical averaging path while
+             * every sample has the same supervised length. If a different
+             * length appears, convert the already accumulated equal-length
+             * means into token sums exactly once, then continue token
+             * weighted for the remainder of this optimizer update.
+             */
+            if (consumed == 0U) {
+                common_supervised_targets = supervised_count;
+            } else if (!token_weighting_active &&
+                       supervised_count != common_supervised_targets) {
+                if (gradient_accumulator != NULL) {
+                    status = gradient_accumulator->scale(
+                        (float)common_supervised_targets,
+                        backward_user_data);
+                } else {
+                    status = gradients_scale(
+                        accumulated_gradients,
+                        (float)common_supervised_targets);
+                }
+                if (status != NIYAH_OK)
+                    return rollback_cursor(
+                        cursor, old_epoch, old_position, status);
+
+                loss_sum *= (double)common_supervised_targets;
+                if (!isfinite(loss_sum))
+                    return rollback_cursor(
+                        cursor, old_epoch, old_position,
+                        NIYAH_ERR_OVERFLOW);
+
+                token_weighting_active = 1;
+            }
+
+            if (token_weighting_active) {
+                sample_gradient_scale =
+                    (float)supervised_count;
+
+                if (gradient_accumulator == NULL) {
+                    status = gradients_scale(
+                        sample_gradients,
+                        sample_gradient_scale);
+                    if (status != NIYAH_OK)
+                        return rollback_cursor(
+                            cursor,
+                            old_epoch,
+                            old_position,
+                            status);
+                }
+
+                loss_sum +=
+                    (double)loss * (double)supervised_count;
+            } else {
+                loss_sum += (double)loss;
+            }
+
+            if (!isfinite(loss_sum))
+                return rollback_cursor(
+                    cursor, old_epoch, old_position,
+                    NIYAH_ERR_OVERFLOW);
+        }
+
+        if (gradient_accumulator != NULL) {
+            status = gradient_accumulator->accumulate(
+                sample_gradient_scale,
+                backward_user_data);
+        } else {
+            status = gradients_accumulate(
+                accumulated_gradients,
+                sample_gradients);
+        }
+
+        if (status != NIYAH_OK)
+            return rollback_cursor(
+                cursor, old_epoch, old_position, status);
     }
 
-    status = gradients_scale(
-        accumulated_gradients, 1.0f / (float)total_samples);
+    if (total_supervised_targets == 0U)
+        return rollback_cursor(
+            cursor, old_epoch, old_position,
+            NIYAH_ERR_INVALID_CONFIG);
+
+    {
+        const float final_gradient_scale =
+            token_weighting_active
+                ? 1.0f / (float)total_supervised_targets
+                : 1.0f / (float)total_samples;
+
+        if (gradient_accumulator != NULL) {
+            status = gradient_accumulator->scale(
+                final_gradient_scale,
+                backward_user_data);
+
+            if (status == NIYAH_OK) {
+                status = gradient_accumulator->finalize(
+                    accumulated_gradients,
+                    backward_user_data);
+            }
+        } else {
+            status = gradients_scale(
+                accumulated_gradients,
+                final_gradient_scale);
+        }
+    }
+
     if (status != NIYAH_OK)
-        return rollback_cursor(cursor, old_epoch, old_position, status);
+        return rollback_cursor(
+            cursor, old_epoch, old_position, status);
 
     status = niyah_adamw_step(
         model, accumulated_gradients, optimizer_state, optimizer_config);
     if (status != NIYAH_OK)
         return rollback_cursor(cursor, old_epoch, old_position, status);
 
-    loss_sum /= (double)total_samples;
+    loss_sum /= token_weighting_active
+        ? (double)total_supervised_targets
+        : (double)total_samples;
     if (!isfinite(loss_sum) || loss_sum > (double)FLT_MAX)
         return NIYAH_ERR_OVERFLOW;
 
@@ -381,7 +662,7 @@ NiyahStatus niyah_training_accumulated_step(
     return NIYAH_OK;
 }
 
-NiyahStatus niyah_training_run_updates_with_progress(
+static NiyahStatus niyah_training_run_updates_with_progress_impl(
     NiyahModel *model,
     const NiyahTrainingSample *samples,
     size_t sample_count,
@@ -391,9 +672,15 @@ NiyahStatus niyah_training_run_updates_with_progress(
     size_t batch_size,
     size_t accumulation_steps,
     size_t updates,
+    size_t max_token_count,
+    NiyahTrainingSampleProviderFn sample_provider,
+    void *sample_provider_user_data,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
     NiyahTrainingProgressFn progress_fn,
     void *progress_user_data,
-    float *out_mean_loss)
+    float *out_mean_loss,
+    const NiyahTrainingGradientAccumulatorOps *gradient_accumulator)
 {
     NiyahModelGradients sample_gradients;
     NiyahModelGradients accumulated_gradients;
@@ -413,14 +700,34 @@ NiyahStatus niyah_training_run_updates_with_progress(
     if (batch_size > SIZE_MAX / accumulation_steps)
         return NIYAH_ERR_OVERFLOW;
 
-    status = validate_samples(model, samples, sample_count, cursor);
-    if (status != NIYAH_OK) return status;
+    status = validate_training_source(
+        model, samples, sample_count, cursor, sample_provider);
+    if (status != NIYAH_OK)
+        return status;
 
-    for (i = 0U; i < sample_count; ++i) {
+    if (sample_provider != NULL) {
+        if (max_token_count == 0U ||
+            max_token_count > model->config.context_length)
+            return NIYAH_ERR_INVALID_CONFIG;
+
         status = niyah_train_backward_workspace_floats(
-            &model->config, samples[i].token_count, &required);
-        if (status != NIYAH_OK) return status;
-        if (required > workspace_count) workspace_count = required;
+            &model->config,
+            max_token_count,
+            &workspace_count);
+        if (status != NIYAH_OK)
+            return status;
+    } else {
+        for (i = 0U; i < sample_count; ++i) {
+            status = niyah_train_backward_workspace_floats(
+                &model->config,
+                samples[i].token_count,
+                &required);
+            if (status != NIYAH_OK)
+                return status;
+
+            if (required > workspace_count)
+                workspace_count = required;
+        }
     }
 
     sample_gradients.values = NULL;
@@ -454,13 +761,18 @@ NiyahStatus niyah_training_run_updates_with_progress(
         size_t consumed = 0U;
         float mean_loss = 0.0f;
 
-        status = niyah_training_accumulated_step(
+        status = niyah_training_accumulated_step_impl(
             model, samples, sample_count, cursor,
             &sample_gradients, &accumulated_gradients,
             workspace, workspace_count,
             optimizer_state, optimizer_config,
             batch_size, accumulation_steps,
-            &consumed, &mean_loss);
+            &consumed, &mean_loss,
+            max_token_count,
+            sample_provider,
+            sample_provider_user_data,
+            backward_fn, backward_user_data,
+        gradient_accumulator);
         if (status != NIYAH_OK) {
             free(workspace);
             niyah_model_gradients_destroy(&accumulated_gradients);
@@ -517,4 +829,206 @@ NiyahStatus niyah_training_run_updates(
         optimizer_state, optimizer_config,
         batch_size, accumulation_steps, updates,
         NULL, NULL, out_mean_loss);
+}
+
+NiyahStatus niyah_training_accumulated_step(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahModelGradients *sample_gradients,
+    NiyahModelGradients *accumulated_gradients,
+    float *workspace,
+    size_t workspace_count,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t *out_samples_consumed,
+    float *out_mean_loss)
+{
+    return niyah_training_accumulated_step_impl(
+        model,
+        samples,
+        sample_count,
+        cursor,
+        sample_gradients,
+        accumulated_gradients,
+        workspace,
+        workspace_count,
+        optimizer_state,
+        optimizer_config,
+        batch_size,
+        accumulation_steps,
+        out_samples_consumed,
+        out_mean_loss,
+        0U,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL);
+}
+
+NiyahStatus niyah_training_run_updates_with_progress(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss)
+{
+    return niyah_training_run_updates_with_progress_impl(
+        model,
+        samples,
+        sample_count,
+        cursor,
+        optimizer_state,
+        optimizer_config,
+        batch_size,
+        accumulation_steps,
+        updates,
+        0U,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        progress_fn,
+        progress_user_data,
+        out_mean_loss,
+        NULL);
+}
+
+NiyahStatus niyah_training_run_updates_with_progress_with_backward(
+    NiyahModel *model,
+    const NiyahTrainingSample *samples,
+    size_t sample_count,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss)
+{
+    if (backward_fn == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    return niyah_training_run_updates_with_progress_impl(
+        model,
+        samples,
+        sample_count,
+        cursor,
+        optimizer_state,
+        optimizer_config,
+        batch_size,
+        accumulation_steps,
+        updates,
+        0U,
+        NULL,
+        NULL,
+        backward_fn,
+        backward_user_data,
+        progress_fn,
+        progress_user_data,
+        out_mean_loss,
+        NULL);
+}
+
+NiyahStatus niyah_training_run_updates_with_progress_with_provider(
+    NiyahModel *model,
+    size_t sample_count,
+    size_t max_token_count,
+    NiyahTrainingSampleProviderFn sample_provider,
+    void *sample_provider_user_data,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss)
+{
+    if (sample_provider == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    return niyah_training_run_updates_with_progress_impl(
+        model,
+        NULL,
+        sample_count,
+        cursor,
+        optimizer_state,
+        optimizer_config,
+        batch_size,
+        accumulation_steps,
+        updates,
+        max_token_count,
+        sample_provider,
+        sample_provider_user_data,
+        backward_fn,
+        backward_user_data,
+        progress_fn,
+        progress_user_data,
+        out_mean_loss,
+        NULL);
+}
+
+NiyahStatus
+niyah_training_run_updates_with_progress_with_provider_and_accumulator(
+    NiyahModel *model,
+    size_t sample_count,
+    size_t max_token_count,
+    NiyahTrainingSampleProviderFn sample_provider,
+    void *sample_provider_user_data,
+    NiyahDatasetCursor *cursor,
+    NiyahAdamWState *optimizer_state,
+    const NiyahAdamWConfig *optimizer_config,
+    size_t batch_size,
+    size_t accumulation_steps,
+    size_t updates,
+    NiyahTrainingBackwardFn backward_fn,
+    void *backward_user_data,
+    const NiyahTrainingGradientAccumulatorOps *gradient_accumulator,
+    NiyahTrainingProgressFn progress_fn,
+    void *progress_user_data,
+    float *out_mean_loss)
+{
+    if (sample_provider == NULL ||
+        backward_fn == NULL ||
+        gradient_accumulator == NULL)
+        return NIYAH_ERR_INVALID_ARGUMENT;
+
+    return niyah_training_run_updates_with_progress_impl(
+        model,
+        NULL,
+        sample_count,
+        cursor,
+        optimizer_state,
+        optimizer_config,
+        batch_size,
+        accumulation_steps,
+        updates,
+        max_token_count,
+        sample_provider,
+        sample_provider_user_data,
+        backward_fn,
+        backward_user_data,
+        progress_fn,
+        progress_user_data,
+        out_mean_loss,
+        gradient_accumulator);
 }

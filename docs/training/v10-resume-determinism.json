@@ -1,0 +1,38 @@
+{
+  "schema": "niyah.training.resume_determinism.v1",
+  "status": "PASS",
+  "backend": "cuda",
+  "runs": 2,
+  "updates_per_run": 2,
+  "start_optimizer_step": 100,
+  "end_optimizer_step": 102,
+  "start_cursor_position": 400,
+  "end_cursor_position": 408,
+  "input": {
+    "checkpoint_sha256": "4127fbdef90b5aa36ad1098e3439c8dd4ef2e779bec21e783ac4506fb2679a90",
+    "cursor_sha256": "43de8ce5fa076104adf84c83f8b3777e0087c86cbb2761f527fb29777241668f",
+    "tokenizer_sha256": "d47a69a1ec180f577aeebe3905d6aed22d4b8ea3408b66fe4b8571fccc2fa841",
+    "shards": 33,
+    "training_binary_sha256": "614d46d5de3c9e2672eda5bc25d55e652a6ee31ec136d763369728af5042ae7a"
+  },
+  "loss": {
+    "update_101": 8.40049553,
+    "update_102": 8.38345718,
+    "mean": 8.39197636,
+    "trace_identical": true
+  },
+  "output": {
+    "checkpoint_sha256": "21b7eb01693b97ab6f94936088f42ef1fac14c78a1e4f0bac415d6a9bb337328",
+    "cursor_sha256": "70a372640fb2c82da8256dc103e4de83fb7e41090f5ef1dce01bcdee71bcd021",
+    "checkpoint_byte_identical": true,
+    "cursor_byte_identical": true
+  },
+  "immutability": {
+    "input_checkpoint_changed": false,
+    "input_cursor_changed": false,
+    "tokenizer_changed": false,
+    "shards_changed": false,
+    "source_code_changed": false
+  },
+  "canonical_training_parent": "model-0100.ckpt"
+}

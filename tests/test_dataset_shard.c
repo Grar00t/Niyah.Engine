@@ -530,6 +530,7 @@ static void test_supervised_v3(void)
     NiyahTokenizer *tokenizer = NULL;
     NiyahDatasetShard shard;
     NiyahDatasetShard loaded;
+    NiyahDatasetShardReader *reader = NULL;
     NiyahTrainingSample samples[2];
     const uint32_t *tokens = NULL;
     const uint32_t *targets = NULL;
@@ -540,6 +541,12 @@ static void test_supervised_v3(void)
     size_t byte_count = 0U;
     uint8_t id_a[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
     uint8_t id_b[NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t reader_id[
+        NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t reader_tokenizer_id[
+        NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE];
+    size_t reader_samples = 0U;
+    size_t reader_sequence = 0U;
 
     memset(&shard, 0, sizeof(shard));
     memset(&loaded, 0, sizeof(loaded));
@@ -666,7 +673,97 @@ static void test_supervised_v3(void)
               id_b,
               sizeof(id_a)) == 0);
 
+    CHECK(niyah_dataset_shard_reader_open(
+              path,
+              tokenizer,
+              &reader) == NIYAH_OK);
+
+    CHECK(reader != NULL);
+
+    if (reader != NULL) {
+        size_t i;
+
+        CHECK(niyah_dataset_shard_reader_info(
+                  reader,
+                  &reader_samples,
+                  &reader_sequence,
+                  reader_tokenizer_id,
+                  reader_id) == NIYAH_OK);
+
+        CHECK(reader_samples ==
+              loaded.sample_count);
+
+        CHECK(reader_sequence ==
+              loaded.sequence_length);
+
+        CHECK(memcmp(
+                  reader_tokenizer_id,
+                  loaded.tokenizer_identity,
+                  sizeof(reader_tokenizer_id)) == 0);
+
+        CHECK(memcmp(
+                  reader_id,
+                  id_b,
+                  sizeof(reader_id)) == 0);
+
+        for (i = 0U;
+             i < loaded.sample_count;
+             ++i) {
+            const uint32_t *eager_tokens = NULL;
+            const uint32_t *eager_targets = NULL;
+            const uint32_t *reader_tokens = NULL;
+            const uint32_t *reader_targets = NULL;
+
+            size_t eager_count = 0U;
+            size_t eager_loss_start = 0U;
+            size_t reader_count = 0U;
+            size_t reader_loss_start = 0U;
+
+            CHECK(
+                niyah_dataset_shard_sample_with_loss(
+                    &loaded,
+                    i,
+                    &eager_tokens,
+                    &eager_targets,
+                    &eager_count,
+                    &eager_loss_start) == NIYAH_OK);
+
+            CHECK(
+                niyah_dataset_shard_reader_sample_with_loss(
+                    reader,
+                    i,
+                    &reader_tokens,
+                    &reader_targets,
+                    &reader_count,
+                    &reader_loss_start) == NIYAH_OK);
+
+            CHECK(reader_count ==
+                  eager_count);
+
+            CHECK(reader_loss_start ==
+                  eager_loss_start);
+
+            if (reader_count ==
+                    eager_count &&
+                reader_tokens != NULL &&
+                eager_tokens != NULL) {
+                CHECK(memcmp(
+                          reader_tokens,
+                          eager_tokens,
+                          reader_count *
+                              sizeof(uint32_t)) == 0);
+
+                CHECK(memcmp(
+                          reader_targets,
+                          eager_targets,
+                          reader_count *
+                              sizeof(uint32_t)) == 0);
+            }
+        }
+    }
+
 done:
+    niyah_dataset_shard_reader_close(reader);
     free(bytes);
     niyah_dataset_shard_destroy(&loaded);
     niyah_dataset_shard_destroy(&shard);
@@ -699,11 +796,451 @@ static void test_invalid_inputs(void)
     niyah_tokenizer_destroy(tokenizer);
 }
 
+
+
+static void test_streaming_reader_v1(void)
+{
+    static const uint8_t corpus[] =
+        "streaming v1 reader tokenizer corpus";
+    static const uint8_t text[] =
+        "v1 bounded reader parity sample text";
+
+    const char *path =
+        "niyah-dataset-reader-v1-test.srd";
+
+    NiyahTokenizer *tokenizer = NULL;
+    NiyahDatasetShard shard;
+    NiyahDatasetShard eager;
+    NiyahDatasetShardReader *reader = NULL;
+
+    uint8_t eager_identity[
+        NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t reader_identity[
+        NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t reader_tokenizer_identity[
+        NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE];
+
+    size_t reader_samples = 0U;
+    size_t reader_sequence = 0U;
+    size_t i;
+
+    memset(&shard, 0, sizeof(shard));
+    memset(&eager, 0, sizeof(eager));
+
+    tokenizer =
+        make_tokenizer(
+            corpus,
+            sizeof(corpus) - 1U);
+
+    CHECK(tokenizer != NULL);
+    if (tokenizer == NULL)
+        goto done;
+
+    CHECK(niyah_dataset_shard_build_text(
+              tokenizer,
+              text,
+              sizeof(text) - 1U,
+              3U,
+              &shard) == NIYAH_OK);
+
+    CHECK(shard.has_explicit_samples == 0);
+    CHECK(shard.has_loss_starts == 0);
+    CHECK(shard.sample_count > 0U);
+
+    CHECK(niyah_dataset_shard_save(
+              &shard,
+              tokenizer,
+              path) == NIYAH_OK);
+
+    CHECK(niyah_dataset_shard_load(
+              path,
+              tokenizer,
+              &eager) == NIYAH_OK);
+
+    CHECK(eager.has_explicit_samples == 0);
+    CHECK(eager.has_loss_starts == 0);
+
+    CHECK(niyah_dataset_shard_identity_sha256(
+              &eager,
+              eager_identity) == NIYAH_OK);
+
+    CHECK(niyah_dataset_shard_reader_open(
+              path,
+              tokenizer,
+              &reader) == NIYAH_OK);
+
+    CHECK(reader != NULL);
+
+    if (reader != NULL) {
+        CHECK(niyah_dataset_shard_reader_info(
+                  reader,
+                  &reader_samples,
+                  &reader_sequence,
+                  reader_tokenizer_identity,
+                  reader_identity) == NIYAH_OK);
+
+        CHECK(reader_samples ==
+              eager.sample_count);
+        CHECK(reader_sequence ==
+              eager.sequence_length);
+
+        CHECK(memcmp(
+                  reader_tokenizer_identity,
+                  eager.tokenizer_identity,
+                  sizeof(reader_tokenizer_identity)) == 0);
+
+        CHECK(memcmp(
+                  reader_identity,
+                  eager_identity,
+                  sizeof(reader_identity)) == 0);
+
+        for (i = 0U;
+             i < eager.sample_count;
+             ++i) {
+            const uint32_t *eager_tokens = NULL;
+            const uint32_t *eager_targets = NULL;
+            const uint32_t *reader_tokens = NULL;
+            const uint32_t *reader_targets = NULL;
+
+            size_t eager_count = 0U;
+            size_t eager_loss_start = 999U;
+            size_t reader_count = 0U;
+            size_t reader_loss_start = 999U;
+
+            CHECK(
+                niyah_dataset_shard_sample_with_loss(
+                    &eager,
+                    i,
+                    &eager_tokens,
+                    &eager_targets,
+                    &eager_count,
+                    &eager_loss_start) == NIYAH_OK);
+
+            CHECK(
+                niyah_dataset_shard_reader_sample_with_loss(
+                    reader,
+                    i,
+                    &reader_tokens,
+                    &reader_targets,
+                    &reader_count,
+                    &reader_loss_start) == NIYAH_OK);
+
+            CHECK(reader_count ==
+                  eager_count);
+
+            CHECK(reader_loss_start ==
+                  eager_loss_start);
+
+            CHECK(reader_loss_start == 0U);
+
+            if (reader_count ==
+                    eager_count &&
+                reader_tokens != NULL &&
+                eager_tokens != NULL) {
+                CHECK(memcmp(
+                          reader_tokens,
+                          eager_tokens,
+                          reader_count *
+                              sizeof(uint32_t)) == 0);
+
+                CHECK(memcmp(
+                          reader_targets,
+                          eager_targets,
+                          reader_count *
+                              sizeof(uint32_t)) == 0);
+            }
+        }
+    }
+
+done:
+    niyah_dataset_shard_reader_close(reader);
+    niyah_dataset_shard_destroy(&eager);
+    niyah_dataset_shard_destroy(&shard);
+    niyah_tokenizer_destroy(tokenizer);
+    (void)remove(path);
+}
+
+static void test_streaming_reader_v2(void)
+{
+    static const uint8_t corpus[] =
+        "bounded streaming shard reader tokenizer corpus";
+    static const uint8_t text[] =
+        "streaming reader boundary sample data for v2 parity";
+
+    const char *path =
+        "niyah-dataset-reader-v2-test.srd";
+
+    NiyahTokenizer *tokenizer = NULL;
+    NiyahTokenizer *other = NULL;
+    NiyahDatasetShard shard;
+    NiyahDatasetShard eager;
+    NiyahDatasetShardReader *reader = NULL;
+    NiyahDatasetShardReader *rejected = NULL;
+
+    uint8_t eager_identity[
+        NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t reader_identity[
+        NIYAH_DATASET_SHARD_IDENTITY_SHA256_SIZE];
+    uint8_t reader_tokenizer_identity[
+        NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE];
+
+    size_t reader_samples = 0U;
+    size_t reader_sequence = 0U;
+    size_t i;
+
+    memset(&shard, 0, sizeof(shard));
+    memset(&eager, 0, sizeof(eager));
+
+    tokenizer =
+        make_tokenizer(
+            corpus,
+            sizeof(corpus) - 1U);
+
+    other =
+        make_tokenizer(
+            (const uint8_t *)
+                "different tokenizer corpus",
+            sizeof("different tokenizer corpus") - 1U);
+
+    CHECK(tokenizer != NULL);
+    CHECK(other != NULL);
+
+    if (tokenizer == NULL ||
+        other == NULL)
+        goto done;
+
+    CHECK(niyah_dataset_shard_build_text(
+              tokenizer,
+              text,
+              sizeof(text) - 1U,
+              3U,
+              &shard) == NIYAH_OK);
+
+    CHECK(shard.sample_count >= 2U);
+
+    if (shard.sample_count == 0U)
+        goto done;
+
+    shard.sample_offsets =
+        (size_t *)calloc(
+            shard.sample_count,
+            sizeof(size_t));
+
+    shard.sample_lengths =
+        (size_t *)calloc(
+            shard.sample_count,
+            sizeof(size_t));
+
+    CHECK(shard.sample_offsets != NULL);
+    CHECK(shard.sample_lengths != NULL);
+
+    if (shard.sample_offsets == NULL ||
+        shard.sample_lengths == NULL)
+        goto done;
+
+    for (i = 0U;
+         i < shard.sample_count;
+         ++i) {
+        const size_t start =
+            i * shard.sequence_length;
+        const size_t remaining =
+            shard.token_count -
+            1U - start;
+
+        shard.sample_offsets[i] =
+            start;
+
+        shard.sample_lengths[i] =
+            remaining <
+                    shard.sequence_length
+                ? remaining
+                : shard.sequence_length;
+    }
+
+    shard.has_explicit_samples = 1;
+    shard.has_loss_starts = 0;
+
+    CHECK(niyah_dataset_shard_save(
+              &shard,
+              tokenizer,
+              path) == NIYAH_OK);
+
+    CHECK(niyah_dataset_shard_load(
+              path,
+              tokenizer,
+              &eager) == NIYAH_OK);
+
+    CHECK(niyah_dataset_shard_identity_sha256(
+              &eager,
+              eager_identity) == NIYAH_OK);
+
+    CHECK(niyah_dataset_shard_reader_open(
+              path,
+              tokenizer,
+              &reader) == NIYAH_OK);
+
+    CHECK(reader != NULL);
+
+    if (reader != NULL) {
+        CHECK(niyah_dataset_shard_reader_info(
+                  reader,
+                  &reader_samples,
+                  &reader_sequence,
+                  reader_tokenizer_identity,
+                  reader_identity) == NIYAH_OK);
+
+        CHECK(reader_samples ==
+              eager.sample_count);
+
+        CHECK(reader_sequence ==
+              eager.sequence_length);
+
+        CHECK(memcmp(
+                  reader_tokenizer_identity,
+                  eager.tokenizer_identity,
+                  sizeof(reader_tokenizer_identity)) == 0);
+
+        CHECK(memcmp(
+                  reader_identity,
+                  eager_identity,
+                  sizeof(reader_identity)) == 0);
+
+        for (i = 0U;
+             i < eager.sample_count;
+             ++i) {
+            const uint32_t *eager_tokens = NULL;
+            const uint32_t *eager_targets = NULL;
+            const uint32_t *reader_tokens = NULL;
+            const uint32_t *reader_targets = NULL;
+
+            size_t eager_count = 0U;
+            size_t eager_loss_start = 0U;
+            size_t reader_count = 0U;
+            size_t reader_loss_start = 0U;
+
+            CHECK(
+                niyah_dataset_shard_sample_with_loss(
+                    &eager,
+                    i,
+                    &eager_tokens,
+                    &eager_targets,
+                    &eager_count,
+                    &eager_loss_start) == NIYAH_OK);
+
+            CHECK(
+                niyah_dataset_shard_reader_sample_with_loss(
+                    reader,
+                    i,
+                    &reader_tokens,
+                    &reader_targets,
+                    &reader_count,
+                    &reader_loss_start) == NIYAH_OK);
+
+            CHECK(reader_count ==
+                  eager_count);
+
+            CHECK(reader_loss_start ==
+                  eager_loss_start);
+
+            if (reader_count ==
+                    eager_count &&
+                reader_tokens != NULL &&
+                eager_tokens != NULL) {
+                CHECK(memcmp(
+                          reader_tokens,
+                          eager_tokens,
+                          reader_count *
+                              sizeof(uint32_t)) == 0);
+
+                CHECK(memcmp(
+                          reader_targets,
+                          eager_targets,
+                          reader_count *
+                              sizeof(uint32_t)) == 0);
+            }
+        }
+
+        CHECK(
+            niyah_dataset_shard_reader_sample_with_loss(
+                reader,
+                eager.sample_count,
+                NULL,
+                NULL,
+                &reader_samples,
+                &reader_sequence) ==
+            NIYAH_ERR_INVALID_ARGUMENT);
+    }
+
+    CHECK(niyah_dataset_shard_reader_open(
+              path,
+              other,
+              &rejected) ==
+          NIYAH_ERR_INVALID_CONFIG);
+
+    CHECK(rejected == NULL);
+
+    niyah_dataset_shard_reader_close(reader);
+    reader = NULL;
+
+    {
+        FILE *file =
+            fopen(path, "r+b");
+
+        CHECK(file != NULL);
+
+        if (file != NULL) {
+            int value;
+
+            CHECK(fseek(
+                      file,
+                      (long)
+                          72L,
+                      SEEK_SET) == 0);
+
+            value = fgetc(file);
+            CHECK(value != EOF);
+
+            if (value != EOF) {
+                CHECK(fseek(
+                          file,
+                          (long)
+                              72L,
+                          SEEK_SET) == 0);
+
+                CHECK(fputc(
+                          value ^ 1,
+                          file) != EOF);
+            }
+
+            CHECK(fclose(file) == 0);
+        }
+    }
+
+    CHECK(niyah_dataset_shard_reader_open(
+              path,
+              tokenizer,
+              &rejected) ==
+          NIYAH_ERR_CORRUPT_DATA);
+
+    CHECK(rejected == NULL);
+
+done:
+    niyah_dataset_shard_reader_close(rejected);
+    niyah_dataset_shard_reader_close(reader);
+    niyah_dataset_shard_destroy(&eager);
+    niyah_dataset_shard_destroy(&shard);
+    niyah_tokenizer_destroy(other);
+    niyah_tokenizer_destroy(tokenizer);
+    (void)remove(path);
+}
+
 int main(void)
 {
     test_build_and_samples();
     test_shard_content_identity();
     test_persistence_and_identity();
+    test_streaming_reader_v1();
+    test_streaming_reader_v2();
     test_corruption_rejection();
     test_boundary_aware_v2();
     test_supervised_v3();

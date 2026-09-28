@@ -101,6 +101,40 @@ execute_process(
     COMMAND "${NIYAH_CLI}" run
         --tokenizer "${TOK}"
         --checkpoint "${CKPT}"
+        --prompt "a"
+        --prompt-prefix "b"
+        --max-new-tokens 1
+        --temperature 0
+        --seed 1
+        --backend "${BACKEND}"
+    RESULT_VARIABLE prefix_result
+    OUTPUT_QUIET
+)
+if(NOT prefix_result EQUAL 0)
+    message(FATAL_ERROR "runtime prompt prefix failed: ${prefix_result}")
+endif()
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" run
+        --tokenizer "${TOK}"
+        --checkpoint "${CKPT}"
+        --prompt "a"
+        --prompt-suffix "b"
+        --max-new-tokens 1
+        --temperature 0
+        --seed 1
+        --backend "${BACKEND}"
+    RESULT_VARIABLE suffix_result
+    OUTPUT_QUIET
+)
+if(NOT suffix_result EQUAL 0)
+    message(FATAL_ERROR "runtime prompt suffix failed: ${suffix_result}")
+endif()
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" run
+        --tokenizer "${TOK}"
+        --checkpoint "${CKPT}"
         --prompt "xyz"
         --max-new-tokens 1
         --temperature 0

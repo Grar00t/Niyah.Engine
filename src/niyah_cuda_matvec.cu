@@ -1,4 +1,5 @@
 #include "niyah_cuda_matvec.h"
+#include "niyah/train.h"
 
 #include <cuda_runtime.h>
 
@@ -621,6 +622,144 @@ static int niyah_cuda_model_state_matvec_device_launch(
         : 1;
 }
 
+
+extern "C" void niyah_cuda_train_state_destroy(
+    NiyahCudaTrainState *state)
+{
+    if (state == NULL) {
+        return;
+    }
+
+    if (state->device_targets != NULL) {
+        (void)cudaFree(state->device_targets);
+    }
+    if (state->device_tokens != NULL) {
+        (void)cudaFree(state->device_tokens);
+    }
+    if (state->device_workspace != NULL) {
+        (void)cudaFree(state->device_workspace);
+    }
+    if (state->device_accumulated_gradients != NULL) {
+        (void)cudaFree(state->device_accumulated_gradients);
+    }
+    if (state->device_gradients != NULL) {
+        (void)cudaFree(state->device_gradients);
+    }
+
+    memset(state, 0, sizeof(*state));
+}
+
+extern "C" int niyah_cuda_train_state_create(
+    NiyahCudaTrainState *state,
+    const NiyahModel *model,
+    size_t max_tokens,
+    size_t workspace_floats)
+{
+    size_t gradient_bytes;
+    size_t workspace_bytes;
+    size_t token_bytes;
+
+    if (state == NULL ||
+        model == NULL ||
+        model->weights == NULL ||
+        model->weight_count == 0U ||
+        max_tokens == 0U ||
+        workspace_floats == 0U ||
+        model->weight_count > ((size_t)-1) / sizeof(float) ||
+        workspace_floats > ((size_t)-1) / sizeof(float) ||
+        max_tokens > ((size_t)-1) / sizeof(uint32_t)) {
+        return 1;
+    }
+
+    memset(state, 0, sizeof(*state));
+
+    gradient_bytes = model->weight_count * sizeof(float);
+    workspace_bytes = workspace_floats * sizeof(float);
+    token_bytes = max_tokens * sizeof(uint32_t);
+
+    if (cudaMalloc(&state->device_gradients, gradient_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    if (cudaMalloc(
+            &state->device_accumulated_gradients,
+            gradient_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    if (cudaMalloc(&state->device_workspace, workspace_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    if (cudaMalloc(&state->device_tokens, token_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    if (cudaMalloc(&state->device_targets, token_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    if (cudaMemset(state->device_gradients, 0, gradient_bytes) != cudaSuccess ||
+        cudaMemset(
+            state->device_accumulated_gradients,
+            0,
+            gradient_bytes) != cudaSuccess ||
+        cudaMemset(state->device_workspace, 0, workspace_bytes) != cudaSuccess) {
+        goto fail;
+    }
+
+    state->gradient_capacity = model->weight_count;
+    state->workspace_capacity = workspace_floats;
+    state->token_capacity = max_tokens;
+
+    return 0;
+
+fail:
+    niyah_cuda_train_state_destroy(state);
+    return 1;
+}
+
+extern "C" int niyah_cuda_train_state_zero_gradients(
+    NiyahCudaTrainState *state)
+{
+    if (state == NULL ||
+        state->device_gradients == NULL ||
+        state->gradient_capacity == 0U ||
+        state->gradient_capacity > ((size_t)-1) / sizeof(float)) {
+        return 1;
+    }
+
+    return cudaMemset(
+               state->device_gradients,
+               0,
+               state->gradient_capacity * sizeof(float)) == cudaSuccess
+        ? 0
+        : 1;
+}
+
+extern "C" int niyah_cuda_train_state_copy_gradients_to_host(
+    const NiyahCudaTrainState *state,
+    float *host_gradients,
+    size_t gradient_count)
+{
+    if (state == NULL ||
+        state->device_gradients == NULL ||
+        host_gradients == NULL ||
+        gradient_count == 0U ||
+        gradient_count > state->gradient_capacity ||
+        gradient_count > ((size_t)-1) / sizeof(float)) {
+        return 1;
+    }
+
+    return cudaMemcpy(
+               host_gradients,
+               state->device_gradients,
+               gradient_count * sizeof(float),
+               cudaMemcpyDeviceToHost) == cudaSuccess
+        ? 0
+        : 1;
+}
+
 extern "C" int niyah_cuda_model_state_matvec_device(
     const NiyahCudaModelState *state,
     size_t weight_offset,
@@ -697,10 +836,13 @@ __global__ static void niyah_cuda_rmsnorm_kernel(
 }
 
 __global__ static void niyah_cuda_rope_kernel(
-    float *vector,
+    float *vectors,
     size_t total_pairs,
+    size_t pairs_per_token,
+    size_t token_width,
     size_t head_dim,
-    size_t position)
+    size_t position_start,
+    float sign)
 {
     const size_t pair =
         (size_t)blockIdx.x * (size_t)blockDim.x +
@@ -708,16 +850,20 @@ __global__ static void niyah_cuda_rope_kernel(
 
     if (pair < total_pairs) {
         const size_t pairs_per_head = head_dim / 2U;
-        const size_t head = pair / pairs_per_head;
-        const size_t pair_in_head = pair % pairs_per_head;
+        const size_t token = pair / pairs_per_token;
+        const size_t pair_in_token = pair % pairs_per_token;
+        const size_t head = pair_in_token / pairs_per_head;
+        const size_t pair_in_head =
+            pair_in_token % pairs_per_head;
         const size_t i = pair_in_head * 2U;
-        float *head_vector = vector + head * head_dim;
-        const float pos = (float)position;
+        float *head_vector =
+            vectors + token * token_width + head * head_dim;
+        const float pos = (float)(position_start + token);
         const float exponent =
             -((float)i / (float)head_dim);
         const float inv_freq =
             powf(10000.0f, exponent);
-        const float angle = pos * inv_freq;
+        const float angle = sign * pos * inv_freq;
         const float c = cosf(angle);
         const float sn = sinf(angle);
         const float x0 = head_vector[i];
@@ -1165,20 +1311,27 @@ static int niyah_cuda_rmsnorm_device(
 }
 
 static int niyah_cuda_rope_device(
-    float *vector,
+    float *vectors,
+    size_t token_count,
     size_t n_heads,
     size_t head_dim,
-    size_t position)
+    size_t position_start,
+    float sign)
 {
     const unsigned int threads = 128U;
     size_t pairs_per_head;
+    size_t pairs_per_token;
+    size_t token_width;
     size_t total_pairs;
     unsigned int blocks;
 
-    if (vector == NULL ||
+    if (vectors == NULL ||
+        token_count == 0U ||
         n_heads == 0U ||
         head_dim < 2U ||
-        (head_dim % 2U) != 0U) {
+        (head_dim % 2U) != 0U ||
+        (sign != 1.0f && sign != -1.0f) ||
+        position_start > ((size_t)-1) - (token_count - 1U)) {
         return 1;
     }
 
@@ -1187,6 +1340,14 @@ static int niyah_cuda_rope_device(
     if (!niyah_cuda_size_mul_ok(
             n_heads,
             pairs_per_head,
+            &pairs_per_token) ||
+        !niyah_cuda_size_mul_ok(
+            n_heads,
+            head_dim,
+            &token_width) ||
+        !niyah_cuda_size_mul_ok(
+            token_count,
+            pairs_per_token,
             &total_pairs) ||
         niyah_cuda_blocks_for(
             total_pairs,
@@ -1196,12 +1357,55 @@ static int niyah_cuda_rope_device(
     }
 
     niyah_cuda_rope_kernel<<<blocks, threads>>>(
-        vector,
+        vectors,
         total_pairs,
+        pairs_per_token,
+        token_width,
         head_dim,
-        position);
+        position_start,
+        sign);
 
     return niyah_cuda_check_launch();
+}
+
+extern "C" int niyah_cuda_train_rope_backward(
+    NiyahCudaTrainState *train_state,
+    size_t workspace_offset,
+    size_t token_count,
+    size_t n_heads,
+    size_t head_dim)
+{
+    size_t token_width;
+    size_t value_count;
+
+    if (train_state == NULL ||
+        train_state->device_workspace == NULL ||
+        token_count == 0U ||
+        n_heads == 0U ||
+        head_dim < 2U ||
+        (head_dim % 2U) != 0U ||
+        !niyah_cuda_size_mul_ok(
+            n_heads,
+            head_dim,
+            &token_width) ||
+        !niyah_cuda_size_mul_ok(
+            token_count,
+            token_width,
+            &value_count) ||
+        workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - workspace_offset) {
+        return 1;
+    }
+
+    return niyah_cuda_rope_device(
+        (float *)train_state->device_workspace +
+            workspace_offset,
+        token_count,
+        n_heads,
+        head_dim,
+        0U,
+        -1.0f);
 }
 
 static int niyah_cuda_attention_one_device(
@@ -1285,6 +1489,97 @@ static int niyah_cuda_add_device(
     return niyah_cuda_check_launch();
 }
 
+extern "C" int niyah_cuda_train_add_inplace(
+    NiyahCudaTrainState *train_state,
+    size_t dst_workspace_offset,
+    size_t src_workspace_offset,
+    size_t value_count)
+{
+    if (train_state == NULL ||
+        train_state->device_workspace == NULL ||
+        value_count == 0U ||
+        dst_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - dst_workspace_offset ||
+        src_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - src_workspace_offset) {
+        return 1;
+    }
+
+    if (dst_workspace_offset <
+            src_workspace_offset + value_count &&
+        src_workspace_offset <
+            dst_workspace_offset + value_count) {
+        return 1;
+    }
+
+    return niyah_cuda_add_device(
+        (float *)train_state->device_workspace +
+            dst_workspace_offset,
+        (const float *)train_state->device_workspace +
+            src_workspace_offset,
+        value_count);
+}
+
+extern "C" int niyah_cuda_train_add(
+    NiyahCudaTrainState *train_state,
+    size_t dst_workspace_offset,
+    size_t a_workspace_offset,
+    size_t b_workspace_offset,
+    size_t value_count)
+{
+    float *workspace;
+    size_t bytes;
+
+    if (train_state == NULL ||
+        train_state->device_workspace == NULL ||
+        value_count == 0U ||
+        value_count > ((size_t)-1) / sizeof(float) ||
+        dst_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - dst_workspace_offset ||
+        a_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - a_workspace_offset ||
+        b_workspace_offset > train_state->workspace_capacity ||
+        value_count >
+            train_state->workspace_capacity - b_workspace_offset) {
+        return 1;
+    }
+
+    if ((dst_workspace_offset <
+             a_workspace_offset + value_count &&
+         a_workspace_offset <
+             dst_workspace_offset + value_count) ||
+        (dst_workspace_offset <
+             b_workspace_offset + value_count &&
+         b_workspace_offset <
+             dst_workspace_offset + value_count) ||
+        (a_workspace_offset <
+             b_workspace_offset + value_count &&
+         b_workspace_offset <
+             a_workspace_offset + value_count)) {
+        return 1;
+    }
+
+    workspace = (float *)train_state->device_workspace;
+    bytes = value_count * sizeof(float);
+
+    if (cudaMemcpy(
+            workspace + dst_workspace_offset,
+            workspace + a_workspace_offset,
+            bytes,
+            cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return 1;
+    }
+
+    return niyah_cuda_add_device(
+        workspace + dst_workspace_offset,
+        workspace + b_workspace_offset,
+        value_count);
+}
+
 static int niyah_cuda_silu_mul_device(
     float *gate,
     const float *up,
@@ -1304,6 +1599,1467 @@ static int niyah_cuda_silu_mul_device(
         gate, up, n);
 
     return niyah_cuda_check_launch();
+}
+
+
+typedef struct NiyahCudaTrainShape {
+    size_t token_count;
+    size_t dim;
+    size_t kv_dim;
+    size_t ffn;
+    size_t vocab;
+    size_t td;
+    size_t tkv;
+    size_t tffn;
+    size_t tv;
+    size_t layer_stride;
+    size_t layers_total;
+    size_t cpu_workspace;
+    size_t cuda_workspace;
+} NiyahCudaTrainShape;
+
+typedef struct NiyahCudaTrainCache {
+    size_t hidden_in;
+    size_t norm1;
+    size_t q;
+    size_t k;
+    size_t v;
+    size_t attn;
+    size_t hidden_attn;
+    size_t norm2;
+    size_t gate;
+    size_t up;
+    size_t act;
+    size_t hidden_out;
+} NiyahCudaTrainCache;
+
+static int niyah_cuda_train_shape_full(
+    const NiyahModelConfig *config,
+    size_t token_count,
+    NiyahCudaTrainShape *out)
+{
+    NiyahCudaTrainShape s;
+    size_t head_dim;
+    size_t term;
+    size_t extra;
+    size_t cpu_required = 0U;
+
+    if (config == NULL ||
+        out == NULL ||
+        token_count == 0U ||
+        niyah_model_config_validate(config) != NIYAH_OK ||
+        token_count > (size_t)config->context_length) {
+        return 1;
+    }
+
+    memset(&s, 0, sizeof(s));
+
+    s.token_count = token_count;
+    s.dim = (size_t)config->embedding_dim;
+    s.ffn = (size_t)config->ffn_hidden_dim;
+    s.vocab = (size_t)config->vocab_size;
+
+    head_dim =
+        s.dim / (size_t)config->n_heads;
+
+    if (head_dim < 2U ||
+        (head_dim % 2U) != 0U ||
+        !niyah_cuda_size_mul_ok(
+            head_dim,
+            (size_t)config->n_kv_heads,
+            &s.kv_dim) ||
+        !niyah_cuda_size_mul_ok(
+            token_count, s.dim, &s.td) ||
+        !niyah_cuda_size_mul_ok(
+            token_count, s.kv_dim, &s.tkv) ||
+        !niyah_cuda_size_mul_ok(
+            token_count, s.ffn, &s.tffn) ||
+        !niyah_cuda_size_mul_ok(
+            token_count, s.vocab, &s.tv)) {
+        return 1;
+    }
+
+    if (!niyah_cuda_size_mul_ok(
+            7U, s.td, &s.layer_stride) ||
+        !niyah_cuda_size_mul_ok(
+            2U, s.tkv, &term) ||
+        !niyah_cuda_size_add_ok(
+            s.layer_stride,
+            term,
+            &s.layer_stride) ||
+        !niyah_cuda_size_mul_ok(
+            3U, s.tffn, &term) ||
+        !niyah_cuda_size_add_ok(
+            s.layer_stride,
+            term,
+            &s.layer_stride) ||
+        !niyah_cuda_size_mul_ok(
+            (size_t)config->n_layers,
+            s.layer_stride,
+            &s.layers_total)) {
+        return 1;
+    }
+
+    if (niyah_train_backward_workspace_floats(
+            config,
+            token_count,
+            &cpu_required) != NIYAH_OK) {
+        return 1;
+    }
+
+    if (!niyah_cuda_size_mul_ok(
+            3U, s.tffn, &extra) ||
+        !niyah_cuda_size_add_ok(
+            cpu_required,
+            extra,
+            &s.cuda_workspace)) {
+        return 1;
+    }
+
+    s.cpu_workspace = cpu_required;
+    *out = s;
+    return 0;
+}
+
+static void niyah_cuda_train_cache_view(
+    size_t base,
+    const NiyahCudaTrainShape *s,
+    NiyahCudaTrainCache *c)
+{
+    size_t p = base;
+
+    c->hidden_in = p; p += s->td;
+    c->norm1 = p; p += s->td;
+    c->q = p; p += s->td;
+    c->k = p; p += s->tkv;
+    c->v = p; p += s->tkv;
+    c->attn = p; p += s->td;
+    c->hidden_attn = p; p += s->td;
+    c->norm2 = p; p += s->td;
+    c->gate = p; p += s->tffn;
+    c->up = p; p += s->tffn;
+    c->act = p; p += s->tffn;
+    c->hidden_out = p;
+}
+
+__global__ static void niyah_cuda_train_embedding_gather_kernel(
+    float *out,
+    const float *weights,
+    const uint32_t *tokens,
+    const uint32_t *segments,
+    size_t token_count,
+    size_t dim,
+    size_t token_embedding_offset,
+    size_t segment_embedding_offset,
+    size_t n_segments)
+{
+    const size_t i =
+        (size_t)blockIdx.x * blockDim.x +
+        threadIdx.x;
+    const size_t count =
+        token_count * dim;
+
+    if (i < count) {
+        const size_t t = i / dim;
+        const size_t d = i % dim;
+        const size_t token =
+            (size_t)tokens[t];
+
+        float value =
+            weights[
+                token_embedding_offset +
+                token * dim +
+                d];
+
+        if (segments != NULL &&
+            n_segments != 0U) {
+            const size_t segment =
+                (size_t)segments[t];
+
+            value +=
+                weights[
+                    segment_embedding_offset +
+                    segment * dim +
+                    d];
+        }
+
+        out[i] = value;
+    }
+}
+
+__global__ static void niyah_cuda_train_attention_forward_kernel(
+    float *out,
+    const float *q,
+    const float *k,
+    const float *v,
+    size_t token_count,
+    size_t n_heads,
+    size_t n_kv_heads,
+    size_t head_dim,
+    size_t dim,
+    size_t kv_dim,
+    unsigned int *status)
+{
+    const size_t item =
+        (size_t)blockIdx.x * blockDim.x +
+        threadIdx.x;
+    const size_t count =
+        token_count * dim;
+
+    if (item < count) {
+        const size_t t =
+            item / dim;
+        const size_t rem =
+            item % dim;
+        const size_t h =
+            rem / head_dim;
+        const size_t d =
+            rem % head_dim;
+
+        const size_t group_size =
+            n_heads / n_kv_heads;
+        const size_t kh =
+            h / group_size;
+
+        const float *qh =
+            q + t * dim +
+            h * head_dim;
+
+        const float scale =
+            1.0f /
+            sqrtf((float)head_dim);
+
+        float max_score =
+            -3.402823466e+38F;
+
+        for (size_t src = 0U;
+             src <= t;
+             ++src) {
+            const float *khv =
+                k + src * kv_dim +
+                kh * head_dim;
+
+            float score = 0.0f;
+
+            for (size_t j = 0U;
+                 j < head_dim;
+                 ++j) {
+                score +=
+                    qh[j] * khv[j];
+            }
+
+            score *= scale;
+
+            if (score > max_score)
+                max_score = score;
+        }
+
+        float normalizer = 0.0f;
+
+        for (size_t src = 0U;
+             src <= t;
+             ++src) {
+            const float *khv =
+                k + src * kv_dim +
+                kh * head_dim;
+
+            float score = 0.0f;
+
+            for (size_t j = 0U;
+                 j < head_dim;
+                 ++j) {
+                score +=
+                    qh[j] * khv[j];
+            }
+
+            normalizer +=
+                expf(
+                    score * scale -
+                    max_score);
+        }
+
+        if (!(normalizer > 0.0f) ||
+            !isfinite(normalizer)) {
+            atomicExch(status, 1U);
+            out[item] = 0.0f;
+            return;
+        }
+
+        float value = 0.0f;
+
+        for (size_t src = 0U;
+             src <= t;
+             ++src) {
+            const float *khv =
+                k + src * kv_dim +
+                kh * head_dim;
+
+            const float *vh =
+                v + src * kv_dim +
+                kh * head_dim;
+
+            float score = 0.0f;
+
+            for (size_t j = 0U;
+                 j < head_dim;
+                 ++j) {
+                score +=
+                    qh[j] * khv[j];
+            }
+
+            const float probability =
+                expf(
+                    score * scale -
+                    max_score) /
+                normalizer;
+
+            value +=
+                probability * vh[d];
+        }
+
+        out[item] = value;
+    }
+}
+
+__global__ static void niyah_cuda_train_loss_kernel(
+    const float *logits,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t vocab,
+    size_t loss_start,
+    float *dlogits,
+    float *out_loss,
+    unsigned int *status)
+{
+    if (blockIdx.x != 0U ||
+        threadIdx.x != 0U) {
+        return;
+    }
+
+    const size_t supervised_count =
+        token_count - loss_start;
+
+    double total_loss = 0.0;
+
+    for (size_t t = loss_start;
+         t < token_count;
+         ++t) {
+        const float *row =
+            logits + t * vocab;
+
+        float max_logit = row[0];
+
+        for (size_t v = 1U;
+             v < vocab;
+             ++v) {
+            if (row[v] > max_logit)
+                max_logit = row[v];
+        }
+
+        if (!isfinite(max_logit)) {
+            *status = 1U;
+            *out_loss = NAN;
+            return;
+        }
+
+        double sum_exp = 0.0;
+
+        for (size_t v = 0U;
+             v < vocab;
+             ++v) {
+            const double e =
+                exp(
+                    (double)row[v] -
+                    (double)max_logit);
+
+            if (!isfinite(e)) {
+                *status = 1U;
+                *out_loss = NAN;
+                return;
+            }
+
+            sum_exp += e;
+        }
+
+        if (!(sum_exp > 0.0) ||
+            !isfinite(sum_exp)) {
+            *status = 1U;
+            *out_loss = NAN;
+            return;
+        }
+
+        total_loss +=
+            log(sum_exp) +
+            (double)max_logit -
+            (double)row[targets[t]];
+
+        const double inv_supervised =
+            1.0 /
+            (double)supervised_count;
+
+        for (size_t v = 0U;
+             v < vocab;
+             ++v) {
+            double probability =
+                exp(
+                    (double)row[v] -
+                    (double)max_logit) /
+                sum_exp;
+
+            if (v ==
+                (size_t)targets[t]) {
+                probability -= 1.0;
+            }
+
+            dlogits[
+                t * vocab + v] =
+                (float)(
+                    probability *
+                    inv_supervised);
+        }
+    }
+
+    *out_loss =
+        (float)(
+            total_loss /
+            (double)supervised_count);
+
+    if (!isfinite(*out_loss))
+        *status = 1U;
+}
+
+__global__ static void niyah_cuda_train_embedding_grad_kernel(
+    float *gradients,
+    const float *dh,
+    const uint32_t *tokens,
+    size_t token_count,
+    size_t vocab,
+    size_t dim,
+    size_t gradient_offset)
+{
+    const size_t item =
+        (size_t)blockIdx.x * blockDim.x +
+        threadIdx.x;
+    const size_t count =
+        vocab * dim;
+
+    if (item < count) {
+        const size_t token =
+            item / dim;
+        const size_t d =
+            item % dim;
+
+        float value =
+            gradients[
+                gradient_offset +
+                item];
+
+        for (size_t t = 0U;
+             t < token_count;
+             ++t) {
+            if ((size_t)tokens[t] ==
+                token) {
+                value +=
+                    dh[t * dim + d];
+            }
+        }
+
+        gradients[
+            gradient_offset +
+            item] = value;
+    }
+}
+
+__global__ static void niyah_cuda_train_segment_grad_kernel(
+    float *gradients,
+    const float *dh,
+    const uint32_t *segments,
+    size_t token_count,
+    size_t n_segments,
+    size_t dim,
+    size_t gradient_offset)
+{
+    const size_t item =
+        (size_t)blockIdx.x * blockDim.x +
+        threadIdx.x;
+    const size_t count =
+        n_segments * dim;
+
+    if (item < count) {
+        const size_t segment =
+            item / dim;
+        const size_t d =
+            item % dim;
+
+        float value =
+            gradients[
+                gradient_offset +
+                item];
+
+        for (size_t t = 0U;
+             t < token_count;
+             ++t) {
+            if ((size_t)segments[t] ==
+                segment) {
+                value +=
+                    dh[t * dim + d];
+            }
+        }
+
+        gradients[
+            gradient_offset +
+            item] = value;
+    }
+}
+
+extern "C" int niyah_cuda_train_backward_workspace_floats(
+    const NiyahModelConfig *config,
+    size_t token_count,
+    size_t *out_floats)
+{
+    NiyahCudaTrainShape s;
+
+    if (out_floats == NULL ||
+        niyah_cuda_train_shape_full(
+            config,
+            token_count,
+            &s) != 0) {
+        return 1;
+    }
+
+    *out_floats =
+        s.cuda_workspace;
+    return 0;
+}
+
+extern "C" int niyah_cuda_train_backward_full(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaTrainState *train_state,
+    const uint32_t *tokens,
+    const uint32_t *targets,
+    size_t token_count,
+    size_t loss_start,
+    const uint32_t *segment_ids,
+    float *out_loss)
+{
+    const NiyahModelConfig *config;
+    NiyahCudaTrainShape s;
+
+    size_t final_norm;
+    size_t logits;
+    size_t dlogits;
+    size_t dh;
+    size_t dh_attn;
+    size_t dn2;
+    size_t da;
+    size_t dq;
+    size_t dn1;
+    size_t dtmp;
+    size_t dk;
+    size_t dv;
+    size_t probs;
+
+    size_t extra_dact;
+    size_t extra_dgate;
+    size_t extra_dup;
+
+    float *workspace;
+    uint32_t *device_segments = NULL;
+    unsigned int *device_status;
+    float *device_loss;
+
+    unsigned int host_status = 0U;
+    const unsigned int threads = 128U;
+
+    if (model_state == NULL ||
+        train_state == NULL ||
+        tokens == NULL ||
+        targets == NULL ||
+        out_loss == NULL ||
+        model_state->device_weights == NULL ||
+        model_state->device_input == NULL ||
+        model_state->device_output == NULL ||
+        train_state->device_workspace == NULL ||
+        train_state->device_gradients == NULL ||
+        train_state->device_tokens == NULL ||
+        train_state->device_targets == NULL ||
+        train_state->gradient_capacity !=
+            model_state->weight_count ||
+        token_count == 0U ||
+        token_count >
+            train_state->token_capacity ||
+        loss_start >= token_count) {
+        return 1;
+    }
+
+    config =
+        &model_state->config;
+
+    if (niyah_cuda_train_shape_full(
+            config,
+            token_count,
+            &s) != 0 ||
+        train_state->workspace_capacity <
+            s.cuda_workspace) {
+        return 1;
+    }
+
+    for (size_t t = 0U;
+         t < token_count;
+         ++t) {
+        if ((size_t)tokens[t] >=
+                s.vocab) {
+            return 1;
+        }
+
+        if (t >= loss_start &&
+            (size_t)targets[t] >=
+                s.vocab) {
+            return 1;
+        }
+
+        if (segment_ids != NULL) {
+            if (config->n_segments == 0U ||
+                (size_t)segment_ids[t] >=
+                    (size_t)config->n_segments) {
+                return 1;
+            }
+        }
+    }
+
+    workspace =
+        (float *)train_state->device_workspace;
+
+    final_norm =
+        s.layers_total;
+
+    logits =
+        final_norm + s.td;
+
+    dlogits =
+        logits + s.tv;
+
+    dh =
+        dlogits + s.tv;
+
+    dh_attn =
+        dh + s.td;
+
+    dn2 =
+        dh_attn + s.td;
+
+    da =
+        dn2 + s.td;
+
+    dq =
+        da + s.td;
+
+    dn1 =
+        dq + s.td;
+
+    dtmp =
+        dn1 + s.td;
+
+    dk =
+        dtmp + s.td;
+
+    dv =
+        dk + s.tkv;
+
+    probs =
+        dv + s.tkv;
+
+
+    extra_dact =
+        s.cpu_workspace;
+
+    extra_dgate =
+        extra_dact + s.tffn;
+
+    extra_dup =
+        extra_dgate + s.tffn;
+
+    if (extra_dup + s.tffn >
+        train_state->workspace_capacity) {
+        return 1;
+    }
+
+    device_status =
+        (unsigned int *)
+            model_state->device_input;
+
+    device_loss =
+        (float *)
+            model_state->device_output;
+
+    if (cudaMemcpy(
+            train_state->device_tokens,
+            tokens,
+            token_count *
+                sizeof(uint32_t),
+            cudaMemcpyHostToDevice) !=
+            cudaSuccess ||
+        cudaMemcpy(
+            train_state->device_targets,
+            targets,
+            token_count *
+                sizeof(uint32_t),
+            cudaMemcpyHostToDevice) !=
+            cudaSuccess) {
+        return 1;
+    }
+
+    if (segment_ids != NULL) {
+        device_segments =
+            (uint32_t *)(workspace + probs);
+
+        if (cudaMemcpy(
+                device_segments,
+                segment_ids,
+                token_count *
+                    sizeof(uint32_t),
+                cudaMemcpyHostToDevice) !=
+                cudaSuccess) {
+            return 1;
+        }
+    }
+
+    if (cudaMemset(
+            device_status,
+            0,
+            sizeof(*device_status)) !=
+            cudaSuccess) {
+        return 1;
+    }
+
+    /*
+     * Full cached CUDA forward.
+     */
+    for (uint32_t layer_index = 0U;
+         layer_index < config->n_layers;
+         ++layer_index) {
+        NiyahCudaTrainCache c;
+        NiyahLayerLayout layer;
+
+        const size_t base =
+            (size_t)layer_index *
+            s.layer_stride;
+
+        niyah_cuda_train_cache_view(
+            base,
+            &s,
+            &c);
+
+        if (niyah_cuda_layer_layout(
+                model_state,
+                layer_index,
+                &layer) != 0) {
+            return 1;
+        }
+
+        if (layer_index == 0U) {
+            size_t item_count;
+            unsigned int blocks;
+
+            if (!niyah_cuda_size_mul_ok(
+                    token_count,
+                    s.dim,
+                    &item_count) ||
+                niyah_cuda_blocks_for(
+                    item_count,
+                    threads,
+                    &blocks) != 0) {
+                return 1;
+            }
+
+            niyah_cuda_train_embedding_gather_kernel
+                <<<blocks, threads>>>(
+                    workspace + c.hidden_in,
+                    (const float *)
+                        model_state->device_weights,
+                    (const uint32_t *)
+                        train_state->device_tokens,
+                    device_segments,
+                    token_count,
+                    s.dim,
+                    model_state->
+                        layout.token_embedding,
+                    model_state->
+                        layout.segment_embedding,
+                    (size_t)config->n_segments);
+
+            if (niyah_cuda_check_launch() != 0)
+                return 1;
+        } else {
+            NiyahCudaTrainCache prev;
+
+            niyah_cuda_train_cache_view(
+                ((size_t)layer_index - 1U) *
+                    s.layer_stride,
+                &s,
+                &prev);
+
+            if (cudaMemcpy(
+                    workspace + c.hidden_in,
+                    workspace + prev.hidden_out,
+                    s.td * sizeof(float),
+                    cudaMemcpyDeviceToDevice) !=
+                    cudaSuccess) {
+                return 1;
+            }
+        }
+
+        for (size_t t = 0U;
+             t < token_count;
+             ++t) {
+            if (niyah_cuda_rmsnorm_device(
+                    model_state,
+                    workspace +
+                        c.norm1 +
+                        t * s.dim,
+                    workspace +
+                        c.hidden_in +
+                        t * s.dim,
+                    layer.attn_norm,
+                    s.dim) != 0) {
+                return 1;
+            }
+        }
+
+        if (niyah_cuda_train_linear_forward(
+                model_state,
+                train_state,
+                layer.wq,
+                c.norm1,
+                c.q,
+                token_count,
+                s.dim,
+                s.dim) != 0 ||
+            niyah_cuda_train_linear_forward(
+                model_state,
+                train_state,
+                layer.wk,
+                c.norm1,
+                c.k,
+                token_count,
+                s.kv_dim,
+                s.dim) != 0 ||
+            niyah_cuda_train_linear_forward(
+                model_state,
+                train_state,
+                layer.wv,
+                c.norm1,
+                c.v,
+                token_count,
+                s.kv_dim,
+                s.dim) != 0) {
+            return 1;
+        }
+
+        if (niyah_cuda_rope_device(
+                workspace + c.q,
+                token_count,
+                (size_t)config->n_heads,
+                model_state->layout.head_dim,
+                0U,
+                1.0f) != 0 ||
+            niyah_cuda_rope_device(
+                workspace + c.k,
+                token_count,
+                (size_t)config->n_kv_heads,
+                model_state->layout.head_dim,
+                0U,
+                1.0f) != 0) {
+            return 1;
+        }
+
+        {
+            unsigned int blocks;
+
+            if (niyah_cuda_blocks_for(
+                    s.td,
+                    threads,
+                    &blocks) != 0) {
+                return 1;
+            }
+
+            niyah_cuda_train_attention_forward_kernel
+                <<<blocks, threads>>>(
+                    workspace + c.attn,
+                    workspace + c.q,
+                    workspace + c.k,
+                    workspace + c.v,
+                    token_count,
+                    (size_t)config->n_heads,
+                    (size_t)config->n_kv_heads,
+                    model_state->layout.head_dim,
+                    s.dim,
+                    s.kv_dim,
+                    device_status);
+
+            if (niyah_cuda_check_launch() != 0)
+                return 1;
+        }
+
+        if (niyah_cuda_train_linear_forward(
+                model_state,
+                train_state,
+                layer.wo,
+                c.attn,
+                c.hidden_attn,
+                token_count,
+                s.dim,
+                s.dim) != 0 ||
+            niyah_cuda_add_device(
+                workspace + c.hidden_attn,
+                workspace + c.hidden_in,
+                s.td) != 0) {
+            return 1;
+        }
+
+        for (size_t t = 0U;
+             t < token_count;
+             ++t) {
+            if (niyah_cuda_rmsnorm_device(
+                    model_state,
+                    workspace +
+                        c.norm2 +
+                        t * s.dim,
+                    workspace +
+                        c.hidden_attn +
+                        t * s.dim,
+                    layer.ffn_norm,
+                    s.dim) != 0) {
+                return 1;
+            }
+        }
+
+        if (niyah_cuda_train_linear_forward(
+                model_state,
+                train_state,
+                layer.w_gate,
+                c.norm2,
+                c.gate,
+                token_count,
+                s.ffn,
+                s.dim) != 0 ||
+            niyah_cuda_train_linear_forward(
+                model_state,
+                train_state,
+                layer.w_up,
+                c.norm2,
+                c.up,
+                token_count,
+                s.ffn,
+                s.dim) != 0) {
+            return 1;
+        }
+
+        if (cudaMemcpy(
+                workspace + c.act,
+                workspace + c.gate,
+                s.tffn * sizeof(float),
+                cudaMemcpyDeviceToDevice) !=
+                cudaSuccess ||
+            niyah_cuda_silu_mul_device(
+                workspace + c.act,
+                workspace + c.up,
+                s.tffn) != 0) {
+            return 1;
+        }
+
+        if (niyah_cuda_train_linear_forward(
+                model_state,
+                train_state,
+                layer.w_down,
+                c.act,
+                c.hidden_out,
+                token_count,
+                s.dim,
+                s.ffn) != 0 ||
+            niyah_cuda_add_device(
+                workspace + c.hidden_out,
+                workspace + c.hidden_attn,
+                s.td) != 0) {
+            return 1;
+        }
+    }
+
+    {
+        NiyahCudaTrainCache last;
+
+        niyah_cuda_train_cache_view(
+            ((size_t)config->n_layers - 1U) *
+                s.layer_stride,
+            &s,
+            &last);
+
+        for (size_t t = 0U;
+             t < token_count;
+             ++t) {
+            if (niyah_cuda_rmsnorm_device(
+                    model_state,
+                    workspace +
+                        final_norm +
+                        t * s.dim,
+                    workspace +
+                        last.hidden_out +
+                        t * s.dim,
+                    model_state->
+                        layout.final_norm,
+                    s.dim) != 0) {
+                return 1;
+            }
+        }
+    }
+
+    if (niyah_cuda_train_linear_forward(
+            model_state,
+            train_state,
+            model_state->layout.lm_head,
+            final_norm,
+            logits,
+            token_count,
+            s.vocab,
+            s.dim) != 0) {
+        return 1;
+    }
+
+    if (cudaMemcpy(
+            &host_status,
+            device_status,
+            sizeof(host_status),
+            cudaMemcpyDeviceToHost) !=
+            cudaSuccess ||
+        host_status != 0U) {
+        return 1;
+    }
+
+    /*
+     * Stable masked mean cross entropy on device.
+     */
+    if (cudaMemset(
+            workspace + dlogits,
+            0,
+            s.tv * sizeof(float)) !=
+            cudaSuccess ||
+        cudaMemset(
+            device_status,
+            0,
+            sizeof(*device_status)) !=
+            cudaSuccess) {
+        return 1;
+    }
+
+    niyah_cuda_train_loss_kernel<<<1U, 1U>>>(
+        workspace + logits,
+        (const uint32_t *)
+            train_state->device_targets,
+        token_count,
+        s.vocab,
+        loss_start,
+        workspace + dlogits,
+        device_loss,
+        device_status);
+
+    if (niyah_cuda_check_launch() != 0 ||
+        cudaMemcpy(
+            &host_status,
+            device_status,
+            sizeof(host_status),
+            cudaMemcpyDeviceToHost) !=
+            cudaSuccess ||
+        host_status != 0U ||
+        cudaMemcpy(
+            out_loss,
+            device_loss,
+            sizeof(float),
+            cudaMemcpyDeviceToHost) !=
+            cudaSuccess ||
+        !isfinite(*out_loss)) {
+        return 1;
+    }
+
+    /*
+     * Preserve CPU contract: only now zero caller-visible gradients.
+     */
+    if (niyah_cuda_train_state_zero_gradients(
+            train_state) != 0) {
+        return 1;
+    }
+
+    /*
+     * LM head + final norm.
+     *
+     * linear backward accumulates into dx, so every independent
+     * destination must be explicitly zeroed before first use.
+     */
+    if (niyah_cuda_train_state_zero_workspace(
+            train_state,
+            dh,
+            s.td) != 0 ||
+        niyah_cuda_train_linear_backward(
+            model_state,
+            train_state,
+            model_state->layout.lm_head,
+            final_norm,
+            dlogits,
+            dh,
+            token_count,
+            s.vocab,
+            s.dim) != 0) {
+        return 1;
+    }
+
+    {
+        NiyahCudaTrainCache last;
+
+        niyah_cuda_train_cache_view(
+            ((size_t)config->n_layers - 1U) *
+                s.layer_stride,
+            &s,
+            &last);
+
+        if (niyah_cuda_train_state_zero_workspace(
+                train_state,
+                dtmp,
+                s.td) != 0 ||
+            niyah_cuda_train_rmsnorm_backward(
+                model_state,
+                train_state,
+                model_state->layout.final_norm,
+                last.hidden_out,
+                dh,
+                dtmp,
+                token_count,
+                s.dim,
+                config->rms_norm_eps) != 0 ||
+            cudaMemcpy(
+                workspace + dh,
+                workspace + dtmp,
+                s.td * sizeof(float),
+                cudaMemcpyDeviceToDevice) !=
+                cudaSuccess) {
+            return 1;
+        }
+    }
+
+    /*
+     * Reverse transformer layers.
+     */
+    for (uint32_t layer_index =
+             config->n_layers;
+         layer_index-- > 0U;) {
+        NiyahCudaTrainCache c;
+        NiyahLayerLayout layer;
+
+        niyah_cuda_train_cache_view(
+            (size_t)layer_index *
+                s.layer_stride,
+            &s,
+            &c);
+
+        if (niyah_cuda_layer_layout(
+                model_state,
+                layer_index,
+                &layer) != 0) {
+            return 1;
+        }
+
+        if (cudaMemcpy(
+                workspace + dh_attn,
+                workspace + dh,
+                s.td * sizeof(float),
+                cudaMemcpyDeviceToDevice) !=
+                cudaSuccess) {
+            return 1;
+        }
+
+        /*
+         * FFN backward using proven B1 primitives.
+         *
+         * linear backward accumulates dx, therefore all reusable
+         * scratch destinations are zeroed before independent use.
+         */
+        if (niyah_cuda_train_state_zero_workspace(
+                train_state,
+                extra_dact,
+                s.tffn) != 0 ||
+            niyah_cuda_train_linear_backward(
+                model_state,
+                train_state,
+                layer.w_down,
+                c.act,
+                dh,
+                extra_dact,
+                token_count,
+                s.dim,
+                s.ffn) != 0 ||
+            niyah_cuda_train_silu_mul_backward(
+                train_state,
+                c.gate,
+                c.up,
+                extra_dact,
+                extra_dgate,
+                extra_dup,
+                s.tffn) != 0 ||
+            niyah_cuda_train_state_zero_workspace(
+                train_state,
+                dn2,
+                s.td) != 0 ||
+            niyah_cuda_train_linear_backward(
+                model_state,
+                train_state,
+                layer.w_gate,
+                c.norm2,
+                extra_dgate,
+                dn2,
+                token_count,
+                s.ffn,
+                s.dim) != 0 ||
+            niyah_cuda_train_state_zero_workspace(
+                train_state,
+                da,
+                s.td) != 0 ||
+            niyah_cuda_train_linear_backward(
+                model_state,
+                train_state,
+                layer.w_up,
+                c.norm2,
+                extra_dup,
+                da,
+                token_count,
+                s.ffn,
+                s.dim) != 0 ||
+            niyah_cuda_add_device(
+                workspace + dn2,
+                workspace + da,
+                s.td) != 0 ||
+            niyah_cuda_train_state_zero_workspace(
+                train_state,
+                dtmp,
+                s.td) != 0 ||
+            niyah_cuda_train_rmsnorm_backward(
+                model_state,
+                train_state,
+                layer.ffn_norm,
+                c.hidden_attn,
+                dn2,
+                dtmp,
+                token_count,
+                s.dim,
+                config->rms_norm_eps) != 0 ||
+            niyah_cuda_add_device(
+                workspace + dh_attn,
+                workspace + dtmp,
+                s.td) != 0) {
+            return 1;
+        }
+
+        /*
+         * Attention output projection.
+         */
+        if (niyah_cuda_train_state_zero_workspace(
+                train_state,
+                da,
+                s.td) != 0 ||
+            niyah_cuda_train_linear_backward(
+                model_state,
+                train_state,
+                layer.wo,
+                c.attn,
+                dh_attn,
+                da,
+                token_count,
+                s.dim,
+                s.dim) != 0 ||
+            niyah_cuda_train_attention_backward(
+                train_state,
+                c.q,
+                c.k,
+                c.v,
+                da,
+                dq,
+                dk,
+                dv,
+                token_count,
+                (size_t)config->n_heads,
+                (size_t)config->n_kv_heads,
+                model_state->layout.head_dim) != 0 ||
+            niyah_cuda_train_rope_backward(
+                train_state,
+                dq,
+                token_count,
+                (size_t)config->n_heads,
+                model_state->layout.head_dim) != 0 ||
+            niyah_cuda_train_rope_backward(
+                train_state,
+                dk,
+                token_count,
+                (size_t)config->n_kv_heads,
+                model_state->layout.head_dim) != 0) {
+            return 1;
+        }
+
+        /*
+         * Q/K/V projection backward:
+         * dn1 = dx_q + dx_k + dx_v
+         *
+         * linear backward accumulates into dx.  dn1 and dtmp are
+         * reused scratch spans, so zero each independent contribution.
+         */
+        if (niyah_cuda_train_state_zero_workspace(
+                train_state,
+                dn1,
+                s.td) != 0 ||
+            niyah_cuda_train_linear_backward(
+                model_state,
+                train_state,
+                layer.wq,
+                c.norm1,
+                dq,
+                dn1,
+                token_count,
+                s.dim,
+                s.dim) != 0 ||
+            niyah_cuda_train_state_zero_workspace(
+                train_state,
+                dtmp,
+                s.td) != 0 ||
+            niyah_cuda_train_linear_backward(
+                model_state,
+                train_state,
+                layer.wk,
+                c.norm1,
+                dk,
+                dtmp,
+                token_count,
+                s.kv_dim,
+                s.dim) != 0 ||
+            niyah_cuda_add_device(
+                workspace + dn1,
+                workspace + dtmp,
+                s.td) != 0 ||
+            niyah_cuda_train_state_zero_workspace(
+                train_state,
+                dtmp,
+                s.td) != 0 ||
+            niyah_cuda_train_linear_backward(
+                model_state,
+                train_state,
+                layer.wv,
+                c.norm1,
+                dv,
+                dtmp,
+                token_count,
+                s.kv_dim,
+                s.dim) != 0 ||
+            niyah_cuda_add_device(
+                workspace + dn1,
+                workspace + dtmp,
+                s.td) != 0 ||
+            niyah_cuda_train_state_zero_workspace(
+                train_state,
+                dtmp,
+                s.td) != 0 ||
+            niyah_cuda_train_rmsnorm_backward(
+                model_state,
+                train_state,
+                layer.attn_norm,
+                c.hidden_in,
+                dn1,
+                dtmp,
+                token_count,
+                s.dim,
+                config->rms_norm_eps) != 0) {
+            return 1;
+        }
+
+        if (cudaMemcpy(
+                workspace + dh,
+                workspace + dh_attn,
+                s.td * sizeof(float),
+                cudaMemcpyDeviceToDevice) !=
+                cudaSuccess ||
+            niyah_cuda_add_device(
+                workspace + dh,
+                workspace + dtmp,
+                s.td) != 0) {
+            return 1;
+        }
+    }
+
+    /*
+     * Deterministic token embedding accumulation.
+     * If LM head is tied, this adds into the already-populated shared span.
+     */
+    {
+        size_t item_count;
+        unsigned int blocks;
+
+        if (!niyah_cuda_size_mul_ok(
+                s.vocab,
+                s.dim,
+                &item_count) ||
+            niyah_cuda_blocks_for(
+                item_count,
+                threads,
+                &blocks) != 0) {
+            return 1;
+        }
+
+        niyah_cuda_train_embedding_grad_kernel
+            <<<blocks, threads>>>(
+                (float *)
+                    train_state->
+                        device_gradients,
+                workspace + dh,
+                (const uint32_t *)
+                    train_state->
+                        device_tokens,
+                token_count,
+                s.vocab,
+                s.dim,
+                model_state->
+                    layout.token_embedding);
+
+        if (niyah_cuda_check_launch() != 0)
+            return 1;
+    }
+
+    if (segment_ids != NULL) {
+        size_t item_count;
+        unsigned int blocks;
+
+        if (!niyah_cuda_size_mul_ok(
+                (size_t)config->n_segments,
+                s.dim,
+                &item_count) ||
+            niyah_cuda_blocks_for(
+                item_count,
+                threads,
+                &blocks) != 0) {
+            return 1;
+        }
+
+        niyah_cuda_train_segment_grad_kernel
+            <<<blocks, threads>>>(
+                (float *)
+                    train_state->
+                        device_gradients,
+                workspace + dh,
+                device_segments,
+                token_count,
+                (size_t)config->n_segments,
+                s.dim,
+                model_state->
+                    layout.segment_embedding);
+
+        if (niyah_cuda_check_launch() != 0)
+            return 1;
+    }
+
+    return 0;
 }
 
 extern "C" int niyah_cuda_decode_token(
@@ -1487,14 +3243,18 @@ extern "C" int niyah_cuda_decode_token(
 
         if (niyah_cuda_rope_device(
                 q,
+                1U,
                 (size_t)config->n_heads,
                 decode_state->head_dim,
-                position) != 0 ||
+                position,
+                1.0f) != 0 ||
             niyah_cuda_rope_device(
                 k,
+                1U,
                 (size_t)config->n_kv_heads,
                 decode_state->head_dim,
-                position) != 0) {
+                position,
+                1.0f) != 0) {
             return 1;
         }
 

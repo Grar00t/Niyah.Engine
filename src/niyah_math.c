@@ -9,15 +9,18 @@ void niyah_matvec(float *out,
                   size_t cols)
 {
     size_t r;
-    size_t c;
 
     if (out == NULL || matrix == NULL || x == NULL) {
         return;
     }
 
+#ifdef NIYAH_ENABLE_OPENMP
+#pragma omp parallel for schedule(static) if(rows >= 64U && cols >= 64U)
+#endif
     for (r = 0U; r < rows; ++r) {
         float sum = 0.0f;
         const float *row = matrix + r * cols;
+        size_t c;
         for (c = 0U; c < cols; ++c) {
             sum += row[c] * x[c];
         }
