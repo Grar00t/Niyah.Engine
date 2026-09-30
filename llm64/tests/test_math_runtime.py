@@ -99,4 +99,23 @@ assert max_abs < 1e-5, max_abs
 
 print("ROPE_F32=PASS")
 print(f"ROPE_MAX_ABS={max_abs:.9g}")
+
+# ---- SwiGLU parity ---------------------------------------------------------
+swiglu = lib.swiglu_f32
+swiglu.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.c_size_t]
+swiglu.restype = ctypes.c_int
+gate_src = [-4.0, -1.0, 0.0, 0.5, 2.0, 5.0]
+up_src   = [0.5, 2.0, 3.0, -1.0, 0.25, 1.5]
+gate = (ctypes.c_float * len(gate_src))(*gate_src)
+up = (ctypes.c_float * len(up_src))(*up_src)
+assert swiglu(gate, up, len(gate_src)) == 0
+ref = [(x / (1.0 + math.exp(-x))) * u for x, u in zip(gate_src, up_src)]
+got = [float(x) for x in gate]
+max_abs = max(abs(a-b) for a,b in zip(got, ref))
+assert max_abs < 2e-5, (max_abs, got, ref)
+assert swiglu(None, up, len(gate_src)) == 1
+assert swiglu(gate, None, len(gate_src)) == 1
+assert swiglu(gate, up, 0) == 1
+print("SWIGLU_F32=PASS")
+print(f"SWIGLU_MAX_ABS={max_abs:.9g}")
 print("MATH_RUNTIME=PASS")

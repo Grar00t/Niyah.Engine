@@ -7,6 +7,7 @@ global argmax_f32
 global exp_f32
 global softmax_f32
 global rope_f32
+global swiglu_f32
 
 section .rodata align=4
 one_f32:           dd 0x3f800000
@@ -393,6 +394,54 @@ rope_f32:
 .rope_return:
     add     rsp, 16
     pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+
+; int swiglu_f32(float *gate, const float *up, size_t n)
+; gate[i] = SiLU(gate[i]) * up[i]
+; SiLU(x) = x / (1 + exp(-x))
+swiglu_f32:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    sub     rsp, 24
+    test    rdi, rdi
+    jz      .sg_bad
+    test    rsi, rsi
+    jz      .sg_bad
+    test    rdx, rdx
+    jz      .sg_bad
+    mov     r12, rdi
+    mov     r13, rsi
+    mov     r14, rdx
+    xor     ebx, ebx
+.sg_loop:
+    cmp     rbx, r14
+    jae     .sg_ok
+    movss   xmm2, [r12 + rbx*4]
+    movss   [rsp], xmm2
+    xorps   xmm0, xmm0
+    subss   xmm0, xmm2
+    call    exp_f32
+    addss   xmm0, [rel one_f32]
+    movss   xmm2, [rsp]
+    divss   xmm2, xmm0
+    mulss   xmm2, [r13 + rbx*4]
+    movss   [r12 + rbx*4], xmm2
+    inc     rbx
+    jmp     .sg_loop
+.sg_ok:
+    xor     eax, eax
+    jmp     .sg_return
+.sg_bad:
+    mov     eax, 1
+.sg_return:
+    add     rsp, 24
     pop     r14
     pop     r13
     pop     r12
