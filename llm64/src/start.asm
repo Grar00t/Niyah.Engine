@@ -12,7 +12,7 @@ extern tokenizer_map_v1
 extern tokenizer_unmap_v1
 extern runtime_memory_create
 extern runtime_memory_destroy
-extern generate_one_stdout
+extern generate_greedy_stdout
 extern sys_write_all
 extern sys_exit
 
@@ -150,7 +150,7 @@ _start:
     mov     rdx, [r14 + TM_MAP_BASE]
     mov     rcx, [rbx + 32]
     mov     r8, r15
-    call    generate_one_stdout
+    call    generate_greedy_stdout
     mov     r13d, eax
 
     mov     rdi, r15
