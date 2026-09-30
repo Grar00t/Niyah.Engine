@@ -49,10 +49,19 @@ def checkpoint() -> bytes:
     _, kv_dim, token_embedding, layers, final_norm, total = model_layout()
     weights = [0.0] * total
 
-    # Prompt 'x' and BOS both point +X. Token 'A' has the strongest +X
-    # embedding, so tied lm_head must greedily choose raw-byte token 65.
-    for token, scale in ((256, 1.0), (ord("x"), 1.0), (ord("A"), 2.0)):
-        weights[token_embedding + token * DIM] = scale
+    # Transition design under tied embeddings with all Transformer matrices zero:
+    #   prompt x -> raw byte 'A' -> EOS.
+    # x/BOS point along +X; A=(2,1); EOS=(0,6).
+    vectors = {
+        256: (1.0, 0.0, 0.0, 0.0),
+        ord("x"): (1.0, 0.0, 0.0, 0.0),
+        ord("A"): (2.0, 1.0, 0.0, 0.0),
+        257: (0.0, 6.0, 0.0, 0.0),
+    }
+    for token, vector in vectors.items():
+        base = token_embedding + token * DIM
+        for i, value in enumerate(vector):
+            weights[base + i] = value
 
     cursor = layers
 
@@ -153,10 +162,12 @@ def main() -> int:
         )
         assert proc.stdout == b"A", (proc.stdout, proc.stderr)
 
-    print("NIYAH_ASM_FIRST_TOKEN=PASS")
+    print("NIYAH_ASM_GREEDY_LOOP=PASS")
     print("PROMPT=x")
-    print("ARGMAX_TOKEN=65")
+    print("GENERATED_TOKEN_1=65")
     print("GENERATED_BYTES=A")
+    print("NEXT_TOKEN=EOS")
+    print("GREEDY_EOS_STOP=PASS")
     return 0
 
 
