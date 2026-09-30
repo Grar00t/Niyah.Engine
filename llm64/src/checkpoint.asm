@@ -2,6 +2,8 @@ BITS 64
 DEFAULT REL
 
 %include "model.inc"
+%include "model_map.inc"
+%include "layout.inc"
 
 extern sys_open_ro
 extern sys_close
@@ -9,8 +11,11 @@ extern sys_fstat_size
 extern sys_mmap_ro
 extern sys_munmap
 extern crc32_ieee
+extern model_layout_from_header
 
 global checkpoint_validate_v2
+global checkpoint_map_model_v2
+global checkpoint_unmap_model
 
 section .text
 
@@ -426,4 +431,270 @@ checkpoint_validate_v2:
     pop     r13
     pop     r12
     pop     rbx
+    ret
+
+
+; ===========================================================================
+; int checkpoint_map_model_v2(const char *path, ModelMap *out)
+;
+; Keeps the validated V2 mapping alive for inference and exposes Section 1.
+;
+; eax:
+;   0 = success
+;   1 = format/corruption
+;   2 = I/O
+; ===========================================================================
+
+checkpoint_map_model_v2:
+    push    rbp
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 80
+
+    test    rdi, rdi
+    jz      .map_format
+    test    rsi, rsi
+    jz      .map_format
+
+    mov     r12, rdi                ; path
+    mov     r13, rsi                ; ModelMap*
+
+    ; Fail closed: clear the output handle first.
+    xor     eax, eax
+    mov     [r13 + MM_MAP_BASE], rax
+    mov     [r13 + MM_MAP_BYTES], rax
+    mov     [r13 + MM_HEADER], rax
+    mov     [r13 + MM_WEIGHTS], rax
+    mov     [r13 + MM_WEIGHT_BYTES], rax
+
+    ; Reuse the existing complete V2 format/CRC/finite validator first.
+    mov     rdi, r12
+    call    checkpoint_validate_v2
+    test    eax, eax
+    jnz     .map_return
+
+    ; Reopen for the persistent inference mapping.
+    mov     rdi, r12
+    call    sys_open_ro
+    test    rax, rax
+    js      .map_io
+
+    mov     r14, rax                ; fd
+
+    mov     rdi, r14
+    call    sys_fstat_size
+    test    rax, rax
+    js      .map_io_close
+
+    mov     r15, rax                ; mapped byte count
+    cmp     r15, CKPT_HEADER_SIZE + FILE_FOOTER_SIZE
+    jb      .map_format_close
+
+    mov     rdi, r14
+    mov     rsi, r15
+    call    sys_mmap_ro
+    test    rax, rax
+    js      .map_io_close
+
+    mov     rbx, rax                ; mapping base
+
+    mov     rdi, r14
+    call    sys_close
+
+    ; Recheck identity/version on the persistent mapping.
+    mov     rax, [rbx + CKPT_MAGIC_OFF]
+    mov     rcx, 0x504b43484159494e
+    cmp     rax, rcx
+    jne     .map_bad_unmap
+
+    cmp     dword [rbx + CKPT_VERSION_OFF], CKPT_VERSION_V2
+    jne     .map_bad_unmap
+
+    cmp     dword [rbx + CKPT_FLAGS_OFF], 0
+    jne     .map_bad_unmap
+
+    ; Recheck CRC on the exact mapping that will remain resident.
+    lea     rbp, [rbx + r15 - FILE_FOOTER_SIZE]
+
+    cmp     dword [rbp], CHECKSUM_CRC32
+    jne     .map_bad_unmap
+
+    mov     rdi, rbx
+    mov     rsi, r15
+    sub     rsi, FILE_FOOTER_SIZE
+    call    crc32_ieee
+
+    cmp     eax, [rbp + 4]
+    jne     .map_bad_unmap
+
+    ; Canonical geometry/layout must reproduce header weight_count.
+    mov     rdi, rbx
+    mov     rsi, rsp
+    call    model_layout_from_header
+    test    eax, eax
+    jnz     .map_bad_unmap
+
+    mov     rax, [rsp + L_TOTAL_FLOATS]
+    cmp     rax, [rbx + CKPT_WEIGHT_COUNT_OFF]
+    jne     .map_bad_unmap
+
+    ; Scan bounded section headers for exactly one required Section 1.
+    mov     r10d, [rbx + CKPT_SECTION_COUNT_OFF]
+    cmp     r10d, 1
+    jb      .map_bad_unmap
+    cmp     r10d, CKPT_MAX_SECTIONS
+    ja      .map_bad_unmap
+
+    lea     r8, [rbx + CKPT_HEADER_SIZE]
+    xor     r12d, r12d              ; section index
+    xor     r14d, r14d              ; model section seen
+
+.map_scan:
+    cmp     r12d, r10d
+    jae     .map_scan_done
+
+    mov     rax, rbp
+    sub     rax, r8
+    cmp     rax, CKPT_SECTION_HEADER
+    jb      .map_bad_unmap
+
+    mov     edx, [r8]               ; section id
+    mov     esi, [r8 + 4]           ; flags
+    mov     r9,  [r8 + 8]           ; payload bytes
+    add     r8, CKPT_SECTION_HEADER
+
+    mov     rax, rbp
+    sub     rax, r8
+    cmp     r9, rax
+    ja      .map_bad_unmap
+
+    cmp     edx, CKPT_SECTION_MODEL
+    jne     .map_advance
+
+    test    esi, CKPT_SECTION_REQUIRED
+    jz      .map_bad_unmap
+
+    test    r14d, r14d
+    jnz     .map_bad_unmap
+    mov     r14d, 1
+
+    ; Section-1 byte count must exactly match canonical FP32 weight_count.
+    mov     rax, [rbx + CKPT_WEIGHT_COUNT_OFF]
+    mov     rdx, rax
+    shr     rdx, 62
+    jnz     .map_bad_unmap
+    shl     rax, 2
+
+    cmp     r9, rax
+    jne     .map_bad_unmap
+
+    ; Preserve Section-1 view in temporary locals.
+    mov     [rsp + 72], r8
+    mov     [rsp + 64], r9
+
+.map_advance:
+    add     r8, r9
+    jc      .map_bad_unmap
+
+    inc     r12d
+    jmp     .map_scan
+
+.map_scan_done:
+    cmp     r8, rbp
+    jne     .map_bad_unmap
+
+    test    r14d, r14d
+    jz      .map_bad_unmap
+
+    mov     [r13 + MM_MAP_BASE], rbx
+    mov     [r13 + MM_MAP_BYTES], r15
+    mov     [r13 + MM_HEADER], rbx
+
+    mov     rax, [rsp + 72]
+    mov     [r13 + MM_WEIGHTS], rax
+
+    mov     rax, [rsp + 64]
+    mov     [r13 + MM_WEIGHT_BYTES], rax
+
+    xor     eax, eax
+    jmp     .map_return
+
+.map_bad_unmap:
+    mov     rdi, rbx
+    mov     rsi, r15
+    call    sys_munmap
+    mov     eax, 1
+    jmp     .map_return
+
+.map_format_close:
+    mov     rdi, r14
+    call    sys_close
+.map_format:
+    mov     eax, 1
+    jmp     .map_return
+
+.map_io_close:
+    mov     rdi, r14
+    call    sys_close
+.map_io:
+    mov     eax, 2
+
+.map_return:
+    add     rsp, 80
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    pop     rbp
+    ret
+
+
+; ===========================================================================
+; int checkpoint_unmap_model(ModelMap *map)
+; Safe no-op for an already-empty map.
+; ===========================================================================
+
+checkpoint_unmap_model:
+    push    r12
+
+    test    rdi, rdi
+    jz      .unmap_bad
+
+    mov     r12, rdi
+    mov     rax, [r12 + MM_MAP_BASE]
+    test    rax, rax
+    jz      .unmap_clear
+
+    mov     rsi, [r12 + MM_MAP_BYTES]
+    test    rsi, rsi
+    jz      .unmap_bad
+
+    mov     rdi, rax
+    call    sys_munmap
+    test    rax, rax
+    js      .unmap_io
+
+.unmap_clear:
+    xor     eax, eax
+    mov     [r12 + MM_MAP_BASE], rax
+    mov     [r12 + MM_MAP_BYTES], rax
+    mov     [r12 + MM_HEADER], rax
+    mov     [r12 + MM_WEIGHTS], rax
+    mov     [r12 + MM_WEIGHT_BYTES], rax
+
+    pop     r12
+    ret
+
+.unmap_bad:
+    mov     eax, 1
+    pop     r12
+    ret
+
+.unmap_io:
+    mov     eax, 2
+    pop     r12
     ret
