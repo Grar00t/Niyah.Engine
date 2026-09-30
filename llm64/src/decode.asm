@@ -460,5 +460,3 @@ decode_token_f32:
     pop r12
     pop rbx
     ret
-
-
