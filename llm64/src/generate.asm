@@ -14,13 +14,17 @@ extern sys_write_all
 
 global generate_greedy_stdout
 
+section .rodata
+gen_newline: db 10
+
 section .text
 
 ; int generate_greedy_stdout(const void *header,
 ;                            const float *weights,
 ;                            const void *tok_map,
 ;                            const char *prompt_cstr,
-;                            RuntimeMemory *runtime)
+;                            RuntimeMemory *runtime,
+;                            uint64_t max_new_tokens)
 ;
 ; Greedy autoregressive generation:
 ;   BOS -> prompt BPE -> argmax -> token bytes -> feed token -> repeat
@@ -33,7 +37,7 @@ generate_greedy_stdout:
     push    r13
     push    r14
     push    r15
-    sub     rsp, 96
+    sub     rsp, 112
 
     test    rdi, rdi
     jz      .bad
@@ -51,6 +55,7 @@ generate_greedy_stdout:
     mov     r14, rdx                ; mapped tokenizer
     mov     rbx, rcx                ; prompt C string
     mov     r15, r8                 ; RuntimeMemory
+    mov     [rsp + 96], r9          ; requested max-new-tokens; 0 = remaining context
 
     xor     eax, eax
     mov     [rsp + 0], rax          ; cache position
@@ -60,6 +65,7 @@ generate_greedy_stdout:
     mov     [rsp + 48], rax         ; decode stack bytes
     mov     [rsp + 56], rax         ; decoded-byte mapping
     mov     [rsp + 64], rax         ; decoded-byte capacity
+    mov     [rsp + 104], rax        ; generated token count
 
     cmp     dword [r12 + CKPT_CONTEXT_OFF], 1
     jb      .bad
@@ -120,6 +126,18 @@ generate_greedy_stdout:
     cmp     rcx, rdx
     ja      .bad_cleanup
 
+    ; Match C CLI preflight: requested generation must fit in the remaining context.
+    sub     rdx, rcx
+    mov     rax, [rsp + 96]
+    test    rax, rax
+    jnz     .max_explicit
+    mov     [rsp + 96], rdx
+    jmp     .max_ready
+.max_explicit:
+    cmp     rax, rdx
+    ja      .bad_cleanup
+.max_ready:
+
     xor     r10d, r10d
 .prompt_loop:
     cmp     r10, [rsp + 32]
@@ -166,6 +184,10 @@ generate_greedy_stdout:
     mov     [rsp + 56], rax
 
 .generate_loop:
+    mov     rax, [rsp + 104]
+    cmp     rax, [rsp + 96]
+    jae     .ok_cleanup
+
     ; Match the C runtime context contract: do not emit a token that
     ; cannot itself fit inside the configured context window.
     mov     rax, [rsp + 0]
@@ -207,6 +229,11 @@ generate_greedy_stdout:
     js      .io_cleanup
 
 .after_write:
+    inc     qword [rsp + 104]
+    mov     rax, [rsp + 104]
+    cmp     rax, [rsp + 96]
+    jae     .ok_cleanup
+
     ; If cache is full, the just-emitted prediction is the final token.
     mov     rax, [rsp + 0]
     mov     ecx, [r12 + CKPT_CONTEXT_OFF]
@@ -225,6 +252,13 @@ generate_greedy_stdout:
     jmp     .generate_loop
 
 .ok_cleanup:
+    ; Match the C CLI contract: successful generation always ends with LF.
+    mov     edi, 1
+    lea     rsi, [rel gen_newline]
+    mov     edx, 1
+    call    sys_write_all wrt ..plt
+    test    rax, rax
+    js      .io_cleanup
     xor     ebx, ebx
     jmp     .cleanup
 
@@ -266,7 +300,7 @@ generate_greedy_stdout:
     mov     eax, 1
 
 .ret:
-    add     rsp, 96
+    add     rsp, 112
     pop     r15
     pop     r14
     pop     r13

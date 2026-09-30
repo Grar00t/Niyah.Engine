@@ -160,8 +160,24 @@ def main() -> int:
             proc.stdout,
             proc.stderr,
         )
-        assert proc.stdout == b"A", (proc.stdout, proc.stderr)
+        assert proc.stdout == b"A\n", (proc.stdout, proc.stderr)
 
+        limited = subprocess.run(
+            [str(binary), str(ckpt), str(tok), "x", "1"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        assert limited.returncode == 0, (limited.returncode, limited.stderr)
+        assert limited.stdout == b"A\n", limited.stdout
+
+        overflow = subprocess.run(
+            [str(binary), str(ckpt), str(tok), "x", "7"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        assert overflow.returncode == 1, (overflow.returncode, overflow.stdout, overflow.stderr)
+        assert overflow.stdout == b"", overflow.stdout
+
+    print("NIYAH_ASM_MAX_NEW_TOKENS=PASS")
+    print("NIYAH_ASM_CONTEXT_PREFLIGHT=PASS")
     print("NIYAH_ASM_GREEDY_LOOP=PASS")
     print("PROMPT=x")
     print("GENERATED_TOKEN_1=65")

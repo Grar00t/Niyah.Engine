@@ -19,7 +19,7 @@ extern sys_exit
 global _start
 
 section .rodata
-usage_msg: db "usage: niyah-asm <model.ckpt> <tok.bin> [prompt]", 10
+usage_msg: db "usage: niyah-asm <model.ckpt> <tok.bin> [prompt] [max-new-tokens]", 10
 usage_len equ $ - usage_msg
 
 ckpt_msg: db "niyah-asm: checkpoint V2 rejected", 10
@@ -43,6 +43,8 @@ _start:
     cmp     rax, 3
     je      .argc_ok
     cmp     rax, 4
+    je      .argc_ok
+    cmp     rax, 5
     jne     .usage
 
 .argc_ok:
@@ -64,6 +66,16 @@ _start:
     mov     [r12 + MM_WEIGHT_BYTES], rax
     mov     [r14 + TM_MAP_BASE], rax
     mov     [r14 + TM_MAP_BYTES], rax
+    mov     [rsp + 120], rax        ; 0 = generate to context boundary
+
+    cmp     qword [rbx], 5
+    jne     .max_ready
+    mov     rdi, [rbx + 40]
+    call    parse_positive_u64
+    test    rdx, rdx
+    jz      .usage
+    mov     [rsp + 120], rax
+.max_ready:
 
     ; Persistent checkpoint mapping.
     mov     rdi, [rbx + 16]
@@ -150,6 +162,7 @@ _start:
     mov     rdx, [r14 + TM_MAP_BASE]
     mov     rcx, [rbx + 32]
     mov     r8, r15
+    mov     r9, [rsp + 120]
     call    generate_greedy_stdout
     mov     r13d, eax
 
@@ -169,10 +182,10 @@ _start:
     jnz     .internal_fail
 
     test    r13d, r13d
-    jz      .success_silent
+    jz      success_silent
     cmp     r13d, 2
     je      .io_fail
-    mov     edi, EXIT_INTERNAL
+    mov     edi, 1
     jmp     sys_exit
 
 .internal_cleanup_maps:
@@ -203,6 +216,38 @@ _start:
     mov     edi, EXIT_USAGE
     jmp     sys_exit
 
-.success_silent:
+; rdi = decimal C string -> rax=value, rdx=1 success; rdx=0 invalid/overflow
+parse_positive_u64:
+    xor     eax, eax
+    xor     edx, edx
+    xor     ecx, ecx
+.parse_digit:
+    movzx   r8d, byte [rdi + rcx]
+    test    r8b, r8b
+    jz      .parse_done
+    sub     r8d, '0'
+    cmp     r8d, 9
+    ja      .parse_fail
+    mov     r9, 10
+    mul     r9
+    test    rdx, rdx
+    jnz     .parse_fail
+    add     rax, r8
+    jc      .parse_fail
+    inc     rcx
+    jmp     .parse_digit
+.parse_done:
+    test    rcx, rcx
+    jz      .parse_fail
+    test    rax, rax
+    jz      .parse_fail
+    mov     edx, 1
+    ret
+.parse_fail:
+    xor     eax, eax
+    xor     edx, edx
+    ret
+
+success_silent:
     mov     edi, EXIT_OK
     jmp     sys_exit
