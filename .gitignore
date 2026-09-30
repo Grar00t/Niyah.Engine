@@ -22,3 +22,5 @@ tools/graph*.svg
 tools/vault-*.svg
 tools/vault.dot
 tools/sample.edges
+artifacts/
+llm64/niyah-asm
