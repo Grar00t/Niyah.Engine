@@ -1,0 +1,29 @@
+name: llm64-ci
+
+on:
+  push:
+    branches:
+      - feat/llm64-syscall-inference
+  pull_request:
+    paths:
+      - 'llm64/**'
+      - '.github/workflows/llm64-ci.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install NASM
+        run: sudo apt-get update && sudo apt-get install -y nasm binutils
+      - name: Build syscall-only ELF
+        run: make -C llm64 clean all check
+      - name: Inspect ELF dependencies
+        run: |
+          file llm64/niyah-asm
+          readelf -h llm64/niyah-asm
+          readelf -l llm64/niyah-asm
+          if readelf -d llm64/niyah-asm 2>/dev/null | grep -q '(NEEDED)'; then
+            echo 'unexpected dynamic dependency'
+            exit 1
+          fi
