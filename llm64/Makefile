@@ -6,7 +6,7 @@ TARGET := niyah-asm
 ASM := $(wildcard src/*.asm)
 OBJ := $(ASM:src/%.asm=build/%.o)
 
-.PHONY: all clean check test-formats test-tokenizer-runtime test-math-runtime test-attention-runtime test-model-layout test-runtime-memory
+.PHONY: all clean check test-formats test-tokenizer-runtime test-math-runtime test-attention-runtime test-model-layout test-runtime-memory test-decode-runtime
 
 all: $(TARGET)
 
@@ -43,6 +43,10 @@ test-model-layout: build/model_layout.o
 test-runtime-memory: build/runtime_memory.o build/model_layout.o build/syscalls.o
 	$(LD) -shared -o build/libruntime_memory.so build/runtime_memory.o build/model_layout.o build/syscalls.o -z noexecstack
 	$(PYTHON) tests/test_runtime_memory.py build/libruntime_memory.so
+
+test-decode-runtime: build/decode.o build/attention.o build/math_scalar.o build/model_layout.o build/runtime_memory.o build/syscalls.o
+	$(LD) -shared -o build/libdecode_runtime.so build/decode.o build/attention.o build/math_scalar.o build/model_layout.o build/runtime_memory.o build/syscalls.o -z noexecstack
+	$(PYTHON) tests/test_decode_runtime.py build/libdecode_runtime.so
 
 clean:
 	rm -rf build $(TARGET)
