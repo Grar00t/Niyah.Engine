@@ -166,6 +166,13 @@ generate_greedy_stdout:
     mov     [rsp + 56], rax
 
 .generate_loop:
+    ; Match the C runtime context contract: do not emit a token that
+    ; cannot itself fit inside the configured context window.
+    mov     rax, [rsp + 0]
+    mov     ecx, [r12 + CKPT_CONTEXT_OFF]
+    cmp     rax, rcx
+    jae     .ok_cleanup
+
     ; next = argmax(current logits)
     mov     rdi, [r15 + RT_LOGITS]
     mov     esi, [r12 + CKPT_VOCAB_OFF]
