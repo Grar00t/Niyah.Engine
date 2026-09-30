@@ -136,6 +136,15 @@ def main() -> int:
         valid.write_bytes(checkpoint(base_sections()))
         run(binary, valid, tok, 0)
 
+        bad_tok_crc = root / "bad-tok-crc.bin"
+        bad_tok = bytearray(tokenizer())
+        bad_tok[-1] ^= 0x80
+        bad_tok_crc.write_bytes(bytes(bad_tok))
+        run(binary, valid, bad_tok_crc, 65)
+
+        missing_tok = root / "missing-tok.bin"
+        run(binary, valid, missing_tok, 66)
+
         valid_schedule = root / "valid-schedule.ckpt"
         valid_schedule.write_bytes(checkpoint(base_sections() + [section(6, struct.pack("<Q", 1))]))
         run(binary, valid_schedule, tok, 0)
