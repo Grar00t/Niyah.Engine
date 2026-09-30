@@ -20,13 +20,23 @@
 %define CKPT_SEGMENTS_OFF       60
 %define CKPT_WEIGHT_COUNT_OFF   64
 
-%define CKPT_VERSION_V2         2
-%define CKPT_MAX_SECTIONS       64
-%define CKPT_SECTION_HEADER     16
-%define CKPT_SECTION_MODEL      1
-%define CKPT_SECTION_REQUIRED   1
-%define CHECKSUM_CRC32          1
-%define FILE_FOOTER_SIZE        8
+%define CKPT_VERSION_V2                  2
+%define CKPT_MAX_SECTIONS                64
+%define CKPT_SECTION_HEADER              16
+%define CKPT_SECTION_REQUIRED            1
+%define CKPT_SECTION_MODEL               1
+%define CKPT_SECTION_ADAMW_M             2
+%define CKPT_SECTION_ADAMW_V             3
+%define CKPT_SECTION_ADAMW_META          4
+%define CKPT_SECTION_TOKENIZER_IDENTITY  5
+%define CKPT_SECTION_LR_SCHEDULE         6
+%define CKPT_ADAMW_META_SIZE             32
+%define CKPT_TOKENIZER_IDENTITY_SIZE     32
+%define CKPT_LR_SCHEDULE_SIZE            8
+%define CKPT_SEEN_V2_REQUIRED            0x1f
+%define CKPT_SEEN_V2_WITH_SCHEDULE       0x3f
+%define CHECKSUM_CRC32                   1
+%define FILE_FOOTER_SIZE                 8
 
 ; Tokenizer v1 header (32 bytes)
 %define TOK_HEADER_SIZE         32
