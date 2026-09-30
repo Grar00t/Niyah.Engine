@@ -6,7 +6,7 @@ TARGET := niyah-asm
 ASM := $(wildcard src/*.asm)
 OBJ := $(ASM:src/%.asm=build/%.o)
 
-.PHONY: all clean check test-formats
+.PHONY: all clean check test-formats test-tokenizer-runtime
 
 all: $(TARGET)
 
@@ -23,6 +23,10 @@ check: $(TARGET)
 
 test-formats: $(TARGET)
 	$(PYTHON) tests/test_formats.py ./$(TARGET)
+
+test-tokenizer-runtime: build/tokenizer_runtime.o
+	$(LD) -shared -o build/libtokenizer_runtime.so build/tokenizer_runtime.o -z noexecstack
+	$(PYTHON) tests/test_tokenizer_runtime.py build/libtokenizer_runtime.so
 
 clean:
 	rm -rf build $(TARGET)
