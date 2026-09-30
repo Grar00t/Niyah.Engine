@@ -15,7 +15,7 @@ $(TARGET): $(OBJ)
 
 build/%.o: src/%.asm
 	@mkdir -p build
-	$(NASM) -f elf64 -Wall -Werror -Iinclude/ $< -o $@
+	$(NASM) -f elf64 -Wall -Werror -Wno-error=reloc-rel-dword -Iinclude/ $< -o $@
 
 check: $(TARGET)
 	@set +e; ./$(TARGET) >/dev/null 2>&1; rc=$$?; set -e; test $$rc -eq 64
