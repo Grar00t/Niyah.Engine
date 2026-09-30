@@ -13,7 +13,9 @@
 %define AT_FDCWD       -100
 %define O_RDONLY       0
 %define PROT_READ      1
+%define PROT_WRITE     2
 %define MAP_PRIVATE    2
+%define MAP_ANONYMOUS  0x20
 
 %define EINTR          4
 %define STAT_SIZE_OFF  48

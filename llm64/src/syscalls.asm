@@ -7,6 +7,7 @@ global sys_open_ro
 global sys_close
 global sys_fstat_size
 global sys_mmap_ro
+global sys_mmap_rw_anon
 global sys_munmap
 global sys_write_all
 global sys_exit
@@ -48,6 +49,18 @@ sys_mmap_ro:
     xor     edi, edi
     mov     edx, PROT_READ
     mov     r10d, MAP_PRIVATE
+    xor     r9d, r9d
+    mov     eax, SYS_mmap
+    syscall
+    ret
+
+; rdi = size -> rax = RW anonymous mapping or -errno
+sys_mmap_rw_anon:
+    mov     rsi, rdi
+    xor     edi, edi
+    mov     edx, PROT_READ | PROT_WRITE
+    mov     r10d, MAP_PRIVATE | MAP_ANONYMOUS
+    mov     r8, -1
     xor     r9d, r9d
     mov     eax, SYS_mmap
     syscall
