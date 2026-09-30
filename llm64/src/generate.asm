@@ -12,19 +12,22 @@ extern sys_mmap_rw_anon
 extern sys_munmap
 extern sys_write_all
 
-global generate_one_stdout
+global generate_greedy_stdout
 
 section .text
 
-; int generate_one_stdout(const void *header,
-;                         const float *weights,
-;                         const void *tok_map,
-;                         const char *prompt_cstr,
-;                         RuntimeMemory *runtime)
+; int generate_greedy_stdout(const void *header,
+;                            const float *weights,
+;                            const void *tok_map,
+;                            const char *prompt_cstr,
+;                            RuntimeMemory *runtime)
 ;
-; Emits exactly one greedy autoregressive token to stdout.
+; Greedy autoregressive generation:
+;   BOS -> prompt BPE -> argmax -> token bytes -> feed token -> repeat
+; Stops on EOS or when the model context can no longer accept another token.
+;
 ; Returns eax=0 success, eax=1 invalid/kernel failure, eax=2 mmap/write failure.
-generate_one_stdout:
+generate_greedy_stdout:
     push    rbx
     push    r12
     push    r13
@@ -51,12 +54,12 @@ generate_one_stdout:
 
     xor     eax, eax
     mov     [rsp + 0], rax          ; cache position
-    mov     [rsp + 16], rax         ; token buffer mapping
-    mov     [rsp + 24], rax         ; token buffer bytes
+    mov     [rsp + 16], rax         ; prompt token mapping
+    mov     [rsp + 24], rax         ; prompt token bytes
     mov     [rsp + 40], rax         ; decode stack mapping
     mov     [rsp + 48], rax         ; decode stack bytes
-    mov     [rsp + 56], rax         ; output mapping
-    mov     [rsp + 64], rax         ; output bytes
+    mov     [rsp + 56], rax         ; decoded-byte mapping
+    mov     [rsp + 64], rax         ; decoded-byte capacity
 
     cmp     dword [r12 + CKPT_CONTEXT_OFF], 1
     jb      .bad
@@ -70,9 +73,9 @@ generate_one_stdout:
     jnz     .len_loop
     jmp     .bad
 .len_done:
-    mov     [rsp + 8], rax          ; prompt byte count
+    mov     [rsp + 8], rax
 
-    ; BOS occupies position 0 and produces initial logits.
+    ; BOS occupies position zero and establishes initial logits/cache.
     mov     rdi, r12
     mov     rsi, r13
     mov     rdx, r15
@@ -107,7 +110,7 @@ generate_one_stdout:
     call    tokenizer_encode_mapped wrt ..plt
     test    rax, rax
     js      .bad_cleanup
-    mov     [rsp + 32], rax         ; prompt token count
+    mov     [rsp + 32], rax
 
     ; BOS + prompt must fit the model context.
     mov     rcx, [rsp + 0]
@@ -139,17 +142,7 @@ generate_one_stdout:
     jmp     .prompt_loop
 
 .prompt_done:
-    mov     rdi, [r15 + RT_LOGITS]
-    mov     esi, [r12 + CKPT_VOCAB_OFF]
-    call    argmax_f32 wrt ..plt
-    cmp     eax, 0xffffffff
-    je      .bad_cleanup
-    mov     [rsp + 72], eax         ; generated token
-
-    cmp     eax, TOK_EOS
-    je      .ok_cleanup
-
-    ; Explicit decode stack and byte output each receive 4*vocab bytes.
+    ; Decode scratch is allocated once and reused for all generated tokens.
     mov     eax, [r12 + CKPT_VOCAB_OFF]
     mov     rdx, rax
     shr     rdx, 62
@@ -172,6 +165,19 @@ generate_one_stdout:
     js      .io_cleanup
     mov     [rsp + 56], rax
 
+.generate_loop:
+    ; next = argmax(current logits)
+    mov     rdi, [r15 + RT_LOGITS]
+    mov     esi, [r12 + CKPT_VOCAB_OFF]
+    call    argmax_f32 wrt ..plt
+    cmp     eax, 0xffffffff
+    je      .bad_cleanup
+    mov     [rsp + 72], eax
+
+    cmp     eax, TOK_EOS
+    je      .ok_cleanup
+
+    ; Decode generated token to raw bytes and emit them.
     mov     rdi, r14
     mov     esi, [rsp + 72]
     mov     rdx, [rsp + 56]
@@ -184,7 +190,7 @@ generate_one_stdout:
     mov     [rsp + 80], rax
 
     test    rax, rax
-    jz      .ok_cleanup
+    jz      .after_write
 
     mov     edi, 1
     mov     rsi, [rsp + 56]
@@ -192,6 +198,24 @@ generate_one_stdout:
     call    sys_write_all wrt ..plt
     test    rax, rax
     js      .io_cleanup
+
+.after_write:
+    ; If cache is full, the just-emitted prediction is the final token.
+    mov     rax, [rsp + 0]
+    mov     ecx, [r12 + CKPT_CONTEXT_OFF]
+    cmp     rax, rcx
+    jae     .ok_cleanup
+
+    ; Feed generated token back through the Transformer for next logits.
+    mov     rdi, r12
+    mov     rsi, r13
+    mov     rdx, r15
+    lea     rcx, [rsp + 0]
+    mov     r8d, [rsp + 72]
+    call    decode_token_f32 wrt ..plt
+    test    eax, eax
+    jnz     .bad_cleanup
+    jmp     .generate_loop
 
 .ok_cleanup:
     xor     ebx, ebx
