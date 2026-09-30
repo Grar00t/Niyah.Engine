@@ -83,7 +83,7 @@ checkpoint_validate_v2:
     mov     r11d, [r14 + CKPT_SECTION_COUNT_OFF]
     xor     r10d, r10d
     lea     r8, [r14 + CKPT_HEADER_SIZE]
-    xor     ebx, ebx
+    xor     ebx, ebx                    ; seen known-section bitmask
 
 .section_loop:
     cmp     r10d, r11d
@@ -94,11 +94,11 @@ checkpoint_validate_v2:
     cmp     rax, CKPT_SECTION_HEADER
     jb      .format_unmap
 
-    mov     eax, [r8 + 4]
-    test    eax, ~CKPT_SECTION_REQUIRED
+    mov     ecx, [r8 + 4]               ; section flags
+    test    ecx, ~CKPT_SECTION_REQUIRED
     jnz     .format_unmap
-    mov     edx, [r8]
-    mov     r9, [r8 + 8]
+    mov     edx, [r8]                   ; section id
+    mov     r9, [r8 + 8]                ; payload bytes
     add     r8, CKPT_SECTION_HEADER
 
     mov     rax, r15
@@ -107,17 +107,32 @@ checkpoint_validate_v2:
     ja      .format_unmap
 
     cmp     edx, CKPT_SECTION_MODEL
-    jne     .section_advance
-    test    ebx, ebx
-    jnz     .format_unmap
+    je      .section_model
+    cmp     edx, CKPT_SECTION_ADAMW_M
+    je      .section_adamw_m
+    cmp     edx, CKPT_SECTION_ADAMW_V
+    je      .section_adamw_v
+    cmp     edx, CKPT_SECTION_ADAMW_META
+    je      .section_adamw_meta
+    cmp     edx, CKPT_SECTION_TOKENIZER_IDENTITY
+    je      .section_tokenizer_identity
+    cmp     edx, CKPT_SECTION_LR_SCHEDULE
+    je      .section_lr_schedule
 
-    mov     rax, [r14 + CKPT_WEIGHT_COUNT_OFF]
-    mov     rcx, rax
-    shr     rcx, 62
+    ; Forward-compatible unknown sections are allowed only when optional.
+    test    ecx, CKPT_SECTION_REQUIRED
     jnz     .format_unmap
-    shl     rax, 2
-    cmp     r9, rax
-    jne     .format_unmap
+    jmp     .section_advance
+
+.section_model:
+    test    ecx, CKPT_SECTION_REQUIRED
+    jz      .format_unmap
+    test    ebx, 0x01
+    jnz     .format_unmap
+    or      ebx, 0x01
+    call    .require_tensor_bytes
+    test    eax, eax
+    jnz     .format_unmap
 
     ; Reject NaN and infinity in model weights.
     mov     rcx, r9
@@ -125,7 +140,7 @@ checkpoint_validate_v2:
     mov     rax, r8
 .weight_scan:
     test    rcx, rcx
-    jz      .weight_ok
+    jz      .section_advance
     mov     edx, [rax]
     and     edx, 0x7f800000
     cmp     edx, 0x7f800000
@@ -133,8 +148,59 @@ checkpoint_validate_v2:
     add     rax, 4
     dec     rcx
     jmp     .weight_scan
-.weight_ok:
-    mov     ebx, 1
+
+.section_adamw_m:
+    test    ecx, CKPT_SECTION_REQUIRED
+    jz      .format_unmap
+    test    ebx, 0x02
+    jnz     .format_unmap
+    or      ebx, 0x02
+    call    .require_tensor_bytes
+    test    eax, eax
+    jnz     .format_unmap
+    jmp     .section_advance
+
+.section_adamw_v:
+    test    ecx, CKPT_SECTION_REQUIRED
+    jz      .format_unmap
+    test    ebx, 0x04
+    jnz     .format_unmap
+    or      ebx, 0x04
+    call    .require_tensor_bytes
+    test    eax, eax
+    jnz     .format_unmap
+    jmp     .section_advance
+
+.section_adamw_meta:
+    test    ecx, CKPT_SECTION_REQUIRED
+    jz      .format_unmap
+    test    ebx, 0x08
+    jnz     .format_unmap
+    cmp     r9, CKPT_ADAMW_META_SIZE
+    jne     .format_unmap
+    or      ebx, 0x08
+    jmp     .section_advance
+
+.section_tokenizer_identity:
+    test    ecx, CKPT_SECTION_REQUIRED
+    jz      .format_unmap
+    test    ebx, 0x10
+    jnz     .format_unmap
+    cmp     r9, CKPT_TOKENIZER_IDENTITY_SIZE
+    jne     .format_unmap
+    or      ebx, 0x10
+    jmp     .section_advance
+
+.section_lr_schedule:
+    test    ecx, CKPT_SECTION_REQUIRED
+    jz      .format_unmap
+    test    ebx, 0x20
+    jnz     .format_unmap
+    cmp     r9, CKPT_LR_SCHEDULE_SIZE
+    jne     .format_unmap
+    cmp     qword [r8], 0
+    je      .format_unmap
+    or      ebx, 0x20
 
 .section_advance:
     add     r8, r9
@@ -144,14 +210,33 @@ checkpoint_validate_v2:
 .sections_done:
     cmp     r8, r15
     jne     .format_unmap
-    cmp     ebx, 1
+    cmp     ebx, CKPT_SEEN_V2_REQUIRED
+    je      .sections_valid
+    cmp     ebx, CKPT_SEEN_V2_WITH_SCHEDULE
     jne     .format_unmap
+.sections_valid:
 
     mov     rdi, r14
     mov     rsi, r13
     call    sys_munmap
     xor     eax, eax
     jmp     .return
+
+; r8 points to current payload, r9 is payload size.
+; eax=0 when payload size equals canonical model tensor bytes, 1 otherwise.
+.require_tensor_bytes:
+    mov     rax, [r14 + CKPT_WEIGHT_COUNT_OFF]
+    mov     rdx, rax
+    shr     rdx, 62
+    jnz     .tensor_bad
+    shl     rax, 2
+    cmp     r9, rax
+    jne     .tensor_bad
+    xor     eax, eax
+    ret
+.tensor_bad:
+    mov     eax, 1
+    ret
 
 .format_close:
     mov     rdi, r12
