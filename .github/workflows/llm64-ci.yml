@@ -18,6 +18,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y nasm binutils
       - name: Build syscall-only ELF
         run: make -C llm64 clean all check
+      - name: Run checkpoint/tokenizer format regressions
+        run: make -C llm64 test-formats
       - name: Inspect ELF dependencies
         run: |
           file llm64/niyah-asm
