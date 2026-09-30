@@ -4,9 +4,15 @@ DEFAULT REL
 global matvec_f32_scalar
 global rmsnorm_f32
 global argmax_f32
+global exp_f32
+global softmax_f32
+global rope_f32
 
 section .rodata align=4
-one_f32: dd 0x3f800000
+one_f32:           dd 0x3f800000
+pos_80_f32:        dd 80.0
+neg_80_f32:        dd -80.0
+neg_2ln10000_f32:  dd -18.420680743952367
 
 section .text
 
@@ -124,4 +130,271 @@ argmax_f32:
     ret
 .am_bad:
     mov     eax, 0xffffffff
+    ret
+
+
+; ---------------------------------------------------------------------------
+; float exp_f32(float x)
+;
+; Pure x86 implementation. No libc/libm.
+; Input/output: xmm0.
+; Clamped to [-80,+80] to keep finite FP32 behavior for inference kernels.
+; ---------------------------------------------------------------------------
+exp_f32:
+    sub     rsp, 16
+
+    ucomiss xmm0, xmm0
+    jp      .exp_return             ; preserve NaN
+
+    movss   xmm1, [rel neg_80_f32]
+    maxss   xmm0, xmm1
+    movss   xmm1, [rel pos_80_f32]
+    minss   xmm0, xmm1
+
+    movss   [rsp], xmm0
+
+    ; exp(x) = 2^(x * log2(e))
+    fld     dword [rsp]
+    fldl2e
+    fmulp   st1, st0               ; y = x*log2(e)
+
+    ; y = n + f, with f in approximately [-0.5,+0.5].
+    fld     st0
+    frndint                         ; n, y
+    fxch    st1                     ; y, n
+    fsub    st0, st1               ; f, n
+
+    f2xm1                           ; 2^f - 1
+    fld1
+    faddp   st1, st0               ; 2^f, n
+    fscale                          ; 2^f * 2^n
+
+    fstp    dword [rsp + 4]
+    fstp    st0                     ; discard n
+
+    movss   xmm0, [rsp + 4]
+
+.exp_return:
+    add     rsp, 16
+    ret
+
+
+; ---------------------------------------------------------------------------
+; int softmax_f32(float *values, size_t count)
+;
+; Stable in-place softmax.
+; rdi = values
+; rsi = count
+; eax = 0 success, 1 invalid input
+; ---------------------------------------------------------------------------
+softmax_f32:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+
+    test    rdi, rdi
+    jz      .sm_bad
+    test    rsi, rsi
+    jz      .sm_bad
+
+    mov     r12, rdi
+    mov     r13, rsi
+
+    ; max
+    movss   xmm3, [r12]
+    ucomiss xmm3, xmm3
+    jp      .sm_bad
+
+    mov     rbx, 1
+.sm_max_loop:
+    cmp     rbx, r13
+    jae     .sm_max_done
+
+    movss   xmm1, [r12 + rbx*4]
+    ucomiss xmm1, xmm1
+    jp      .sm_bad
+
+    ucomiss xmm1, xmm3
+    jbe     .sm_max_next
+    movaps  xmm3, xmm1
+
+.sm_max_next:
+    inc     rbx
+    jmp     .sm_max_loop
+
+.sm_max_done:
+    xorps   xmm4, xmm4              ; sum
+    xor     ebx, ebx
+
+.sm_exp_loop:
+    cmp     rbx, r13
+    jae     .sm_exp_done
+
+    movss   xmm0, [r12 + rbx*4]
+    subss   xmm0, xmm3
+    call    exp_f32
+
+    movss   [r12 + rbx*4], xmm0
+    addss   xmm4, xmm0
+
+    inc     rbx
+    jmp     .sm_exp_loop
+
+.sm_exp_done:
+    xorps   xmm0, xmm0
+    ucomiss xmm4, xmm0
+    jp      .sm_bad
+    jbe     .sm_bad
+
+    xor     ebx, ebx
+.sm_norm_loop:
+    cmp     rbx, r13
+    jae     .sm_ok
+
+    movss   xmm0, [r12 + rbx*4]
+    divss   xmm0, xmm4
+    movss   [r12 + rbx*4], xmm0
+
+    inc     rbx
+    jmp     .sm_norm_loop
+
+.sm_ok:
+    xor     eax, eax
+    jmp     .sm_return
+
+.sm_bad:
+    mov     eax, 1
+
+.sm_return:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+
+; ---------------------------------------------------------------------------
+; int rope_f32(float *vector,
+;              size_t n_heads,
+;              size_t head_dim,
+;              size_t position)
+;
+; Same geometry as Niyah C decode:
+; inv_freq(i) = 10000^(-i/head_dim), i = 0,2,4...
+;
+; Uses:
+;   - exp_f32 once to derive the pair-frequency multiplier
+;   - x87 fsincos for sin/cos
+;
+; eax = 0 success, 1 invalid arguments
+; ---------------------------------------------------------------------------
+rope_f32:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 16
+
+    test    rdi, rdi
+    jz      .rope_bad
+    test    rsi, rsi
+    jz      .rope_bad
+
+    cmp     rdx, 2
+    jb      .rope_bad
+    test    rdx, 1
+    jnz     .rope_bad
+
+    mov     r12, rdi                ; vector
+    mov     r13, rsi                ; n_heads
+    mov     r14, rdx                ; head_dim
+    mov     r15, rcx                ; position
+
+    ; pair frequency multiplier:
+    ; exp(-2*ln(10000)/head_dim)
+    movss   xmm0, [rel neg_2ln10000_f32]
+    cvtsi2ss xmm1, r14
+    divss   xmm0, xmm1
+    call    exp_f32
+    movaps  xmm7, xmm0              ; frequency multiplier
+
+    cvtsi2ss xmm5, r15              ; float(position)
+
+    xor     ebx, ebx                ; head index
+
+.rope_head_loop:
+    cmp     rbx, r13
+    jae     .rope_ok
+
+    mov     rax, rbx
+    imul    rax, r14                ; base float index for head
+
+    movss   xmm6, [rel one_f32]     ; inv_freq = 1
+    xor     r10d, r10d              ; i = 0
+
+.rope_pair_loop:
+    cmp     r10, r14
+    jae     .rope_next_head
+
+    ; angle = position * inv_freq
+    movaps  xmm0, xmm5
+    mulss   xmm0, xmm6
+    movss   [rsp], xmm0
+
+    ; ST0=cos(angle), ST1=sin(angle)
+    fld     dword [rsp]
+    fsincos
+    fstp    dword [rsp + 4]         ; cos
+    fstp    dword [rsp + 8]         ; sin
+
+    lea     r11, [rax + r10]
+
+    movss   xmm2, [r12 + r11*4]       ; x0
+    movss   xmm3, [r12 + r11*4 + 4]   ; x1
+
+    ; y0 = x0*c - x1*s
+    movss   xmm0, [rsp + 4]
+    mulss   xmm0, xmm2
+
+    movss   xmm1, [rsp + 8]
+    mulss   xmm1, xmm3
+    subss   xmm0, xmm1
+
+    ; y1 = x0*s + x1*c
+    movss   xmm4, [rsp + 8]
+    mulss   xmm4, xmm2
+
+    movss   xmm1, [rsp + 4]
+    mulss   xmm1, xmm3
+    addss   xmm4, xmm1
+
+    movss   [r12 + r11*4], xmm0
+    movss   [r12 + r11*4 + 4], xmm4
+
+    mulss   xmm6, xmm7
+    add     r10, 2
+    jmp     .rope_pair_loop
+
+.rope_next_head:
+    inc     rbx
+    jmp     .rope_head_loop
+
+.rope_ok:
+    xor     eax, eax
+    jmp     .rope_return
+
+.rope_bad:
+    mov     eax, 1
+
+.rope_return:
+    add     rsp, 16
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
     ret
