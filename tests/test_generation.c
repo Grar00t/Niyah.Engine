@@ -224,11 +224,57 @@ static int test_eos_and_failure_reset(void)
     return 0;
 }
 
+
+static int test_repetition_guard(void)
+{
+    NiyahModelConfig model_config = tiny_config();
+    NiyahModel model;
+    NiyahKVCache cache;
+    NiyahGenerationConfig config;
+    NiyahGenerationResult result;
+    uint32_t output[9] = {0U};
+    const uint32_t prompt[1] = {1U};
+    float *workspace = NULL;
+    size_t workspace_floats = 0U;
+    size_t i;
+
+    memset(&model, 0, sizeof(model));
+    memset(&cache, 0, sizeof(cache));
+    memset(&config, 0, sizeof(config));
+    memset(&result, 0, sizeof(result));
+
+    CHECK(niyah_model_create(&model, &model_config) == NIYAH_OK);
+    CHECK(niyah_kv_cache_create(&cache, &model.config) == NIYAH_OK);
+    CHECK(niyah_generation_workspace_floats(&model.config, &workspace_floats) == NIYAH_OK);
+    workspace = (float *)calloc(workspace_floats, sizeof(float));
+    CHECK(workspace != NULL);
+
+    config.max_new_tokens = 9U;
+    config.stop_on_eos = 0;
+    config.sampler.temperature = 0.0f;
+    config.sampler.seed = UINT64_C(11);
+
+    CHECK(niyah_generate(&model, &cache, prompt, 1U, &config,
+                         output, 9U, &result,
+                         workspace, workspace_floats) == NIYAH_OK);
+    CHECK(result.generated_tokens == 8U);
+    CHECK(result.stopped_on_eos == 0);
+    for (i = 0U; i < result.generated_tokens; ++i) {
+        CHECK(output[i] == 0U);
+    }
+
+    free(workspace);
+    niyah_kv_cache_destroy(&cache);
+    niyah_model_destroy(&model);
+    return 0;
+}
+
 int main(void)
 {
     CHECK(test_sampler_contract() == 0);
     CHECK(test_generation_matches_manual_decode() == 0);
     CHECK(test_eos_and_failure_reset() == 0);
+    CHECK(test_repetition_guard() == 0);
 
     puts("NIYAH_GENERATION_P4=PASS");
     return 0;

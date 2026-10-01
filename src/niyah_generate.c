@@ -1,8 +1,41 @@
 #include "niyah/generate.h"
 
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+
+
+#define NIYAH_SAME_TOKEN_LIMIT 8U
+#define NIYAH_ENTROPY_FLOOR 0.05f
+
+static float niyah_generation_entropy(const float *logits, size_t count)
+{
+    size_t i;
+    float max_logit;
+    double sum = 0.0;
+    double weighted = 0.0;
+
+    if (logits == NULL || count == 0U) {
+        return 0.0f;
+    }
+    max_logit = logits[0];
+    for (i = 1U; i < count; ++i) {
+        if (logits[i] > max_logit) {
+            max_logit = logits[i];
+        }
+    }
+    for (i = 0U; i < count; ++i) {
+        const double e = exp((double)logits[i] - (double)max_logit);
+        sum += e;
+        weighted += e * ((double)logits[i] - (double)max_logit);
+    }
+    if (!(sum > 0.0) || !isfinite(sum) || !isfinite(weighted)) {
+        return 0.0f;
+    }
+    return (float)(log(sum) - weighted / sum);
+}
 
 static int niyah_size_add_ok(size_t a, size_t b, size_t *out)
 {
@@ -65,6 +98,8 @@ NiyahStatus niyah_generate(const NiyahModel *model,
     float *logits;
     size_t i;
     size_t generated = 0U;
+    uint32_t last_token = 0U;
+    size_t same_token_run = 0U;
     NiyahSampler sampler;
     NiyahStatus status;
 
@@ -128,6 +163,12 @@ NiyahStatus niyah_generate(const NiyahModel *model,
 
     while (generated < config->max_new_tokens) {
         uint32_t token = 0U;
+        const float entropy =
+            niyah_generation_entropy(logits, (size_t)model->config.vocab_size);
+
+        if (entropy < NIYAH_ENTROPY_FLOOR) {
+            break;
+        }
 
         status = niyah_sampler_sample(&sampler,
                                       logits,
@@ -141,8 +182,18 @@ NiyahStatus niyah_generate(const NiyahModel *model,
         generated += 1U;
         result->generated_tokens = generated;
 
+        if (generated == 1U || token != last_token) {
+            last_token = token;
+            same_token_run = 1U;
+        } else {
+            same_token_run += 1U;
+        }
+
         if (config->stop_on_eos != 0 && token == config->eos_token) {
             result->stopped_on_eos = 1;
+            break;
+        }
+        if (same_token_run >= NIYAH_SAME_TOKEN_LIMIT) {
             break;
         }
 

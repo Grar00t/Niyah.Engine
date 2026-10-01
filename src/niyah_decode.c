@@ -1,4 +1,5 @@
 #include "niyah/decode.h"
+#include "niyah_math_internal.h"
 
 #include <float.h>
 #include <math.h>
@@ -251,14 +252,10 @@ static NiyahStatus niyah_attention_one(float *out,
         float max_score = -FLT_MAX;
         float normalizer = 0.0f;
         size_t source;
-        size_t d;
 
         for (source = 0U; source <= position; ++source) {
             const float *k_head = cache->keys + layer_base + source * kv_dim + kv_head * head_dim;
-            float dot = 0.0f;
-            for (d = 0U; d < head_dim; ++d) {
-                dot += q_head[d] * k_head[d];
-            }
+            const float dot = niyah_dot_f32(q_head, k_head, head_dim);
             scores[source] = dot * scale;
             if (scores[source] > max_score) {
                 max_score = scores[source];
@@ -273,13 +270,14 @@ static NiyahStatus niyah_attention_one(float *out,
             return NIYAH_ERR_INVALID_CONFIG;
         }
 
-        for (d = 0U; d < head_dim; ++d) {
-            float value = 0.0f;
-            for (source = 0U; source <= position; ++source) {
-                const float *v_head = cache->values + layer_base + source * kv_dim + kv_head * head_dim;
-                value += (scores[source] / normalizer) * v_head[d];
-            }
-            out[head * head_dim + d] = value;
+        memset(out + head * head_dim, 0, head_dim * sizeof(float));
+        for (source = 0U; source <= position; ++source) {
+            const float *v_head =
+                cache->values + layer_base + source * kv_dim + kv_head * head_dim;
+            niyah_axpy_f32(out + head * head_dim,
+                           v_head,
+                           scores[source] / normalizer,
+                           head_dim);
         }
     }
 
