@@ -1,4 +1,5 @@
 #include "niyah/transformer.h"
+#include "niyah_model_internal.h"
 
 #include <float.h>
 #include <math.h>
@@ -217,6 +218,10 @@ static NiyahStatus niyah_transformer_forward_impl(const NiyahModel *model,
     float *gate;
     float *up;
     float *scores;
+    const float *token_embedding;
+    const float *segment_embedding;
+    const float *final_norm_weight;
+    const float *lm_head;
     size_t position;
     uint32_t layer_index;
     NiyahStatus status;
@@ -269,13 +274,20 @@ static NiyahStatus niyah_transformer_forward_impl(const NiyahModel *model,
     up = cursor; cursor += tffn;
     scores = cursor;
 
+    token_embedding = niyah_model_token_embedding_weights(model);
+    segment_embedding = niyah_model_segment_embedding_weights(model);
+    if (token_embedding == NULL ||
+        (segment_ids != NULL && segment_embedding == NULL)) {
+        return NIYAH_ERR_INVALID_CONFIG;
+    }
+
     for (position = 0U; position < token_count; ++position) {
         const uint32_t token = tokens[position];
         if ((size_t)token >= vocab) {
             return NIYAH_ERR_INVALID_ARGUMENT;
         }
         memcpy(hidden + position * dim,
-               model->weights + model->layout.token_embedding + (size_t)token * dim,
+               token_embedding + (size_t)token * dim,
                dim * sizeof(float));
         if (segment_ids != NULL) {
             const uint32_t segment = segment_ids[position];
@@ -285,13 +297,13 @@ static NiyahStatus niyah_transformer_forward_impl(const NiyahModel *model,
             }
             for (i = 0U; i < dim; ++i) {
                 hidden[position * dim + i] +=
-                    model->weights[model->layout.segment_embedding + (size_t)segment * dim + i];
+                    segment_embedding[(size_t)segment * dim + i];
             }
         }
     }
 
     for (layer_index = 0U; layer_index < config->n_layers; ++layer_index) {
-        NiyahLayerLayout layer;
+        NiyahLayerWeightsView layer;
         const float *attn_norm_weight;
         const float *wq;
         const float *wk;
@@ -302,19 +314,19 @@ static NiyahStatus niyah_transformer_forward_impl(const NiyahModel *model,
         const float *w_up;
         const float *w_down;
 
-        status = niyah_model_layer_layout(config, &model->layout, layer_index, &layer);
+        status = niyah_model_layer_weights_view(model, layer_index, &layer);
         if (status != NIYAH_OK) {
             return status;
         }
-        attn_norm_weight = model->weights + layer.attn_norm;
-        wq = model->weights + layer.wq;
-        wk = model->weights + layer.wk;
-        wv = model->weights + layer.wv;
-        wo = model->weights + layer.wo;
-        ffn_norm_weight = model->weights + layer.ffn_norm;
-        w_gate = model->weights + layer.w_gate;
-        w_up = model->weights + layer.w_up;
-        w_down = model->weights + layer.w_down;
+        attn_norm_weight = layer.attn_norm;
+        wq = layer.wq;
+        wk = layer.wk;
+        wv = layer.wv;
+        wo = layer.wo;
+        ffn_norm_weight = layer.ffn_norm;
+        w_gate = layer.w_gate;
+        w_up = layer.w_up;
+        w_down = layer.w_down;
 
         for (position = 0U; position < token_count; ++position) {
             status = niyah_rmsnorm(norm + position * dim,
@@ -397,17 +409,22 @@ static NiyahStatus niyah_transformer_forward_impl(const NiyahModel *model,
         }
     }
 
+    final_norm_weight = niyah_model_final_norm_weights(model);
+    lm_head = niyah_model_lm_head_weights(model);
+    if (final_norm_weight == NULL || lm_head == NULL) {
+        return NIYAH_ERR_INVALID_CONFIG;
+    }
     for (position = 0U; position < token_count; ++position) {
         status = niyah_rmsnorm(norm + position * dim,
                                hidden + position * dim,
-                               model->weights + model->layout.final_norm,
+                               final_norm_weight,
                                dim,
                                config->rms_norm_eps);
         if (status != NIYAH_OK) {
             return status;
         }
         niyah_matvec(logits + position * vocab,
-                     model->weights + model->layout.lm_head,
+                     lm_head,
                      norm + position * dim,
                      vocab,
                      dim);

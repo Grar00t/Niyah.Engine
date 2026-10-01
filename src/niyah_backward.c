@@ -558,7 +558,9 @@ static NiyahStatus niyah_train_backward_impl(
     size_t t;
     uint32_t layer_index;
 
-    if (model == NULL || model->weights == NULL || tokens == NULL || targets == NULL ||
+    if (model == NULL || model->weights == NULL ||
+        model->storage_kind != NIYAH_MODEL_STORAGE_OWNED ||
+        tokens == NULL || targets == NULL ||
         out_loss == NULL || gradients == NULL || gradients->values == NULL ||
         workspace == NULL || gradients->count != model->weight_count) {
         return NIYAH_ERR_INVALID_ARGUMENT;

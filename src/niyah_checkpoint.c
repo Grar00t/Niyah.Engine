@@ -436,6 +436,7 @@ static NiyahStatus niyah_validate_save_state(const NiyahModel *model,
 
     if (model == NULL || optimizer_state == NULL || optimizer_config == NULL ||
         out_tensor_bytes == NULL || model->weights == NULL ||
+        model->storage_kind != NIYAH_MODEL_STORAGE_OWNED ||
         optimizer_state->m == NULL || optimizer_state->v == NULL ||
         model->weight_count == 0U) {
         return NIYAH_ERR_INVALID_ARGUMENT;

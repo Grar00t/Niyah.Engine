@@ -75,6 +75,7 @@ endif()
 
 add_library(niyah STATIC
     src/niyah_model.c
+    src/niyah_casper.c
     src/niyah_math.c
     src/niyah_sha256.c
     src/niyah_tokenizer.c
@@ -606,6 +607,10 @@ if(NIYAH_BUILD_TESTS)
 
     add_executable(niyah_model_test tests/test_model.c)
     target_link_libraries(niyah_model_test PRIVATE niyah)
+
+    add_executable(niyah_casper_mmap_test tests/test_casper_mmap.c)
+    target_link_libraries(niyah_casper_mmap_test PRIVATE niyah)
+    add_test(NAME niyah_casper_mmap_test COMMAND niyah_casper_mmap_test)
 
     add_executable(niyah_tokenizer_test tests/test_tokenizer.c)
     target_link_libraries(niyah_tokenizer_test PRIVATE niyah)

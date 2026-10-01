@@ -1,5 +1,6 @@
 #include "niyah/decode.h"
 #include "niyah_math_internal.h"
+#include "niyah_model_internal.h"
 
 #include <float.h>
 #include <math.h>
@@ -313,6 +314,9 @@ static NiyahStatus niyah_transformer_decode_token_impl(const NiyahModel *model,
     float *gate;
     float *up;
     float *scores;
+    const float *token_embedding;
+    const float *final_norm_weight;
+    const float *lm_head;
     uint32_t layer_index;
     NiyahStatus status;
 
@@ -367,40 +371,43 @@ static NiyahStatus niyah_transformer_decode_token_impl(const NiyahModel *model,
     up = cursor; cursor += ffn;
     scores = cursor;
 
-    memcpy(hidden,
-           model->weights + model->layout.token_embedding + (size_t)token * dim,
+    token_embedding = niyah_model_token_embedding_weights(model);
+    if (token_embedding == NULL) return NIYAH_ERR_INVALID_CONFIG;
+    memcpy(hidden, token_embedding + (size_t)token * dim,
            dim * sizeof(float));
     if (segment_id != NULL) {
         size_t i;
         for (i = 0U; i < dim; ++i) {
-            hidden[i] +=
-                model->weights[model->layout.segment_embedding + (size_t)(*segment_id) * dim + i];
+            const float *segment_embedding =
+                niyah_model_segment_embedding_weights(model);
+            if (segment_embedding == NULL) return NIYAH_ERR_INVALID_CONFIG;
+            hidden[i] += segment_embedding[(size_t)(*segment_id) * dim + i];
         }
     }
 
     for (layer_index = 0U; layer_index < config->n_layers; ++layer_index) {
-        NiyahLayerLayout layer;
+        NiyahLayerWeightsView layer;
         const size_t layer_base = (size_t)layer_index * cache->context_length * kv_dim;
         const size_t cache_offset = layer_base + position * kv_dim;
         size_t i;
 
-        status = niyah_model_layer_layout(config, &model->layout, layer_index, &layer);
+        status = niyah_model_layer_weights_view(model, layer_index, &layer);
         if (status != NIYAH_OK) {
             return status;
         }
 
         status = niyah_rmsnorm(norm,
                                hidden,
-                               model->weights + layer.attn_norm,
+                               layer.attn_norm,
                                dim,
                                config->rms_norm_eps);
         if (status != NIYAH_OK) {
             return status;
         }
 
-        niyah_matvec(q, model->weights + layer.wq, norm, dim, dim);
-        niyah_matvec(k, model->weights + layer.wk, norm, kv_dim, dim);
-        niyah_matvec(v, model->weights + layer.wv, norm, kv_dim, dim);
+        niyah_matvec(q, layer.wq, norm, dim, dim);
+        niyah_matvec(k, layer.wk, norm, kv_dim, dim);
+        niyah_matvec(v, layer.wv, norm, kv_dim, dim);
         niyah_apply_rope(q, (size_t)config->n_heads, head_dim, position);
         niyah_apply_rope(k, (size_t)config->n_kv_heads, head_dim, position);
 
@@ -422,40 +429,45 @@ static NiyahStatus niyah_transformer_decode_token_impl(const NiyahModel *model,
             return status;
         }
 
-        niyah_matvec(proj, model->weights + layer.wo, attn, dim, dim);
+        niyah_matvec(proj, layer.wo, attn, dim, dim);
         for (i = 0U; i < dim; ++i) {
             hidden[i] += proj[i];
         }
 
         status = niyah_rmsnorm(norm,
                                hidden,
-                               model->weights + layer.ffn_norm,
+                               layer.ffn_norm,
                                dim,
                                config->rms_norm_eps);
         if (status != NIYAH_OK) {
             return status;
         }
-        niyah_matvec(gate, model->weights + layer.w_gate, norm, ffn, dim);
-        niyah_matvec(up, model->weights + layer.w_up, norm, ffn, dim);
+        niyah_matvec(gate, layer.w_gate, norm, ffn, dim);
+        niyah_matvec(up, layer.w_up, norm, ffn, dim);
         for (i = 0U; i < ffn; ++i) {
             gate[i] = niyah_silu(gate[i]) * up[i];
         }
-        niyah_matvec(proj, model->weights + layer.w_down, gate, dim, ffn);
+        niyah_matvec(proj, layer.w_down, gate, dim, ffn);
         for (i = 0U; i < dim; ++i) {
             hidden[i] += proj[i];
         }
     }
 
+    final_norm_weight = niyah_model_final_norm_weights(model);
+    lm_head = niyah_model_lm_head_weights(model);
+    if (final_norm_weight == NULL || lm_head == NULL) {
+        return NIYAH_ERR_INVALID_CONFIG;
+    }
     status = niyah_rmsnorm(norm,
                            hidden,
-                           model->weights + model->layout.final_norm,
+                           final_norm_weight,
                            dim,
                            config->rms_norm_eps);
     if (status != NIYAH_OK) {
         return status;
     }
     niyah_matvec(logits,
-                 model->weights + model->layout.lm_head,
+                 lm_head,
                  norm,
                  vocab,
                  dim);
