@@ -11,8 +11,9 @@ global swiglu_f32
 
 section .rodata align=4
 one_f32:           dd 0x3f800000
-pos_80_f32:        dd 80.0
-neg_80_f32:        dd -80.0
+exp_overflow_f32:  dd 88.72283935546875
+exp_zero_f32:      dd -103.97208404541016
+pos_inf_f32:       dd 0x7f800000
 neg_2ln10000_f32:  dd -18.420680743952367
 
 section .text
@@ -107,22 +108,37 @@ rmsnorm_f32:
     ret
 
 ; uint32_t argmax_f32(const float *values, size_t count)
-; rdi=values, rsi=count. Returns UINT32_MAX when count==0 or values==NULL.
+; rdi=values, rsi=count. Returns UINT32_MAX for invalid input or any
+; non-finite logit. This matches the native sampler's fail-closed contract.
 argmax_f32:
     test    rdi, rdi
     jz      .am_bad
     test    rsi, rsi
     jz      .am_bad
-    movss   xmm0, [rdi]
+
+    mov     edx, [rdi]
+    mov     r8d, edx
+    and     r8d, 0x7f800000
+    cmp     r8d, 0x7f800000
+    je      .am_bad
+    movd    xmm0, edx
+
     xor     eax, eax                  ; best index
     mov     rcx, 1
 .am_loop:
     cmp     rcx, rsi
     jae     .am_done
-    movss   xmm1, [rdi + rcx*4]
+
+    mov     edx, [rdi + rcx*4]
+    mov     r8d, edx
+    and     r8d, 0x7f800000
+    cmp     r8d, 0x7f800000
+    je      .am_bad
+    movd    xmm1, edx
+
     ucomiss xmm1, xmm0
     jbe     .am_next                  ; stable: first maximum wins
-    movss   xmm0, xmm1
+    movaps  xmm0, xmm1
     mov     eax, ecx
 .am_next:
     inc     rcx
@@ -139,7 +155,8 @@ argmax_f32:
 ;
 ; Pure x86 implementation. No libc/libm.
 ; Input/output: xmm0.
-; Clamped to [-80,+80] to keep finite FP32 behavior for inference kernels.
+; Preserve expf-style FP32 overflow/underflow instead of clamping finite
+; inputs, because the clamp changes softmax and SwiGLU inference results.
 ; ---------------------------------------------------------------------------
 exp_f32:
     sub     rsp, 16
@@ -147,10 +164,13 @@ exp_f32:
     ucomiss xmm0, xmm0
     jp      .exp_return             ; preserve NaN
 
-    movss   xmm1, [rel neg_80_f32]
-    maxss   xmm0, xmm1
-    movss   xmm1, [rel pos_80_f32]
-    minss   xmm0, xmm1
+    movss   xmm1, [rel exp_overflow_f32]
+    ucomiss xmm0, xmm1
+    ja      .exp_inf
+
+    movss   xmm1, [rel exp_zero_f32]
+    ucomiss xmm0, xmm1
+    jb      .exp_zero
 
     movss   [rsp], xmm0
 
@@ -174,6 +194,14 @@ exp_f32:
     fstp    st0                     ; discard n
 
     movss   xmm0, [rsp + 4]
+    jmp     .exp_return
+
+.exp_inf:
+    movss   xmm0, [rel pos_inf_f32]
+    jmp     .exp_return
+
+.exp_zero:
+    xorps   xmm0, xmm0
 
 .exp_return:
     add     rsp, 16
