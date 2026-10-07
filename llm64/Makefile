@@ -5,6 +5,7 @@ PYTHON ?= python3
 TARGET := niyah-asm
 ASM := $(wildcard src/*.asm)
 OBJ := $(ASM:src/%.asm=build/%.o)
+INCLUDES := $(wildcard include/*.inc)
 
 # NASM 3.x added the reloc-rel-dword warning class. Older NASM releases
 # reject the class name itself, so enable the exception only on major >= 3.
@@ -17,7 +18,7 @@ all: $(TARGET)
 $(TARGET): $(OBJ)
 	$(LD) -o $@ $(OBJ) -z noexecstack
 
-build/%.o: src/%.asm
+build/%.o: src/%.asm $(INCLUDES)
 	@mkdir -p build
 	$(NASM) -f elf64 -Wall -Werror $(NASM_RELOC_WARNING_FLAG) -Iinclude/ $< -o $@
 
