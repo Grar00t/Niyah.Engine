@@ -15,6 +15,10 @@ softmax.argtypes = [
 ]
 softmax.restype = ctypes.c_int
 
+argmax = lib.argmax_f32
+argmax.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.c_size_t]
+argmax.restype = ctypes.c_uint32
+
 rope = lib.rope_f32
 rope.argtypes = [
     ctypes.POINTER(ctypes.c_float),
@@ -36,7 +40,35 @@ for x in (-10.0, -2.0, -0.1, 0.0, 0.1, 2.0, 10.0):
 
     assert rel_err < 3e-6, (x, got, ref, rel_err)
 
+for x in (-100.0, -104.0, 90.0):
+    got = float(expf(x))
+    if x <= -104.0:
+        assert got == 0.0, (x, got)
+    elif x >= 90.0:
+        assert math.isinf(got) and got > 0.0, (x, got)
+    else:
+        ref = ctypes.c_float(math.exp(x)).value
+        assert abs(got - ref) <= max(abs(ref) * 0.06, 2e-45), (x, got, ref)
+
 print("EXP_F32=PASS")
+
+
+# ---- argmax finite contract ------------------------------------------------
+
+for src in (
+    [float("nan"), 1.0],
+    [1.0, float("nan")],
+    [float("inf"), 1.0],
+    [1.0, float("inf")],
+    [float("-inf"), 1.0],
+    [1.0, float("-inf")],
+):
+    arr = (ctypes.c_float * len(src))(*src)
+    assert argmax(arr, len(src)) == 0xFFFFFFFF, src
+
+finite = (ctypes.c_float * 4)(1.0, 3.0, 3.0, 2.0)
+assert argmax(finite, 4) == 1
+print("ARGMAX_NONFINITE_REJECT=PASS")
 
 
 # ---- softmax parity --------------------------------------------------------
@@ -56,6 +88,12 @@ for i, (a, b) in enumerate(zip(got, ref)):
     assert abs(a - b) < 3e-6, (i, a, b)
 
 assert abs(sum(got) - 1.0) < 3e-6
+
+tail = (ctypes.c_float * 2)(0.0, -100.0)
+assert softmax(tail, 2) == 0
+assert float(tail[1]) > 0.0
+tail_ref = ctypes.c_float(math.exp(-100.0)).value
+assert abs(float(tail[1]) - tail_ref) <= max(abs(tail_ref) * 0.06, 2e-45)
 
 print("SOFTMAX_F32=PASS")
 
@@ -104,8 +142,8 @@ print(f"ROPE_MAX_ABS={max_abs:.9g}")
 swiglu = lib.swiglu_f32
 swiglu.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.c_size_t]
 swiglu.restype = ctypes.c_int
-gate_src = [-4.0, -1.0, 0.0, 0.5, 2.0, 5.0]
-up_src   = [0.5, 2.0, 3.0, -1.0, 0.25, 1.5]
+gate_src = [-85.0, -4.0, -1.0, 0.0, 0.5, 2.0, 5.0]
+up_src   = [1.0e30, 0.5, 2.0, 3.0, -1.0, 0.25, 1.5]
 gate = (ctypes.c_float * len(gate_src))(*gate_src)
 up = (ctypes.c_float * len(up_src))(*up_src)
 assert swiglu(gate, up, len(gate_src)) == 0
@@ -113,6 +151,7 @@ ref = [(x / (1.0 + math.exp(-x))) * u for x, u in zip(gate_src, up_src)]
 got = [float(x) for x in gate]
 max_abs = max(abs(a-b) for a,b in zip(got, ref))
 assert max_abs < 2e-5, (max_abs, got, ref)
+assert abs(got[0] - ref[0]) < 2e-7, (got[0], ref[0])
 assert swiglu(None, up, len(gate_src)) == 1
 assert swiglu(gate, None, len(gate_src)) == 1
 assert swiglu(gate, up, 0) == 1
