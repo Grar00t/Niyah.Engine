@@ -11,7 +11,7 @@ INCLUDES := $(wildcard include/*.inc)
 # reject the class name itself, so enable the exception only on major >= 3.
 NASM_RELOC_WARNING_FLAG := $(shell major=$$($(NASM) -v 2>/dev/null | sed -n 's/^NASM version \([0-9][0-9]*\).*/\1/p'); if [ -n "$$major" ] && [ "$$major" -ge 3 ]; then printf '%s' '-Wno-error=reloc-rel-dword'; fi)
 
-.PHONY: all clean check test-formats test-tokenizer-runtime test-math-runtime test-attention-runtime test-model-layout test-runtime-memory test-decode-runtime test-generate-cli
+.PHONY: all clean check test-formats test-sha256-runtime test-tokenizer-identity test-tokenizer-runtime test-math-runtime test-attention-runtime test-model-layout test-runtime-memory test-decode-runtime test-generate-cli
 
 all: $(TARGET)
 
@@ -28,6 +28,14 @@ check: $(TARGET)
 
 test-formats: $(TARGET)
 	$(PYTHON) tests/test_formats.py ./$(TARGET)
+
+test-sha256-runtime: build/sha256.o
+	$(LD) -shared -o build/libsha256_runtime.so build/sha256.o -z noexecstack
+	$(PYTHON) tests/test_sha256_runtime.py build/libsha256_runtime.so
+
+test-tokenizer-identity: build/tokenizer_identity.o build/sha256.o build/syscalls.o
+	$(LD) -shared -o build/libtokenizer_identity.so build/tokenizer_identity.o build/sha256.o build/syscalls.o -z noexecstack
+	$(PYTHON) tests/test_tokenizer_identity.py build/libtokenizer_identity.so
 
 test-tokenizer-runtime: build/tokenizer_runtime.o
 	$(LD) -shared -o build/libtokenizer_runtime.so build/tokenizer_runtime.o -z noexecstack
