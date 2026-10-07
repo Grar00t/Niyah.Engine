@@ -141,7 +141,7 @@ assert n == 2048, n
 assert n > 4 * (BASE + len(deep_merges)), n
 
 deep_out = (ctypes.c_uint8 * n)()
-decoded = dec(
+deep_decoded = dec(
     ctypes.addressof(deep_blob),
     left,
     deep_out,
@@ -149,7 +149,7 @@ decoded = dec(
     deep_stack,
     len(deep_stack),
 )
-assert decoded == n, decoded
+assert deep_decoded == n, deep_decoded
 assert bytes(deep_out) == b"A" * n
 
 print("TOKENIZER_RUNTIME=PASS")
