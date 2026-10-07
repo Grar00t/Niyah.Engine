@@ -6,10 +6,9 @@ TARGET := niyah-asm
 ASM := $(wildcard src/*.asm)
 OBJ := $(ASM:src/%.asm=build/%.o)
 
-# NASM 3.x knows the reloc-rel-dword warning class; older supported NASM
-# versions reject the warning name itself. Feature-detect it so warnings
-# remain errors without making the build depend on a particular NASM major.
-NASM_RELOC_WARNING_FLAG := $(shell $(NASM) -Wno-error=reloc-rel-dword -v >/dev/null 2>&1 && printf '%s' '-Wno-error=reloc-rel-dword')
+# NASM 3.x added the reloc-rel-dword warning class. Older NASM releases
+# reject the class name itself, so enable the exception only on major >= 3.
+NASM_RELOC_WARNING_FLAG := $(shell major=$$($(NASM) -v 2>/dev/null | sed -n 's/^NASM version \([0-9][0-9]*\).*/\1/p'); if [ -n "$$major" ] && [ "$$major" -ge 3 ]; then printf '%s' '-Wno-error=reloc-rel-dword'; fi)
 
 .PHONY: all clean check test-formats test-tokenizer-runtime test-math-runtime test-attention-runtime test-model-layout test-runtime-memory test-decode-runtime test-generate-cli
 
