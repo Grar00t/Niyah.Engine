@@ -2,6 +2,7 @@ BITS 64
 DEFAULT REL
 
 %include "errors.inc"
+%include "model.inc"
 %include "model_map.inc"
 %include "tokenizer_map.inc"
 %include "runtime.inc"
@@ -10,6 +11,7 @@ extern checkpoint_map_model_v2
 extern checkpoint_unmap_model
 extern tokenizer_map_v1
 extern tokenizer_unmap_v1
+extern tokenizer_identity_sha256_mapped
 extern runtime_memory_create
 extern runtime_memory_destroy
 extern generate_greedy_stdout
@@ -52,7 +54,9 @@ _start:
     ;   rsp+0   ModelMap      (40 bytes)
     ;   rsp+48  TokenizerMap  (16 bytes)
     ;   rsp+64  RuntimeMemory (56 bytes)
-    sub     rsp, 128
+    ;   rsp+128 tokenizer identity digest (32 bytes)
+    ;   rsp+160 max-new-tokens (8 bytes)
+    sub     rsp, 176
 
     mov     r12, rsp
     lea     r14, [rsp + 48]
@@ -66,7 +70,7 @@ _start:
     mov     [r12 + MM_WEIGHT_BYTES], rax
     mov     [r14 + TM_MAP_BASE], rax
     mov     [r14 + TM_MAP_BYTES], rax
-    mov     [rsp + 120], rax        ; 0 = generate to context boundary
+    mov     [rsp + 160], rax        ; 0 = generate to context boundary
 
     cmp     qword [rbx], 5
     jne     .max_ready
@@ -74,7 +78,7 @@ _start:
     call    parse_positive_u64
     test    rdx, rdx
     jz      .usage
-    mov     [rsp + 120], rax
+    mov     [rsp + 160], rax
 .max_ready:
 
     ; Persistent checkpoint mapping.
@@ -147,10 +151,35 @@ _start:
     lea     rsi, [rel ok_msg]
     mov     edx, ok_len
     call    sys_write_all
+    test    rax, rax
+    js      .io_fail
     mov     edi, EXIT_OK
     jmp     sys_exit
 
 .generate:
+    ; Match the native C runtime contract: tokenizer vocabulary and semantic
+    ; identity must match the checkpoint before any generation occurs.
+    mov     rax, [r12 + MM_HEADER]
+    mov     ecx, [rax + CKPT_VOCAB_OFF]
+    mov     rdx, [r14 + TM_MAP_BASE]
+    cmp     ecx, [rdx + TOK_VOCAB_OFF]
+    jne     .compat_fail
+
+    mov     rdi, rdx
+    lea     rsi, [rsp + 128]
+    call    tokenizer_identity_sha256_mapped
+    test    eax, eax
+    jnz     .compat_hash_fail
+
+    mov     rsi, [r12 + MM_TOKENIZER_IDENTITY]
+    test    rsi, rsi
+    jz      .compat_fail
+    lea     rdi, [rsp + 128]
+    mov     ecx, CKPT_TOKENIZER_IDENTITY_SIZE
+    cld
+    repe cmpsb
+    jne     .compat_fail
+
     mov     rdi, [r12 + MM_HEADER]
     mov     rsi, r15
     call    runtime_memory_create
@@ -162,7 +191,7 @@ _start:
     mov     rdx, [r14 + TM_MAP_BASE]
     mov     rcx, [rbx + 32]
     mov     r8, r15
-    mov     r9, [rsp + 120]
+    mov     r9, [rsp + 160]
     call    generate_greedy_stdout
     mov     r13d, eax
 
@@ -187,6 +216,25 @@ _start:
     je      .io_fail
     mov     edi, 1
     jmp     sys_exit
+
+.compat_hash_fail:
+    cmp     eax, 2
+    je      .io_cleanup_maps
+
+.compat_fail:
+    mov     rdi, r14
+    call    tokenizer_unmap_v1
+    mov     rdi, r12
+    call    checkpoint_unmap_model
+    mov     edi, 1
+    jmp     sys_exit
+
+.io_cleanup_maps:
+    mov     rdi, r14
+    call    tokenizer_unmap_v1
+    mov     rdi, r12
+    call    checkpoint_unmap_model
+    jmp     .io_fail
 
 .internal_cleanup_maps:
     mov     rdi, r14
