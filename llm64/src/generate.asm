@@ -8,6 +8,7 @@ extern decode_token_f32
 extern argmax_f32
 extern tokenizer_encode_mapped
 extern tokenizer_decode_one_mapped
+extern tokenizer_decoded_length_mapped
 extern sys_mmap_rw_anon
 extern sys_munmap
 extern sys_write_all
@@ -79,6 +80,10 @@ generate_greedy_stdout:
     jnz     .len_loop
     jmp     .bad
 .len_done:
+    ; Match the native CLI: an empty prompt is invalid, including when the
+    ; generation limit is omitted.
+    test    rax, rax
+    jz      .bad
     mov     [rsp + 8], rax
 
     ; BOS occupies position zero and establishes initial logits/cache.
@@ -169,19 +174,12 @@ generate_greedy_stdout:
     test    rax, rax
     jz      .bad_cleanup
     mov     [rsp + 48], rax
-    mov     [rsp + 64], rax
 
     mov     rdi, rax
     call    sys_mmap_rw_anon wrt ..plt
     test    rax, rax
     js      .io_cleanup
     mov     [rsp + 40], rax
-
-    mov     rdi, [rsp + 64]
-    call    sys_mmap_rw_anon wrt ..plt
-    test    rax, rax
-    js      .io_cleanup
-    mov     [rsp + 56], rax
 
 .generate_loop:
     mov     rax, [rsp + 104]
@@ -206,6 +204,44 @@ generate_greedy_stdout:
     cmp     eax, TOK_EOS
     je      .ok_cleanup
 
+    ; Determine the exact expansion before decoding. Merge trees can expand
+    ; far beyond 4*vocab bytes, so size the output mapping from evidence.
+    mov     rdi, r14
+    mov     esi, [rsp + 72]
+    mov     rdx, [rsp + 40]
+    mov     ecx, [r12 + CKPT_VOCAB_OFF]
+    call    tokenizer_decoded_length_mapped wrt ..plt
+    test    rax, rax
+    js      .bad_cleanup
+    mov     [rsp + 80], rax
+
+    cmp     rax, [rsp + 64]
+    jbe     .output_ready
+
+    mov     rax, [rsp + 56]
+    test    rax, rax
+    jz      .allocate_output
+    mov     rdi, rax
+    mov     rsi, [rsp + 64]
+    call    sys_munmap wrt ..plt
+    test    rax, rax
+    js      .io_cleanup
+    xor     eax, eax
+    mov     [rsp + 56], rax
+    mov     [rsp + 64], rax
+
+.allocate_output:
+    mov     rdi, [rsp + 80]
+    test    rdi, rdi
+    jz      .output_ready
+    call    sys_mmap_rw_anon wrt ..plt
+    test    rax, rax
+    js      .io_cleanup
+    mov     [rsp + 56], rax
+    mov     rax, [rsp + 80]
+    mov     [rsp + 64], rax
+
+.output_ready:
     ; Decode generated token to raw bytes and emit them.
     mov     rdi, r14
     mov     esi, [rsp + 72]
