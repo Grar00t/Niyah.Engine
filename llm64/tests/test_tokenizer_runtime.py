@@ -26,6 +26,15 @@ dec.argtypes = [
 ]
 dec.restype = ctypes.c_ssize_t
 
+decoded_len = lib.tokenizer_decoded_length_mapped
+decoded_len.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_uint32,
+    ctypes.POINTER(ctypes.c_uint32),
+    ctypes.c_size_t,
+]
+decoded_len.restype = ctypes.c_ssize_t
+
 BASE = 258
 BOS = 256
 EOS = 257
@@ -106,6 +115,44 @@ assert enc(
     0,
 ) == 0
 
+# A legal merge tree can expand far beyond 4*vocab bytes. Build a chain that
+# doubles "A" eleven times: final token expands to 2048 bytes.
+deep_merges = []
+left = ord("A")
+for index in range(11):
+    output = BASE + index
+    deep_merges.append((left, left, output))
+    left = output
+
+deep_header = b"NIYAHTOK" + struct.pack(
+    "<6I", 1, 0, BASE, BASE + len(deep_merges), len(deep_merges), 0
+)
+deep_triples = b"".join(struct.pack("<III", *m) for m in deep_merges)
+deep_blob = ctypes.create_string_buffer(deep_header + deep_triples)
+deep_stack = (ctypes.c_uint32 * (BASE + len(deep_merges)))()
+
+n = decoded_len(
+    ctypes.addressof(deep_blob),
+    left,
+    deep_stack,
+    len(deep_stack),
+)
+assert n == 2048, n
+assert n > 4 * (BASE + len(deep_merges)), n
+
+deep_out = (ctypes.c_uint8 * n)()
+decoded = dec(
+    ctypes.addressof(deep_blob),
+    left,
+    deep_out,
+    n,
+    deep_stack,
+    len(deep_stack),
+)
+assert decoded == n, decoded
+assert bytes(deep_out) == b"A" * n
+
 print("TOKENIZER_RUNTIME=PASS")
+print("TOKENIZER_DECODE_LENGTH=PASS")
 print("ENCODED_IDS=" + ",".join(map(str, got)))
 print("ROUNDTRIP=" + decoded.decode("ascii"))
