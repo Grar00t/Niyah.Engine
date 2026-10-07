@@ -20,6 +20,15 @@ jobs:
         run: make -C llm64 clean all check
       - name: Run checkpoint/tokenizer format regressions
         run: make -C llm64 test-formats
+      - name: Run runtime regression targets
+        run: |
+          make -C llm64 test-tokenizer-runtime
+          make -C llm64 test-math-runtime
+          make -C llm64 test-attention-runtime
+          make -C llm64 test-model-layout
+          make -C llm64 test-runtime-memory
+          make -C llm64 test-decode-runtime
+          make -C llm64 test-generate-cli
       - name: Inspect ELF dependencies
         run: |
           file llm64/niyah-asm
