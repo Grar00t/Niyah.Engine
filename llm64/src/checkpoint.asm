@@ -452,7 +452,7 @@ checkpoint_map_model_v2:
     push    r13
     push    r14
     push    r15
-    sub     rsp, 80
+    sub     rsp, 88
 
     test    rdi, rdi
     jz      .map_format
@@ -469,27 +469,21 @@ checkpoint_map_model_v2:
     mov     [r13 + MM_HEADER], rax
     mov     [r13 + MM_WEIGHTS], rax
     mov     [r13 + MM_WEIGHT_BYTES], rax
+    mov     [r13 + MM_TOKENIZER_IDENTITY], rax
 
-    ; Reuse the existing complete V2 format/CRC/finite validator first.
-    mov     rdi, r12
-    call    checkpoint_validate_v2
-    test    eax, eax
-    jnz     .map_return
-
-    ; Reopen for the persistent inference mapping.
+    ; Open once. Every validation below is performed on the exact mapping
+    ; retained for inference, eliminating the validate/reopen TOCTOU window.
     mov     rdi, r12
     call    sys_open_ro
     test    rax, rax
     js      .map_io
-
-    mov     r14, rax                ; fd
+    mov     r14, rax
 
     mov     rdi, r14
     call    sys_fstat_size
     test    rax, rax
     js      .map_io_close
-
-    mov     r15, rax                ; mapped byte count
+    mov     r15, rax
     cmp     r15, CKPT_HEADER_SIZE + FILE_FOOTER_SIZE
     jb      .map_format_close
 
@@ -498,35 +492,37 @@ checkpoint_map_model_v2:
     call    sys_mmap_ro
     test    rax, rax
     js      .map_io_close
-
-    mov     rbx, rax                ; mapping base
+    mov     rbx, rax
 
     mov     rdi, r14
     call    sys_close
 
-    ; Recheck identity/version on the persistent mapping.
+    ; Header contract.
     mov     rax, [rbx + CKPT_MAGIC_OFF]
     mov     rcx, 0x504b43484159494e
     cmp     rax, rcx
     jne     .map_bad_unmap
-
     cmp     dword [rbx + CKPT_VERSION_OFF], CKPT_VERSION_V2
     jne     .map_bad_unmap
-
     cmp     dword [rbx + CKPT_FLAGS_OFF], 0
     jne     .map_bad_unmap
-
-    ; Recheck CRC on the exact mapping that will remain resident.
-    lea     rbp, [rbx + r15 - FILE_FOOTER_SIZE]
-
-    cmp     dword [rbp], CHECKSUM_CRC32
+    cmp     dword [rbx + CKPT_RESERVED_OFF], 0
     jne     .map_bad_unmap
 
+    mov     eax, [rbx + CKPT_SECTION_COUNT_OFF]
+    cmp     eax, 5
+    jb      .map_bad_unmap
+    cmp     eax, CKPT_MAX_SECTIONS
+    ja      .map_bad_unmap
+
+    ; Footer and CRC on the retained mapping.
+    lea     rbp, [rbx + r15 - FILE_FOOTER_SIZE]
+    cmp     dword [rbp], CHECKSUM_CRC32
+    jne     .map_bad_unmap
     mov     rdi, rbx
     mov     rsi, r15
     sub     rsi, FILE_FOOTER_SIZE
     call    crc32_ieee
-
     cmp     eax, [rbp + 4]
     jne     .map_bad_unmap
 
@@ -536,21 +532,20 @@ checkpoint_map_model_v2:
     call    model_layout_from_header
     test    eax, eax
     jnz     .map_bad_unmap
-
     mov     rax, [rsp + L_TOTAL_FLOATS]
     cmp     rax, [rbx + CKPT_WEIGHT_COUNT_OFF]
     jne     .map_bad_unmap
 
-    ; Scan bounded section headers for exactly one required Section 1.
-    mov     r10d, [rbx + CKPT_SECTION_COUNT_OFF]
-    cmp     r10d, 1
-    jb      .map_bad_unmap
-    cmp     r10d, CKPT_MAX_SECTIONS
-    ja      .map_bad_unmap
+    ; Layout scratch is no longer needed; reuse tail slots as validation locals.
+    xor     eax, eax
+    mov     [rsp + 56], rax         ; tokenizer identity payload
+    mov     [rsp + 64], rax         ; seen-section bitmask
+    mov     [rsp + 72], rax         ; model payload
+    mov     [rsp + 80], rax         ; model payload bytes
 
+    mov     r10d, [rbx + CKPT_SECTION_COUNT_OFF]
+    xor     r12d, r12d
     lea     r8, [rbx + CKPT_HEADER_SIZE]
-    xor     r12d, r12d              ; section index
-    xor     r14d, r14d              ; model section seen
 
 .map_scan:
     cmp     r12d, r10d
@@ -561,10 +556,13 @@ checkpoint_map_model_v2:
     cmp     rax, CKPT_SECTION_HEADER
     jb      .map_bad_unmap
 
-    mov     edx, [r8]               ; section id
-    mov     esi, [r8 + 4]           ; flags
-    mov     r9,  [r8 + 8]           ; payload bytes
+    mov     edx, [r8]
+    mov     esi, [r8 + 4]
+    mov     r9, [r8 + 8]
     add     r8, CKPT_SECTION_HEADER
+
+    test    esi, ~CKPT_SECTION_REQUIRED
+    jnz     .map_bad_unmap
 
     mov     rax, rbp
     sub     rax, r8
@@ -572,33 +570,127 @@ checkpoint_map_model_v2:
     ja      .map_bad_unmap
 
     cmp     edx, CKPT_SECTION_MODEL
-    jne     .map_advance
+    je      .map_model
+    cmp     edx, CKPT_SECTION_ADAMW_M
+    je      .map_adamw_m
+    cmp     edx, CKPT_SECTION_ADAMW_V
+    je      .map_adamw_v
+    cmp     edx, CKPT_SECTION_ADAMW_META
+    je      .map_adamw_meta
+    cmp     edx, CKPT_SECTION_TOKENIZER_IDENTITY
+    je      .map_tokenizer_identity
+    cmp     edx, CKPT_SECTION_LR_SCHEDULE
+    je      .map_lr_schedule
 
     test    esi, CKPT_SECTION_REQUIRED
-    jz      .map_bad_unmap
-
-    test    r14d, r14d
     jnz     .map_bad_unmap
-    mov     r14d, 1
+    jmp     .map_advance
 
-    ; Section-1 byte count must exactly match canonical FP32 weight_count.
+.map_model:
+    test    esi, CKPT_SECTION_REQUIRED
+    jz      .map_bad_unmap
+    mov     eax, [rsp + 64]
+    test    eax, 0x01
+    jnz     .map_bad_unmap
+    or      eax, 0x01
+    mov     [rsp + 64], eax
+
     mov     rax, [rbx + CKPT_WEIGHT_COUNT_OFF]
     mov     rdx, rax
     shr     rdx, 62
     jnz     .map_bad_unmap
     shl     rax, 2
-
     cmp     r9, rax
     jne     .map_bad_unmap
 
-    ; Preserve Section-1 view in temporary locals.
     mov     [rsp + 72], r8
-    mov     [rsp + 64], r9
+    mov     [rsp + 80], r9
+
+    ; Match the canonical validator: model weights must all be finite.
+    mov     rcx, r9
+    shr     rcx, 2
+    mov     rax, r8
+.map_weight_scan:
+    test    rcx, rcx
+    jz      .map_advance
+    mov     edx, [rax]
+    and     edx, 0x7f800000
+    cmp     edx, 0x7f800000
+    je      .map_bad_unmap
+    add     rax, 4
+    dec     rcx
+    jmp     .map_weight_scan
+
+.map_adamw_m:
+    test    esi, CKPT_SECTION_REQUIRED
+    jz      .map_bad_unmap
+    mov     eax, [rsp + 64]
+    test    eax, 0x02
+    jnz     .map_bad_unmap
+    or      eax, 0x02
+    mov     [rsp + 64], eax
+    jmp     .map_require_tensor
+
+.map_adamw_v:
+    test    esi, CKPT_SECTION_REQUIRED
+    jz      .map_bad_unmap
+    mov     eax, [rsp + 64]
+    test    eax, 0x04
+    jnz     .map_bad_unmap
+    or      eax, 0x04
+    mov     [rsp + 64], eax
+
+.map_require_tensor:
+    mov     rax, [rbx + CKPT_WEIGHT_COUNT_OFF]
+    mov     rdx, rax
+    shr     rdx, 62
+    jnz     .map_bad_unmap
+    shl     rax, 2
+    cmp     r9, rax
+    jne     .map_bad_unmap
+    jmp     .map_advance
+
+.map_adamw_meta:
+    test    esi, CKPT_SECTION_REQUIRED
+    jz      .map_bad_unmap
+    mov     eax, [rsp + 64]
+    test    eax, 0x08
+    jnz     .map_bad_unmap
+    or      eax, 0x08
+    mov     [rsp + 64], eax
+    cmp     r9, CKPT_ADAMW_META_SIZE
+    jne     .map_bad_unmap
+    jmp     .map_advance
+
+.map_tokenizer_identity:
+    test    esi, CKPT_SECTION_REQUIRED
+    jz      .map_bad_unmap
+    mov     eax, [rsp + 64]
+    test    eax, 0x10
+    jnz     .map_bad_unmap
+    or      eax, 0x10
+    mov     [rsp + 64], eax
+    cmp     r9, CKPT_TOKENIZER_IDENTITY_SIZE
+    jne     .map_bad_unmap
+    mov     [rsp + 56], r8
+    jmp     .map_advance
+
+.map_lr_schedule:
+    test    esi, CKPT_SECTION_REQUIRED
+    jz      .map_bad_unmap
+    mov     eax, [rsp + 64]
+    test    eax, 0x20
+    jnz     .map_bad_unmap
+    or      eax, 0x20
+    mov     [rsp + 64], eax
+    cmp     r9, CKPT_LR_SCHEDULE_SIZE
+    jne     .map_bad_unmap
+    cmp     qword [r8], 0
+    je      .map_bad_unmap
 
 .map_advance:
     add     r8, r9
     jc      .map_bad_unmap
-
     inc     r12d
     jmp     .map_scan
 
@@ -606,8 +698,17 @@ checkpoint_map_model_v2:
     cmp     r8, rbp
     jne     .map_bad_unmap
 
-    test    r14d, r14d
-    jz      .map_bad_unmap
+    mov     eax, [rsp + 64]
+    cmp     eax, CKPT_SEEN_V2_REQUIRED
+    je      .map_sections_valid
+    cmp     eax, CKPT_SEEN_V2_WITH_SCHEDULE
+    jne     .map_bad_unmap
+
+.map_sections_valid:
+    cmp     qword [rsp + 72], 0
+    je      .map_bad_unmap
+    cmp     qword [rsp + 56], 0
+    je      .map_bad_unmap
 
     mov     [r13 + MM_MAP_BASE], rbx
     mov     [r13 + MM_MAP_BYTES], r15
@@ -615,9 +716,10 @@ checkpoint_map_model_v2:
 
     mov     rax, [rsp + 72]
     mov     [r13 + MM_WEIGHTS], rax
-
-    mov     rax, [rsp + 64]
+    mov     rax, [rsp + 80]
     mov     [r13 + MM_WEIGHT_BYTES], rax
+    mov     rax, [rsp + 56]
+    mov     [r13 + MM_TOKENIZER_IDENTITY], rax
 
     xor     eax, eax
     jmp     .map_return
@@ -643,7 +745,7 @@ checkpoint_map_model_v2:
     mov     eax, 2
 
 .map_return:
-    add     rsp, 80
+    add     rsp, 88
     pop     r15
     pop     r14
     pop     r13
@@ -651,7 +753,6 @@ checkpoint_map_model_v2:
     pop     rbx
     pop     rbp
     ret
-
 
 ; ===========================================================================
 ; int checkpoint_unmap_model(ModelMap *map)
@@ -685,6 +786,7 @@ checkpoint_unmap_model:
     mov     [r12 + MM_HEADER], rax
     mov     [r12 + MM_WEIGHTS], rax
     mov     [r12 + MM_WEIGHT_BYTES], rax
+    mov     [r12 + MM_TOKENIZER_IDENTITY], rax
 
     pop     r12
     ret
