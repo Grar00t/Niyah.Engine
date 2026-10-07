@@ -5,6 +5,7 @@ DEFAULT REL
 
 global tokenizer_encode_mapped
 global tokenizer_decode_one_mapped
+global tokenizer_decoded_length_mapped
 
 section .text
 
@@ -236,4 +237,89 @@ tokenizer_decode_one_mapped:
     pop     r13
     pop     r12
     pop     rbx
+    ret
+
+
+; ssize_t tokenizer_decoded_length_mapped(
+;   const void *tok,
+;   uint32_t token,
+;   uint32_t *stack,
+;   size_t stack_capacity)
+;
+; Returns the exact byte expansion length for one token, or -1 on invalid input,
+; overflow, or insufficient stack capacity. BOS/EOS expand to zero bytes.
+tokenizer_decoded_length_mapped:
+    test    rdi, rdi
+    jz      .len_bad
+
+    mov     eax, esi
+    cmp     eax, TOK_BOS
+    je      .len_zero
+    cmp     eax, TOK_EOS
+    je      .len_zero
+    cmp     eax, [rdi + TOK_VOCAB_OFF]
+    jae     .len_bad
+    cmp     eax, 256
+    jb      .len_one
+
+    test    rdx, rdx
+    jz      .len_bad
+    test    rcx, rcx
+    jz      .len_bad
+
+    mov     [rdx], eax
+    mov     r10, 1                  ; stack size
+    xor     r11d, r11d             ; byte count
+
+.len_loop:
+    test    r10, r10
+    jz      .len_ok
+
+    dec     r10
+    mov     eax, [rdx + r10*4]
+    cmp     eax, 256
+    jb      .len_emit
+    cmp     eax, TOK_BOS
+    je      .len_loop
+    cmp     eax, TOK_EOS
+    je      .len_loop
+
+    sub     eax, TOK_BASE_VOCAB
+    cmp     eax, [rdi + TOK_MERGE_COUNT_OFF]
+    jae     .len_bad
+
+    mov     r9d, eax
+    imul    r9, TOK_MERGE_SIZE
+    lea     r9, [rdi + r9 + TOK_HEADER_SIZE]
+
+    lea     rax, [r10 + 2]
+    cmp     rax, rcx
+    ja      .len_bad
+
+    mov     r8d, [r9 + 4]
+    mov     [rdx + r10*4], r8d
+    mov     r8d, [r9 + 0]
+    mov     [rdx + r10*4 + 4], r8d
+    add     r10, 2
+    jmp     .len_loop
+
+.len_emit:
+    inc     r11
+    jz      .len_bad
+    jmp     .len_loop
+
+.len_ok:
+    mov     rax, r11
+    ret
+
+.len_one:
+    mov     eax, 1
+    ret
+
+.len_zero:
+    xor     eax, eax
+    ret
+
+.len_bad:
+    mov     rax, -1
     ret
