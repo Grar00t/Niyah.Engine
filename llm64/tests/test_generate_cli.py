@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import binascii
+import hashlib
 from pathlib import Path
 import struct
 import subprocess
@@ -45,7 +46,7 @@ def model_layout() -> tuple[int, int, int, int, int, int]:
     return head_dim, kv_dim, token_embedding, layers, final_norm, total
 
 
-def checkpoint() -> bytes:
+def checkpoint(identity: bytes) -> bytes:
     _, kv_dim, token_embedding, layers, final_norm, total = model_layout()
     weights = [0.0] * total
 
@@ -90,7 +91,7 @@ def checkpoint() -> bytes:
     tensor = struct.pack(f"<{len(weights)}f", *weights)
     zero_state = b"\0" * len(tensor)
     meta = struct.pack("<ffffffQ", 1e-3, 0.9, 0.999, 1e-8, 0.0, 1.0, 1)
-    identity = bytes(range(32))
+    assert len(identity) == 32
 
     sections = [
         section(1, tensor),
@@ -138,15 +139,30 @@ def tokenizer() -> bytes:
     return header + crc_footer(header)
 
 
+def tokenizer_identity(tok: bytes) -> bytes:
+    base_vocab, vocab, merge_count = struct.unpack_from("<III", tok, 16)
+    triples = tok[32:32 + merge_count * 12]
+    semantic = (
+        b"NIYAH-TOKENIZER-V1"
+        + struct.pack("<III", base_vocab, vocab, merge_count)
+        + triples
+    )
+    return hashlib.sha256(semantic).digest()
+
+
 def main() -> int:
     binary = Path(sys.argv[1]).resolve()
 
     with tempfile.TemporaryDirectory(prefix="niyah-gen-") as tmp:
         root = Path(tmp)
         ckpt = root / "model.ckpt"
+        bad_identity_ckpt = root / "bad-identity.ckpt"
         tok = root / "tok.bin"
-        ckpt.write_bytes(checkpoint())
-        tok.write_bytes(tokenizer())
+        tok_bytes = tokenizer()
+        identity = tokenizer_identity(tok_bytes)
+        ckpt.write_bytes(checkpoint(identity))
+        bad_identity_ckpt.write_bytes(checkpoint(bytes(32)))
+        tok.write_bytes(tok_bytes)
 
         proc = subprocess.run(
             [str(binary), str(ckpt), str(tok), "x"],
@@ -176,9 +192,33 @@ def main() -> int:
         assert overflow.returncode == 1, (overflow.returncode, overflow.stdout, overflow.stderr)
         assert overflow.stdout == b"", overflow.stdout
 
+        for empty_args in (
+            [str(binary), str(ckpt), str(tok), ""],
+            [str(binary), str(ckpt), str(tok), "", "1"],
+        ):
+            empty = subprocess.run(
+                empty_args,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            assert empty.returncode == 1, (empty.returncode, empty.stdout, empty.stderr)
+            assert empty.stdout == b"", empty.stdout
+
+        identity_mismatch = subprocess.run(
+            [str(binary), str(bad_identity_ckpt), str(tok), "x", "1"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        assert identity_mismatch.returncode == 1, (
+            identity_mismatch.returncode,
+            identity_mismatch.stdout,
+            identity_mismatch.stderr,
+        )
+        assert identity_mismatch.stdout == b"", identity_mismatch.stdout
+
     print("NIYAH_ASM_MAX_NEW_TOKENS=PASS")
     print("NIYAH_ASM_CONTEXT_PREFLIGHT=PASS")
     print("NIYAH_ASM_GREEDY_LOOP=PASS")
+    print("NIYAH_ASM_EMPTY_PROMPT_REJECT=PASS")
+    print("NIYAH_ASM_TOKENIZER_IDENTITY=PASS")
     print("PROMPT=x")
     print("GENERATED_TOKEN_1=65")
     print("GENERATED_BYTES=A")
