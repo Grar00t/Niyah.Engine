@@ -20,7 +20,7 @@ runtime_memory_create:
     push rbx
     push r12
     push r13
-    sub rsp, L_SIZE
+    sub rsp, L_SIZE + 8
 
     test rdi, rdi
     jz .bad
@@ -144,7 +144,7 @@ runtime_memory_create:
     mov eax, 1
 
 .ret:
-    add rsp, L_SIZE
+    add rsp, L_SIZE + 8
     pop r13
     pop r12
     pop rbx
@@ -154,6 +154,7 @@ runtime_memory_create:
 runtime_memory_destroy:
     push rbx
     push r12
+    sub rsp, 8
 
     test rdi, rdi
     jz .destroy_bad
@@ -201,12 +202,14 @@ runtime_memory_destroy:
     mov [r12 + RT_LOGITS], rax
     mov [r12 + RT_LOGITS_BYTES], rax
 
+    add rsp, 8
     pop r12
     pop rbx
     ret
 
 .destroy_bad:
     mov eax, 1
+    add rsp, 8
     pop r12
     pop rbx
     ret
