@@ -22,6 +22,8 @@ jobs:
         run: make -C llm64 test-formats
       - name: Run runtime regression targets
         run: |
+          make -C llm64 test-sha256-runtime
+          make -C llm64 test-tokenizer-identity
           make -C llm64 test-tokenizer-runtime
           make -C llm64 test-math-runtime
           make -C llm64 test-attention-runtime
