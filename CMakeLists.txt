@@ -93,6 +93,7 @@ add_library(niyah STATIC
     src/niyah_optimizer.c
     src/niyah_checkpoint.c
     src/niyah_coordination.c
+    src/niyah_oracle.c
     src/niyah_receipt.c
     src/niyah_receipt_chain.c
 )
@@ -612,6 +613,33 @@ if(NIYAH_BUILD_TESTS)
     target_link_libraries(niyah_casper_mmap_test PRIVATE niyah)
     add_test(NAME niyah_casper_mmap_test COMMAND niyah_casper_mmap_test)
 
+    add_executable(
+        niyah_casper_external_mmap_test
+        tests/test_casper_external_mmap.c
+    )
+    target_link_libraries(niyah_casper_external_mmap_test PRIVATE niyah)
+    add_test(
+        NAME niyah_casper_external_mmap_test
+        COMMAND niyah_casper_external_mmap_test
+    )
+    set_tests_properties(
+        niyah_casper_external_mmap_test
+        PROPERTIES
+            LABELS "external;casper;mmap"
+            SKIP_RETURN_CODE 77
+    )
+
+    add_test(
+        NAME niyah_casper_external_identity_test
+        COMMAND ${CMAKE_COMMAND}
+            -DTEST_EXECUTABLE=$<TARGET_FILE:niyah_casper_external_mmap_test>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_casper_external_identity.cmake
+    )
+    set_tests_properties(niyah_casper_external_identity_test PROPERTIES
+        LABELS "external;casper;mmap"
+        SKIP_REGULAR_EXPRESSION "SKIP: external model is not configured"
+    )
+
     add_executable(niyah_tokenizer_test tests/test_tokenizer.c)
     target_link_libraries(niyah_tokenizer_test PRIVATE niyah)
 
@@ -1009,6 +1037,28 @@ if(NIYAH_BUILD_TESTS)
         NAME niyah_coordination_test
         COMMAND niyah_coordination_test
     )
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(niyah_oracle_test tests/test_oracle.c)
+    target_link_libraries(niyah_oracle_test PRIVATE niyah)
+    if(MSVC)
+        target_compile_options(niyah_oracle_test PRIVATE /W4 /WX)
+    else()
+        target_compile_options(niyah_oracle_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME niyah_oracle_test COMMAND niyah_oracle_test)
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(niyah_oracle_coordination_test tests/test_oracle_coordination.c)
+    target_link_libraries(niyah_oracle_coordination_test PRIVATE niyah)
+    if(MSVC)
+        target_compile_options(niyah_oracle_coordination_test PRIVATE /W4 /WX)
+    else()
+        target_compile_options(niyah_oracle_coordination_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME niyah_oracle_coordination_test COMMAND niyah_oracle_coordination_test)
 endif()
 
 if(NIYAH_BUILD_TESTS)
