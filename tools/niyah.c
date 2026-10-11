@@ -2214,7 +2214,7 @@ cleanup:
     return exit_code;
 }
 
-int main(int argc, char **argv)
+static int niyah_cli_main(int argc, char **argv)
 {
     if (argc == 2 &&
         strcmp(argv[1], "--help") == 0) {
@@ -2245,3 +2245,95 @@ int main(int argc, char **argv)
     usage(stderr);
     return 2;
 }
+
+
+/* NIYAH_UTF8_ARGV_WRAPPER_V1 */
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+
+static void niyah_utf8_free_args(int argc, char **argv)
+{
+    int i;
+    if (argv == NULL) return;
+    for (i = 0; i < argc; ++i) free(argv[i]);
+    free(argv);
+}
+
+int wmain(int argc, wchar_t **wargv)
+{
+    char **argv;
+    int i;
+    int rc;
+
+    if (argc < 0) return 1;
+    argv = (char **)calloc((size_t)argc + 1U, sizeof(*argv));
+    if (argv == NULL) return 1;
+
+    for (i = 0; i < argc; ++i) {
+        int required = WideCharToMultiByte(
+            CP_UTF8, WC_ERR_INVALID_CHARS,
+            wargv[i], -1, NULL, 0, NULL, NULL);
+
+        if (required <= 0) {
+            fprintf(stderr, "argv_utf8_size_failed index=%d\n", i);
+            niyah_utf8_free_args(argc, argv);
+            return 1;
+        }
+
+        argv[i] = (char *)malloc((size_t)required);
+        if (argv[i] == NULL) {
+            niyah_utf8_free_args(argc, argv);
+            return 1;
+        }
+
+        if (WideCharToMultiByte(
+                CP_UTF8, WC_ERR_INVALID_CHARS,
+                wargv[i], -1, argv[i], required, NULL, NULL
+            ) != required) {
+            fprintf(stderr, "argv_utf8_conversion_failed index=%d\n", i);
+            niyah_utf8_free_args(argc, argv);
+            return 1;
+        }
+
+        if (required > 1 &&
+            MultiByteToWideChar(
+                CP_UTF8, MB_ERR_INVALID_CHARS,
+                argv[i], required - 1, NULL, 0
+            ) <= 0) {
+            fprintf(stderr, "argv_utf8_validation_failed index=%d\n", i);
+            niyah_utf8_free_args(argc, argv);
+            return 1;
+        }
+    }
+
+    if (GetEnvironmentVariableW(L"NIYAH_ARGV_UTF8_DIAG", NULL, 0) > 0U) {
+        for (i = 1; i + 1 < argc; ++i) {
+            if (strcmp(argv[i], "--prompt") == 0) {
+                const unsigned char *p =
+                    (const unsigned char *)argv[i + 1];
+                fprintf(stderr, "prompt_utf8_hex=");
+                while (*p != 0U) {
+                    fprintf(stderr, "%02x", (unsigned int)*p++);
+                }
+                fprintf(stderr, "\n");
+            }
+        }
+    }
+
+    rc = niyah_cli_main(argc, argv);
+    niyah_utf8_free_args(argc, argv);
+    return rc;
+}
+#else
+int main(int argc, char **argv)
+{
+    return niyah_cli_main(argc, argv);
+}
+#endif
