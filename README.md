@@ -28,6 +28,11 @@
 
 No hosted-model API or external LLM runtime is required by the model core.
 
+The feature lineage also includes a read-only Casper v5 mmap adapter for
+inference. Native training/checkpoints use owned canonical FP32 weights; the
+adapter accesses a different stored tensor order through model views. See
+[Architecture](docs/ARCHITECTURE.md) for that boundary.
+
 > [!IMPORTANT]
 > Niyah.Engine is currently a **research runtime**, not a released general-purpose assistant. The project distinguishes implementation success from model-quality claims.
 
@@ -86,6 +91,15 @@ See [Architecture](docs/ARCHITECTURE.md) for the full system boundary.
 
 ## Current status
 
+The [2026-10-13 local audit](docs/LOCAL_AUDIT_2026-10-13.md) compares GitHub with
+both local checkouts. The later tested work is in the dirty review checkout at
+base `6ec58869fca15cb6034bd5a689e9a04483651d4c`, including unpublished repairs
+and repetition controls. Its saved architecture-86 CUDA gate records **69
+passed, 2 skipped, 0 failed**; the skips require external Casper fixtures.
+Eighteen saved generation runs show less repetition on three prompts, while
+language quality remains weak. These receipts do not certify a clean commit
+or establish general CPU/CUDA equivalence.
+
 | Area | Current evidence state |
 |---|---|
 | Native model core | Implemented and exercised |
@@ -96,14 +110,15 @@ See [Architecture](docs/ARCHITECTURE.md) for the full system boundary.
 | Optional CUDA backend | Implemented; evidence depends on the specific tested revision/configuration |
 | Native evaluation API | Implemented and exercised |
 | Diagnostic logit/KV probe | Implemented on current `main` |
-| Held-out learning | Demonstrated on the current pilot validation distribution through step 1905 |
+| Held-out learning | Historical pilot improvement through step 1905; later Wikipedia adaptation has a distribution tradeoff |
+| Repetition controls | Implemented in the local review checkout; bounded CPU/CUDA generation evidence in the dated audit |
 | Broad conversational quality | **Unestablished** |
 | Broad reasoning capability | **Unestablished** |
 | Production readiness | **Unestablished** |
 
 ## Diagnostic learning result
 
-The current pilot has a measured four-checkpoint held-out trajectory:
+The historical pilot has a measured four-checkpoint held-out trajectory:
 
 | Checkpoint | Optimizer step | Mean loss | Perplexity |
 |---|---:|---:|---:|
@@ -263,6 +278,7 @@ See [Verification](docs/VERIFICATION.md) for the exact evidence snapshot.
 | [Data](docs/DATA.md) | Provenance, quality risks, corpus acceptance requirements |
 | [CLI](docs/CLI.md) | Current source-backed command reference |
 | [Verification](docs/VERIFICATION.md) | Repository CI + local diagnostic evidence ledger |
+| [Local audit: 2026-10-13](docs/LOCAL_AUDIT_2026-10-13.md) | GitHub/local differences, test skips, persistence, corpus provenance, and generation limits |
 | [FAQ](docs/FAQ.md) | Common questions about architecture, training, quality, and scope |
 | [Contributing](CONTRIBUTING.md) | Patch scope, regression gates, and evidence requirements |
 

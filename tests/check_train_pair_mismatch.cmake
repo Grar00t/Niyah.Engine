@@ -1,3 +1,9 @@
+string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef _niyah_fixture_id)
+if(DEFINED NIYAH_TRAIN_PAIR_PREFIX)
+    set(NIYAH_TRAIN_PAIR_PREFIX "${NIYAH_TRAIN_PAIR_PREFIX}/fixture-${_niyah_fixture_id}")
+    get_filename_component(_fixture_parent "${NIYAH_TRAIN_PAIR_PREFIX}" DIRECTORY)
+    file(MAKE_DIRECTORY "${_fixture_parent}")
+endif()
 if(NOT DEFINED NIYAH_TRAIN_EXE OR
    NOT DEFINED NIYAH_TRAIN_TOK OR
    NOT DEFINED NIYAH_TRAIN_SHARD OR
@@ -67,6 +73,19 @@ execute_process(
     OUTPUT_VARIABLE mixed_stdout
     ERROR_VARIABLE mixed_stderr)
 
+# A copied legacy pair without protocol sidecars must still reject wrong binding.
+configure_file("${a_ckpt}" "${a_ckpt}.legacy" COPYONLY)
+execute_process(
+    COMMAND "${NIYAH_TRAIN_EXE}" resume
+        --tokenizer "${NIYAH_TRAIN_TOK}" --shard "${NIYAH_TRAIN_SHARD}"
+        --checkpoint-in "${a_ckpt}.legacy" --cursor-in "${b_cur}"
+        --checkpoint-out "${out_ckpt}" --cursor-out "${out_cur}"
+        --updates 1 --batch-size 1 --accumulation-steps 1
+    RESULT_VARIABLE legacy_result OUTPUT_VARIABLE legacy_stdout ERROR_VARIABLE legacy_stderr)
+if(legacy_result EQUAL 0 OR NOT legacy_stderr MATCHES "stage=resume_compatibility")
+    message(FATAL_ERROR "legacy mixed pair did not fail binding: ${legacy_result} ${legacy_stderr}")
+endif()
+
 file(REMOVE "${a_ckpt}" "${a_cur}" "${b_ckpt}" "${b_cur}"
             "${out_ckpt}" "${out_cur}")
 
@@ -74,7 +93,7 @@ if(mixed_result EQUAL 0)
     message(FATAL_ERROR "mixed checkpoint/cursor pair unexpectedly resumed")
 endif()
 set(mixed_output "${mixed_stdout}\n${mixed_stderr}")
-if(NOT mixed_output MATCHES "stage=resume_compatibility")
+if(NOT mixed_output MATCHES "stage=pair_completion")
     message(FATAL_ERROR
         "mixed pair failed for wrong reason: result=${mixed_result}\n"
         "stdout=${mixed_stdout}\nstderr=${mixed_stderr}")

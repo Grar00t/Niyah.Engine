@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #define CHECK(expr) \
     do { \
@@ -269,12 +270,52 @@ static int test_repetition_guard(void)
     return 0;
 }
 
+static int test_nonfinite_logits_fail_closed(void)
+{
+    NiyahModelConfig model_config = tiny_config();
+    NiyahModel model;
+    NiyahKVCache cache;
+    NiyahGenerationConfig config;
+    NiyahGenerationResult result;
+    uint32_t output = 99U;
+    const uint32_t prompt = 1U;
+    const float bad[] = {NAN, INFINITY, -INFINITY};
+    float *workspace;
+    size_t count = 0U, i;
+    memset(&model, 0, sizeof(model));
+    memset(&cache, 0, sizeof(cache));
+    memset(&config, 0, sizeof(config));
+    CHECK(niyah_model_create(&model, &model_config) == NIYAH_OK);
+    CHECK(niyah_kv_cache_create(&cache, &model.config) == NIYAH_OK);
+    CHECK(niyah_generation_workspace_floats(&model.config, &count) == NIYAH_OK);
+    workspace = (float *)calloc(count, sizeof(float));
+    CHECK(workspace != NULL);
+    config.max_new_tokens = 1U;
+    for (i = 0U; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        model.weights[model.layout.lm_head] = bad[i];
+        memset(&result, 0, sizeof(result));
+        CHECK(niyah_generate(&model, &cache, &prompt, 1U, &config,
+            &output, 1U, &result, workspace, count) == NIYAH_ERR_INVALID_CONFIG);
+        CHECK(output == 99U && result.generated_tokens == 0U && result.prompt_tokens == 0U);
+        CHECK(niyah_kv_cache_position(&cache) == 0U);
+    }
+    model.weights[model.layout.lm_head] = 0.0f;
+    CHECK(niyah_generate(&model, &cache, &prompt, 1U, &config,
+        &output, 1U, &result, workspace, count) == NIYAH_OK);
+    CHECK(result.generated_tokens == 1U);
+    free(workspace);
+    niyah_kv_cache_destroy(&cache);
+    niyah_model_destroy(&model);
+    return 0;
+}
+
 int main(void)
 {
     CHECK(test_sampler_contract() == 0);
     CHECK(test_generation_matches_manual_decode() == 0);
     CHECK(test_eos_and_failure_reset() == 0);
     CHECK(test_repetition_guard() == 0);
+    CHECK(test_nonfinite_logits_fail_closed() == 0);
 
     puts("NIYAH_GENERATION_P4=PASS");
     return 0;

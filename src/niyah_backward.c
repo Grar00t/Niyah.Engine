@@ -1,5 +1,6 @@
 #include "niyah/train.h"
 #include "niyah/transformer.h"
+#include "niyah_model_validation.h"
 
 #include <float.h>
 #include <math.h>
@@ -565,6 +566,8 @@ static NiyahStatus niyah_train_backward_impl(
         workspace == NULL || gradients->count != model->weight_count) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
+    status = niyah_training_model_validate(model);
+    if (status != NIYAH_OK) return status;
     status = niyah_train_shape(&model->config, token_count, &s);
     if (status != NIYAH_OK) {
         return status;

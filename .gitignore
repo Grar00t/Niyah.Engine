@@ -25,3 +25,11 @@ tools/sample.edges
 
 .hadeed-build/
 build*/
+runs/
+*.ckpt
+*.cur
+*.bin
+corpus/arabic_clean.txt
+corpus/mix.txt
+corpus/mix_val.txt
+corpus/_cache_*.jsonl

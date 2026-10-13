@@ -1,3 +1,4 @@
+#include "niyah_publish_internal.h"
 #include "niyah/dataset.h"
 #include "niyah_sha256.h"
 
@@ -49,13 +50,7 @@ struct NiyahDatasetShardReader {
 
 static FILE *shard_fopen(const char *path, const char *mode)
 {
-#if defined(_MSC_VER)
-    FILE *file = NULL;
-    if (fopen_s(&file, path, mode) != 0) return NULL;
-    return file;
-#else
-    return fopen(path, mode);
-#endif
+    return niyah_file_open(path, mode);
 }
 
 static NiyahStatus shard_seek(FILE *file, uint64_t offset)
@@ -2018,7 +2013,7 @@ NiyahStatus niyah_dataset_shard_save(
     uint32_t version;
     size_t i;
     NiyahStatus status;
-    int close_result;
+    NiyahPublication stage = {0};
 
     if (path == NULL || path[0] == '\0')
         return NIYAH_ERR_INVALID_ARGUMENT;
@@ -2074,7 +2069,7 @@ NiyahStatus niyah_dataset_shard_save(
         shard->tokenizer_identity,
         NIYAH_DATASET_TOKENIZER_IDENTITY_SIZE);
 
-    file = shard_fopen(path, "wb");
+    file = niyah_atomic_open(path, &stage);
     if (file == NULL)
         return NIYAH_ERR_IO;
 
@@ -2185,16 +2180,7 @@ NiyahStatus niyah_dataset_shard_save(
         fflush(file) != 0)
         status = NIYAH_ERR_IO;
 
-    close_result = fclose(file);
-
-    if (status == NIYAH_OK &&
-        close_result != 0)
-        status = NIYAH_ERR_IO;
-
-    if (status != NIYAH_OK)
-        (void)remove(path);
-
-    return status;
+    return niyah_atomic_finish(file, &stage, path, status);
 }
 
 NiyahStatus niyah_dataset_shard_load(

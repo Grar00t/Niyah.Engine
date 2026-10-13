@@ -1,3 +1,5 @@
+#include "niyah_pair_internal.h"
+#include "niyah_publish_internal.h"
 #include "niyah/checkpoint.h"
 #include "niyah/dataset.h"
 #include "niyah/optimizer.h"
@@ -607,14 +609,6 @@ static int validate_options(const NiyahTrainOptions *o)
     return 0;
 }
 
-static int path_exists(const char *path)
-{
-    FILE *file = fopen(path, "rb");
-    if (file == NULL) return 0;
-    (void)fclose(file);
-    return 1;
-}
-
 typedef struct NiyahTrainShardProvider {
     NiyahDatasetShardReader **readers;
     const size_t *sample_offsets;
@@ -692,7 +686,7 @@ static NiyahStatus train_sample_provider(
     return NIYAH_OK;
 }
 
-int main(int argc, char **argv)
+static int niyah_train_main(int argc, char **argv)
 {
     NiyahTrainOptions options;
     NiyahTokenizer *tokenizer = NULL;
@@ -747,7 +741,7 @@ int main(int argc, char **argv)
     }
 #endif
 
-    if (path_exists(options.checkpoint_out) || path_exists(options.cursor_out)) {
+    if (niyah_publish_path_state(options.checkpoint_out) != 0 || niyah_publish_path_state(options.cursor_out) != 0) {
         fprintf(stderr, "output_path_exists=1\n");
         train_options_destroy(&options);
         return 2;
@@ -972,6 +966,13 @@ int main(int argc, char **argv)
             goto cleanup;
         }
     } else {
+        int legacy_pair = 0;
+        status = niyah_pair_validate(options.checkpoint_in, options.cursor_in, &legacy_pair);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("pair_completion", status);
+            goto cleanup;
+        }
+        fprintf(stderr, "pair_protocol=%s\n", legacy_pair ? "legacy_binding_only" : "complete_v1");
         status = niyah_checkpoint_load_with_tokenizer(
             options.checkpoint_in, tokenizer,
             &model, &optimizer_state, &optimizer_config);
@@ -1004,6 +1005,11 @@ int main(int argc, char **argv)
                                     NIYAH_ERR_INVALID_CONFIG);
             goto cleanup;
         }
+    }
+
+    if (model.config.n_segments != 0U) {
+        exit_code = fail_status("segment_conditioning_unsupported", NIYAH_ERR_INVALID_CONFIG);
+        goto cleanup;
     }
 
 #ifdef NIYAH_TRAIN_ENABLE_CUDA
@@ -1107,32 +1113,10 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    status = niyah_checkpoint_save_with_tokenizer(
-        options.checkpoint_out, &model, &optimizer_state,
-        &optimizer_config, tokenizer);
+    status = niyah_pair_save(options.checkpoint_out, options.cursor_out,
+        &model, &optimizer_state, &optimizer_config, tokenizer, &cursor);
     if (status != NIYAH_OK) {
-        exit_code = fail_status("checkpoint_save", status);
-        goto cleanup;
-    }
-    status = niyah_checkpoint_identity_sha256(
-        options.checkpoint_out, checkpoint_identity);
-    if (status != NIYAH_OK) {
-        (void)remove(options.checkpoint_out);
-        exit_code = fail_status("checkpoint_identity", status);
-        goto cleanup;
-    }
-    status = niyah_dataset_cursor_bind_checkpoint_identity(
-        &cursor, checkpoint_identity);
-    if (status != NIYAH_OK) {
-        (void)remove(options.checkpoint_out);
-        exit_code = fail_status("cursor_checkpoint_bind", status);
-        goto cleanup;
-    }
-    status = niyah_dataset_cursor_save(&cursor, options.cursor_out);
-    if (status != NIYAH_OK) {
-        (void)remove(options.checkpoint_out);
-        (void)remove(options.cursor_out);
-        exit_code = fail_status("cursor_save", status);
+        exit_code = fail_status("pair_publication", status);
         goto cleanup;
     }
 
@@ -1180,3 +1164,6 @@ cleanup:
     train_options_destroy(&options);
     return exit_code;
 }
+
+#define NIYAH_CLI_ENTRY niyah_train_main
+#include "niyah_utf8_main.h"

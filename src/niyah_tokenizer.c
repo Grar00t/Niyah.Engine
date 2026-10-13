@@ -1,4 +1,5 @@
 #include "niyah/tokenizer.h"
+#include "niyah_publish_internal.h"
 #include "niyah_sha256.h"
 
 #include <limits.h>
@@ -364,15 +365,7 @@ typedef struct NiyahTokenizerCrc32 {
 
 static FILE *niyah_tokenizer_fopen(const char *path, const char *mode)
 {
-#if defined(_MSC_VER)
-    FILE *file = NULL;
-    if (fopen_s(&file, path, mode) != 0) {
-        return NULL;
-    }
-    return file;
-#else
-    return fopen(path, mode);
-#endif
+    return niyah_file_open(path, mode);
 }
 
 static void niyah_tok_store_u32_le(unsigned char out[4], uint32_t value)
@@ -575,7 +568,7 @@ NiyahStatus niyah_tokenizer_save(const NiyahTokenizer *tokenizer,
     unsigned char footer[8];
     NiyahStatus status;
     size_t i;
-    int close_result;
+    NiyahPublication stage = {0};
 
     if (path == NULL || path[0] == '\0') {
         return NIYAH_ERR_INVALID_ARGUMENT;
@@ -586,7 +579,7 @@ NiyahStatus niyah_tokenizer_save(const NiyahTokenizer *tokenizer,
         return status;
     }
 
-    file = niyah_tokenizer_fopen(path, "wb");
+    file = niyah_atomic_open(path, &stage);
     if (file == NULL) {
         return NIYAH_ERR_IO;
     }
@@ -651,16 +644,7 @@ NiyahStatus niyah_tokenizer_save(const NiyahTokenizer *tokenizer,
         status = NIYAH_ERR_IO;
     }
 
-    close_result = fclose(file);
-    if (status == NIYAH_OK && close_result != 0) {
-        status = NIYAH_ERR_IO;
-    }
-
-    if (status != NIYAH_OK) {
-        (void)remove(path);
-    }
-
-    return status;
+    return niyah_atomic_finish(file, &stage, path, status);
 }
 
 NiyahStatus niyah_tokenizer_load(const char *path,

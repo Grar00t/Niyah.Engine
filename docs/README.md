@@ -21,6 +21,10 @@ This documentation is organized to separate **how the system works** from **what
 | [Arabic Heritage Stack](ARABIC_HERITAGE_STACK.md) | License/provenance boundary for Arabic morphology tools, dictionaries, databases, and training use |
 | [CLI Reference](CLI.md) | `niyah`, `niyah-train`, and `niyah_probe` command surfaces currently present in the repository |
 | [Verification](VERIFICATION.md) | Evidence ledger: what has passed, what is locally observed, and what remains unestablished |
+| [Local audit: 2026-10-13](LOCAL_AUDIT_2026-10-13.md) | Exact GitHub/local revisions, test receipts and skips, corpus provenance, and generation limitations |
+| [Persistence protocol](PERSISTENCE_PROTOCOL.md) | Local publication, checkpoint/cursor completion markers, legacy compatibility, and failure boundaries |
+| [Corpus tools](CORPUS_TOOLS.md) | Local corpus preparation, provenance sidecars, and offline tool contracts |
+| [Repetition generation](REPETITION_GENERATION.md) | Local decoding controls, stop rules, and distinct test evidence levels |
 | [Project Identity](IDENTITY.md) | Project mark, cultural origin, artifact provenance rules, cryptographic verification boundary, and usage guidance |
 | [Local Evidence Snapshot — 2026-09-24](LOCAL_EVIDENCE_2026-09-24.md) | Dated local corpus, tokenizer-preparation, CUDA-adjacent, synthetic-data, and external-RAG evidence with explicit claim boundaries |
 | [FAQ](FAQ.md) | Direct answers to common architecture, training, data, and capability questions |
@@ -45,7 +49,8 @@ Implementation does not automatically imply model quality. A successful training
 | Fresh training and resume | Implemented and exercised |
 | CPU FP32 reference path | Implemented and exercised |
 | Optional CUDA path | Implemented; scope depends on the specific build/test evidence |
-| Held-out diagnostic learning | Demonstrated on the current pilot evaluation set through optimizer step 1905 |
+| Held-out diagnostic learning | Historical pilot improvement through step 1905; later Wikipedia adaptation tradeoff recorded in the dated audit |
+| Local repetition controls | Implemented and exercised in the review checkout; three-prompt generation evidence only |
 | Broad conversational quality | Unestablished |
 | Broad reasoning capability | Unestablished |
 | Production readiness | Unestablished |

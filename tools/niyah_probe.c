@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <errno.h>
+#include <stdint.h>
 
 static int fail(const char *stage, NiyahStatus status)
 {
@@ -24,39 +26,61 @@ static int fail(const char *stage, NiyahStatus status)
     return 1;
 }
 
-static void print_token_bytes(const NiyahTokenizer *tok, uint32_t id)
+static int print_token_bytes(const NiyahTokenizer *tok, uint32_t id)
 {
-    uint8_t buf[64];
+    uint8_t *buf = NULL;
     size_t out = 0U;
     size_t i;
-    NiyahStatus st = niyah_tokenizer_decode(tok, &id, 1U, buf, sizeof(buf), &out);
-    if (st != NIYAH_OK) { printf("<decode_err=%d>", (int)st); return; }
+    NiyahStatus st = niyah_tokenizer_decode(tok, &id, 1U, NULL, 0U, &out);
+    if (st != NIYAH_OK) { fail("token_decode_size", st); return 0; }
+    buf = (uint8_t *)malloc(out == 0U ? 1U : out);
+    if (buf == NULL) { fail("token_decode_allocation", NIYAH_ERR_OUT_OF_MEMORY); return 0; }
+    st = niyah_tokenizer_decode(tok, &id, 1U, buf, out, &out);
+    if (st != NIYAH_OK) { free(buf); fail("token_decode", st); return 0; }
     putchar('"');
     for (i = 0U; i < out; ++i) {
         unsigned char c = buf[i];
         if (c == '\n') printf("\\n");
         else if (c == '\r') printf("\\r");
         else if (c == ' ') printf("\\x20");
+        else if (c == '"' || c == '\\') printf("\\%c", (int)c);
         else if (c >= 0x20 && c < 0x7F) putchar((int)c);
         else printf("\\x%02X", (unsigned int)c);
     }
     putchar('"');
+    free(buf);
+    return !ferror(stdout);
 }
 
-static double token_probability(const float *logits, size_t vocab, size_t token_index)
+static int distribution(const float *logits, size_t vocab, double *out_max,
+                        double *out_total)
 {
-    double max_logit = -1e300;
+    double max_logit;
     double total = 0.0;
     size_t i;
 
+    if (logits == NULL || vocab == 0U || out_max == NULL || out_total == NULL) return 0;
+    max_logit = (double)logits[0];
     for (i = 0U; i < vocab; ++i) {
+        if (!isfinite(logits[i])) return 0;
         if ((double)logits[i] > max_logit) max_logit = (double)logits[i];
     }
     for (i = 0U; i < vocab; ++i) {
         total += exp((double)logits[i] - max_logit);
     }
-    if (!(total > 0.0) || !isfinite(total)) return 0.0;
-    return exp((double)logits[token_index] - max_logit) / total;
+    if (!(total > 0.0) || !isfinite(total)) return 0;
+    *out_max = max_logit;
+    *out_total = total;
+    return 1;
+}
+
+static size_t best_untaken(const float *logits, const uint8_t *taken, size_t vocab)
+{
+    size_t best = vocab;
+    size_t i;
+    for (i = 0U; i < vocab; ++i)
+        if (!taken[i] && (best == vocab || logits[i] > logits[best])) best = i;
+    return best;
 }
 
 static int shard_report(const char *tokenizer_path, const char *shard_path)
@@ -79,6 +103,9 @@ static int shard_report(const char *tokenizer_path, const char *shard_path)
     if (st != NIYAH_OK) { niyah_tokenizer_destroy(tok); return fail("shard_load", st); }
 
     vocab = niyah_tokenizer_vocab_size(tok);
+    if (vocab <= 32U || vocab > SIZE_MAX / sizeof(*counts) || shard.token_count == 0U) {
+        fail("shard_geometry", NIYAH_ERR_INVALID_CONFIG); goto cleanup;
+    }
     counts = (uint64_t *)calloc(vocab, sizeof(uint64_t));
     if (counts == NULL) { fprintf(stderr, "oom\n"); goto cleanup; }
 
@@ -96,7 +123,7 @@ static int shard_report(const char *tokenizer_path, const char *shard_path)
 
     printf("shard_tokens=%zu vocab=%zu unigram_entropy_nats=%.6f\n",
            shard.token_count, vocab, entropy);
-    printf("space_byte_id=32 space_byte_count=%llu space_byte_frac=%.6f\n",
+    printf("standalone_space_token_id=32 standalone_space_token_count=%llu standalone_space_token_frac=%.6f merged_token_spaces=not_counted\n",
            (unsigned long long)counts[32],
            (double)counts[32] / (double)shard.token_count);
 
@@ -116,7 +143,7 @@ static int shard_report(const char *tokenizer_path, const char *shard_path)
             printf("  rank=%d id=%zu count=%llu frac=%.6f bytes=",
                    printed + 1, best, (unsigned long long)best_count,
                    (double)best_count / (double)shard.token_count);
-            print_token_bytes(tok, (uint32_t)best);
+            if (!print_token_bytes(tok, (uint32_t)best)) goto cleanup;
             putchar('\n');
             ++printed;
         }
@@ -165,10 +192,17 @@ static int topk_logit_report(const char *tokenizer_path,
     if (vocab == 0U || vocab != (size_t)model.config.vocab_size) {
         fprintf(stderr, "vocab_mismatch\n"); goto cleanup;
     }
+    if (model.config.n_segments != 0U) {
+        fprintf(stderr, "segment_conditioning_unsupported=probe\n"); goto cleanup;
+    }
+    if (topk > vocab) topk = vocab;
 
     st = niyah_tokenizer_encode(tok, (const uint8_t *)prompt, strlen(prompt), NULL, 0U, &encoded);
     if (st != NIYAH_OK) { fail("prompt_encode_query", st); goto cleanup; }
 
+    if (encoded == SIZE_MAX || encoded + 1U > SIZE_MAX / sizeof(*prompt_tokens)) {
+        fail("prompt_size", NIYAH_ERR_OVERFLOW); goto cleanup;
+    }
     prompt_count = encoded + 1U; /* + BOS — matches tools/niyah.c run_command */
     if (prompt_count > (size_t)model.config.context_length ||
         trace_steps > (size_t)model.config.context_length - prompt_count) {
@@ -194,6 +228,9 @@ static int topk_logit_report(const char *tokenizer_path,
 
     st = niyah_decode_workspace_floats(&model.config, &decode_ws_count);
     if (st != NIYAH_OK) { fail("workspace_size", st); goto cleanup; }
+    if (decode_ws_count > SIZE_MAX / sizeof(float) || vocab > SIZE_MAX / sizeof(float)) {
+        fail("workspace_size", NIYAH_ERR_OVERFLOW); goto cleanup;
+    }
 
     decode_ws = (float *)malloc(decode_ws_count * sizeof(float));
     logits = (float *)malloc(vocab * sizeof(float));
@@ -211,25 +248,23 @@ static int topk_logit_report(const char *tokenizer_path,
     taken = (uint8_t *)calloc(vocab, 1U);
     if (taken == NULL) { fprintf(stderr, "oom\n"); goto cleanup; }
     {
-        double max_logit = -1e300, total = 0.0;
-        int printed = 0;
-        for (i = 0U; i < vocab; ++i) if ((double)logits[i] > max_logit) max_logit = (double)logits[i];
-        for (i = 0U; i < vocab; ++i) total += exp((double)logits[i] - max_logit);
+        double max_logit, total;
+        size_t printed = 0U;
+        if (!distribution(logits, vocab, &max_logit, &total)) {
+            fail("logit_distribution", NIYAH_ERR_INVALID_CONFIG); goto cleanup;
+        }
 
         printf("prompt_tokens=%zu vocab=%zu\n", prompt_count, vocab);
         printf("top%zu_next_token_logits:\n", topk);
-        while ((size_t)printed < topk) {
-            size_t best = vocab;
-            float best_val = -1e30f;
-            for (i = 0U; i < vocab; ++i)
-                if (!taken[i] && logits[i] > best_val) { best_val = logits[i]; best = i; }
+        while (printed < topk) {
+            size_t best = best_untaken(logits, taken, vocab);
             if (best == vocab) break;
             taken[best] = 1U;
             {
                 double prob = exp((double)logits[best] - max_logit) / total;
-                printf("  rank=%d id=%zu logit=%.6f prob=%.6f bytes=",
+                printf("  rank=%zu id=%zu logit=%.6f prob=%.6f bytes=",
                        printed + 1, best, (double)logits[best], prob);
-                print_token_bytes(tok, (uint32_t)best);
+                if (!print_token_bytes(tok, (uint32_t)best)) goto cleanup;
                 putchar('\n');
             }
             ++printed;
@@ -249,19 +284,26 @@ static int topk_logit_report(const char *tokenizer_path,
         st = niyah_sampler_init(&sampler, &sampler_config);
         if (st != NIYAH_OK) { fail("trace_sampler_init", st); goto cleanup; }
 
-        printf("greedy_trace_steps=%zu\n", trace_steps);
+        printf("greedy_trace_steps=%zu trace_stop_on_eos=0 eos_token=%u\n", trace_steps, NIYAH_TOKEN_EOS);
         for (step = 0U; step < trace_steps; ++step) {
             uint32_t token = 0U;
             size_t cache_before = niyah_kv_cache_position(&cache);
             size_t cache_after;
             float selected_logit;
             double prob;
+            double eos_prob;
+            double max_logit, total;
+
+            if (!distribution(logits, vocab, &max_logit, &total)) {
+                fail("trace_distribution", NIYAH_ERR_INVALID_CONFIG); goto cleanup;
+            }
 
             st = niyah_sampler_sample(&sampler, logits, vocab, &token);
             if (st != NIYAH_OK) { fail("trace_sampler_sample", st); goto cleanup; }
 
             selected_logit = logits[token];
-            prob = token_probability(logits, vocab, (size_t)token);
+            prob = exp((double)logits[token] - max_logit) / total;
+            eos_prob = exp((double)logits[NIYAH_TOKEN_EOS] - max_logit) / total;
 
             st = niyah_transformer_decode_token(&model, &cache, token,
                                                 logits, vocab,
@@ -269,10 +311,10 @@ static int topk_logit_report(const char *tokenizer_path,
             if (st != NIYAH_OK) { fail("trace_decode_token", st); goto cleanup; }
             cache_after = niyah_kv_cache_position(&cache);
 
-            printf("trace_step=%zu cache=%zu->%zu id=%u logit=%.6f prob=%.6f bytes=",
+            printf("trace_step=%zu cache=%zu->%zu id=%u logit=%.6f prob=%.6f eos=%d eos_prob=%.9g finite_distribution=1 bytes=",
                    step, cache_before, cache_after, token,
-                   (double)selected_logit, prob);
-            print_token_bytes(tok, token);
+                   (double)selected_logit, prob, token == NIYAH_TOKEN_EOS, eos_prob);
+            if (!print_token_bytes(tok, token)) goto cleanup;
             putchar('\n');
         }
     }
@@ -293,24 +335,64 @@ cleanup:
 
 static int arg_eq(const char *a, const char *b) { return strcmp(a, b) == 0; }
 
+static int parse_size(const char *text, size_t *out)
+{
+    size_t value = 0U;
+    const unsigned char *p = (const unsigned char *)text;
+    if (text == NULL || *p == 0U) return 0;
+    for (; *p != 0U; ++p) {
+        size_t digit;
+        if (*p < '0' || *p > '9') return 0;
+        digit = (size_t)(*p - '0');
+        if (value > (SIZE_MAX - digit) / 10U) return 0;
+        value = value * 10U + digit;
+    }
+    *out = value;
+    return 1;
+}
+
 static int niyah_cli_main(int argc, char **argv)
 {
     const char *tokenizer_path = NULL, *shard_path = NULL;
     const char *checkpoint_path = NULL, *prompt = NULL;
     size_t topk = 10U;
     size_t trace_steps = 0U;
+    unsigned int seen = 0U;
     int i, rc = 0;
 
-    for (i = 1; i + 1 <= argc; ++i) {
-        if (i + 1 < argc && arg_eq(argv[i], "--tokenizer")) { tokenizer_path = argv[++i]; }
-        else if (i + 1 < argc && arg_eq(argv[i], "--shard")) { shard_path = argv[++i]; }
-        else if (i + 1 < argc && arg_eq(argv[i], "--checkpoint")) { checkpoint_path = argv[++i]; }
-        else if (i + 1 < argc && arg_eq(argv[i], "--prompt")) { prompt = argv[++i]; }
-        else if (i + 1 < argc && arg_eq(argv[i], "--topk")) { topk = (size_t)strtoul(argv[++i], NULL, 10); }
-        else if (i + 1 < argc && arg_eq(argv[i], "--trace-steps")) { trace_steps = (size_t)strtoul(argv[++i], NULL, 10); }
+    for (i = 1; i < argc; ++i) {
+        unsigned int bit;
+        const char *key = argv[i];
+        const char *value;
+        if (arg_eq(key, "--tokenizer")) bit = 1U;
+        else if (arg_eq(key, "--shard")) bit = 2U;
+        else if (arg_eq(key, "--checkpoint")) bit = 4U;
+        else if (arg_eq(key, "--prompt")) bit = 8U;
+        else if (arg_eq(key, "--topk")) bit = 16U;
+        else if (arg_eq(key, "--trace-steps")) bit = 32U;
+        else { fprintf(stderr, "unknown_option=%s\n", key); return 2; }
+        if ((seen & bit) != 0U || i + 1 >= argc) {
+            fprintf(stderr, "duplicate_or_incomplete_option=%s\n", key); return 2;
+        }
+        seen |= bit;
+        value = argv[++i];
+        if (strncmp(value, "--", 2U) == 0 || (bit != 8U && value[0] == '\0')) {
+            fprintf(stderr, "invalid_value=%s\n", key); return 2;
+        }
+        if (bit == 1U) tokenizer_path = value;
+        else if (bit == 2U) shard_path = value;
+        else if (bit == 4U) checkpoint_path = value;
+        else if (bit == 8U) prompt = value;
+        else if (bit == 16U && (!parse_size(value, &topk) || topk == 0U)) {
+            fprintf(stderr, "invalid_topk\n"); return 2;
+        } else if (bit == 32U && !parse_size(value, &trace_steps)) {
+            fprintf(stderr, "invalid_trace_steps\n"); return 2;
+        }
     }
 
-    if (tokenizer_path == NULL) {
+    if (tokenizer_path == NULL || (shard_path == NULL && checkpoint_path == NULL) ||
+        ((checkpoint_path == NULL) != (prompt == NULL)) ||
+        ((seen & (16U | 32U)) != 0U && checkpoint_path == NULL)) {
         fprintf(stderr, "usage: niyah_probe --tokenizer TOK [--shard SHARD] "
                         "[--checkpoint CKPT --prompt TEXT [--topk N] [--trace-steps N]]\n");
         return 2;
@@ -322,11 +404,13 @@ static int niyah_cli_main(int argc, char **argv)
     if (checkpoint_path != NULL && prompt != NULL) {
         rc |= topk_logit_report(tokenizer_path, checkpoint_path, prompt, topk, trace_steps);
     }
+    if (fflush(stdout) == EOF || ferror(stdout)) return fail("stdout_write", NIYAH_ERR_IO);
     return rc;
 }
 
 
 /* NIYAH_UTF8_ARGV_WRAPPER_V1 */
+#if !defined(NIYAH_PROBE_TEST)
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -416,3 +500,4 @@ int main(int argc, char **argv)
     return niyah_cli_main(argc, argv);
 }
 #endif
+#endif /* NIYAH_PROBE_TEST */

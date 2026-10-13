@@ -62,6 +62,7 @@ static int niyah_layout_equal(const NiyahModelLayout *a,
                               const NiyahModelLayout *b)
 {
     return a->token_embedding == b->token_embedding &&
+           a->segment_embedding == b->segment_embedding &&
            a->layers == b->layers &&
            a->layer_stride == b->layer_stride &&
            a->final_norm == b->final_norm &&

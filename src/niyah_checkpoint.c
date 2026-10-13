@@ -1,3 +1,4 @@
+#include "niyah_publish_internal.h"
 #include "niyah/checkpoint.h"
 #include "niyah_sha256.h"
 
@@ -87,15 +88,7 @@ typedef struct NiyahCheckpointLoadTargets {
 
 static FILE *niyah_checkpoint_fopen(const char *path, const char *mode)
 {
-#if defined(_MSC_VER)
-    FILE *file = NULL;
-    if (fopen_s(&file, path, mode) != 0) {
-        return NULL;
-    }
-    return file;
-#else
-    return fopen(path, mode);
-#endif
+    return niyah_file_open(path, mode);
 }
 
 static void niyah_store_u32_le(unsigned char out[4], uint32_t value)
@@ -211,7 +204,8 @@ static int niyah_config_equal(const NiyahModelConfig *a,
 static int niyah_layout_equal(const NiyahModelLayout *a,
                               const NiyahModelLayout *b)
 {
-    return a->token_embedding == b->token_embedding &&
+    return a->segment_embedding == b->segment_embedding &&
+           a->token_embedding == b->token_embedding &&
            a->layers == b->layers &&
            a->layer_stride == b->layer_stride &&
            a->final_norm == b->final_norm &&
@@ -557,7 +551,7 @@ static NiyahStatus niyah_checkpoint_save_impl(
     uint32_t version = NIYAH_CHECKPOINT_VERSION_V1;
     uint32_t section_count = NIYAH_CHECKPOINT_SECTION_COUNT_V1;
     NiyahStatus status;
-    int close_result;
+    NiyahPublication stage = {0};
 
     if (path == NULL || path[0] == '\0') {
         return NIYAH_ERR_INVALID_ARGUMENT;
@@ -586,7 +580,7 @@ static NiyahStatus niyah_checkpoint_save_impl(
         section_count += UINT32_C(1);
     }
 
-    file = niyah_checkpoint_fopen(path, "wb");
+    file = niyah_atomic_open(path, &stage);
     if (file == NULL) {
         return NIYAH_ERR_IO;
     }
@@ -659,15 +653,7 @@ static NiyahStatus niyah_checkpoint_save_impl(
     if (status == NIYAH_OK && fflush(file) != 0) {
         status = NIYAH_ERR_IO;
     }
-    close_result = fclose(file);
-    file = NULL;
-    if (status == NIYAH_OK && close_result != 0) {
-        status = NIYAH_ERR_IO;
-    }
-    if (status != NIYAH_OK) {
-        (void)remove(path);
-    }
-    return status;
+    return niyah_atomic_finish(file, &stage, path, status);
 }
 
 NiyahStatus niyah_checkpoint_save(const char *path,

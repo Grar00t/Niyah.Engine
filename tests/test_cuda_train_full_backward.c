@@ -1,3 +1,4 @@
+#include "test_numeric_compare.h"
 #include "niyah/niyah.h"
 #include "niyah/train.h"
 #include "niyah_cuda_matvec.h"
@@ -12,17 +13,7 @@ static float max_abs(
     const float *b,
     size_t n)
 {
-    float m = 0.0f;
-
-    for (size_t i = 0U; i < n; ++i) {
-        const float d =
-            fabsf(a[i] - b[i]);
-
-        if (d > m)
-            m = d;
-    }
-
-    return m;
+    return niyah_test_max_abs_diff(a, b, n);
 }
 
 static int check_region(
@@ -223,7 +214,8 @@ static int run_case(
     if (loss_error > overall)
         overall = loss_error;
 
-    if (loss_error > tolerance)
+    if (!isfinite(cpu_loss) || !isfinite(gpu_loss) ||
+        !isfinite(loss_error) || loss_error > tolerance)
         failed = 1;
 
     {

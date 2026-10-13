@@ -1,3 +1,5 @@
+#include "niyah_prompt_contract.h"
+#include "niyah_publish_internal.h"
 #include "niyah/baseline.h"
 #include "niyah/checkpoint.h"
 #include "niyah/dataset.h"
@@ -10,6 +12,7 @@
 
 #ifdef NIYAH_CLI_ENABLE_CUDA
 #include "niyah_cuda_matvec.h"
+#include "niyah_cuda_generate_repetition.h"
 #endif
 
 #include <errno.h>
@@ -18,6 +21,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #define NIYAH_PREPARE_RECORD_STREAM 0
 #define NIYAH_PREPARE_RECORD_BLANK_LINE 1
@@ -68,6 +75,7 @@ typedef struct NiyahRunOptions {
     size_t max_new_tokens;
     float temperature;
     uint64_t seed;
+    NiyahRepetitionConfig repetition;
     int have_max_new_tokens;
     int use_cuda;
 } NiyahRunOptions;
@@ -94,7 +102,9 @@ static void usage(FILE *stream)
         "      --max-new-tokens N [--temperature F] [--seed N]\n"
         "      [--prompt-prefix TEXT] [--prompt-suffix TEXT]\n"
         "      [auto: CKPT.prompt-prefix / CKPT.prompt-suffix]\n"
-        "      [--backend cpu|cuda]\n");
+        "      [--backend cpu|cuda]\n"
+        "      [--repetition-penalty F (>=1, default 1)]\n"
+        "      [--repetition-window N (>0, default 64)]\n");
 }
 
 static const char *status_name(NiyahStatus status)
@@ -409,15 +419,7 @@ static int parse_shard_options(
 
 static FILE *niyah_cli_fopen(const char *path, const char *mode)
 {
-#if defined(_MSC_VER)
-    FILE *file = NULL;
-    if (fopen_s(&file, path, mode) != 0) {
-        return NULL;
-    }
-    return file;
-#else
-    return fopen(path, mode);
-#endif
+    return niyah_file_open(path, mode);
 }
 
 static int path_exists(const char *path)
@@ -813,8 +815,8 @@ static int prepare_command(int argc, char **argv)
     NiyahDatasetSupervisedRecord *supervised_records = NULL;
     size_t record_count = 0U;
     NiyahStatus status;
-    int tokenizer_created = 0;
-    int shard_created = 0;
+    NiyahPublication tok_stage = {0};
+    NiyahPublication shard_stage = {0};
     int exit_code = 1;
 
     memset(&tokenizer_config, 0, sizeof(tokenizer_config));
@@ -826,9 +828,10 @@ static int prepare_command(int argc, char **argv)
         return 2;
     }
 
-    if (path_exists(options.tokenizer_out) ||
-        path_exists(options.shard_out)) {
+    if (niyah_publish_path_state(options.tokenizer_out) != 0 ||
+        niyah_publish_path_state(options.shard_out) != 0) {
         fprintf(stderr, "error_stage=output_exists status=NIYAH_ERR_INVALID_ARGUMENT\n");
+        free(options.response_delimiters);
         return 2;
     }
 
@@ -984,24 +987,16 @@ static int prepare_command(int argc, char **argv)
         goto cleanup;
     }
 
-    status = niyah_tokenizer_save(
-        tokenizer,
-        options.tokenizer_out);
+    status = niyah_publish_begin(options.tokenizer_out, &tok_stage);
+    if (status == NIYAH_OK) status = niyah_publish_begin(options.shard_out, &shard_stage);
+    if (status == NIYAH_OK) status = niyah_tokenizer_save(tokenizer, tok_stage.path);
+    if (status == NIYAH_OK) status = niyah_dataset_shard_save(&shard, tokenizer, shard_stage.path);
+    if (status == NIYAH_OK) status = niyah_publish_commit(&tok_stage, options.tokenizer_out, 0);
+    if (status == NIYAH_OK) status = niyah_publish_commit(&shard_stage, options.shard_out, 0);
     if (status != NIYAH_OK) {
-        exit_code = fail_status("tokenizer_save", status);
+        exit_code = fail_status("prepare_publication", status);
         goto cleanup;
     }
-    tokenizer_created = 1;
-
-    status = niyah_dataset_shard_save(
-        &shard,
-        tokenizer,
-        options.shard_out);
-    if (status != NIYAH_OK) {
-        exit_code = fail_status("shard_save", status);
-        goto cleanup;
-    }
-    shard_created = 1;
     fprintf(
         stdout,
         "P8C_PREPARE=PASS vocab=%zu merges=%zu tokens=%zu samples=%zu\n",
@@ -1020,14 +1015,8 @@ static int prepare_command(int argc, char **argv)
     exit_code = 0;
 
 cleanup:
-    if (exit_code != 0) {
-        if (shard_created) {
-            (void)remove(options.shard_out);
-        }
-        if (tokenizer_created) {
-            (void)remove(options.tokenizer_out);
-        }
-    }
+    if (niyah_publish_cleanup(&tok_stage) != NIYAH_OK) exit_code = 1;
+    if (niyah_publish_cleanup(&shard_stage) != NIYAH_OK) exit_code = 1;
 
     niyah_dataset_shard_destroy(&shard);
     niyah_tokenizer_destroy(tokenizer);
@@ -1051,6 +1040,7 @@ static int shard_command(int argc, char **argv)
     NiyahDatasetSupervisedRecord *supervised_records = NULL;
     size_t record_count = 0U;
     NiyahStatus status;
+    NiyahPublication shard_stage = {0};
     int exit_code = 1;
 
     memset(&shard, 0, sizeof(shard));
@@ -1068,7 +1058,7 @@ static int shard_command(int argc, char **argv)
         goto cleanup;
     }
 
-    if (path_exists(options.shard_out)) {
+    if (niyah_publish_path_state(options.shard_out) != 0) {
         fprintf(
             stderr,
             "error_stage=output_exists "
@@ -1228,14 +1218,11 @@ static int shard_command(int argc, char **argv)
         goto cleanup;
     }
 
-    status = niyah_dataset_shard_save(
-        &shard,
-        tokenizer,
-        options.shard_out);
+    status = niyah_publish_begin(options.shard_out, &shard_stage);
+    if (status == NIYAH_OK) status = niyah_dataset_shard_save(&shard, tokenizer, shard_stage.path);
+    if (status == NIYAH_OK) status = niyah_publish_commit(&shard_stage, options.shard_out, 0);
     if (status != NIYAH_OK) {
-        exit_code = fail_status(
-            "shard_save",
-            status);
+        exit_code = fail_status("shard_publication", status);
         goto cleanup;
     }
 
@@ -1258,9 +1245,7 @@ static int shard_command(int argc, char **argv)
     exit_code = 0;
 
 cleanup:
-    if (exit_code != 0) {
-        (void)remove(options.shard_out);
-    }
+    if (niyah_publish_cleanup(&shard_stage) != NIYAH_OK) exit_code = 1;
 
     niyah_dataset_shard_destroy(&shard);
     niyah_tokenizer_destroy(tokenizer);
@@ -1418,6 +1403,11 @@ static int eval_command(int argc, char **argv)
         &model);
     if (status != NIYAH_OK) {
         exit_code = fail_status("checkpoint_load", status);
+        goto cleanup;
+    }
+
+    if (model.config.n_segments != 0U) {
+        exit_code = fail_status("segment_conditioning_unsupported", NIYAH_ERR_INVALID_CONFIG);
         goto cleanup;
     }
 
@@ -1662,6 +1652,25 @@ static int eval_command(int argc, char **argv)
         goto cleanup;
     }
 
+    if (fprintf(stdout,
+            "tokenizer_identity_kind=structured_tokenizer_sha256\n"
+            "checkpoint_identity_kind=raw_file_sha256\n"
+            "heldout_identity_kind=%s\n"
+            "baseline_fit=evaluated_supervised_transitions\n"
+            "baseline_score=same_supervised_transitions\n"
+            "context_reset=per_sample\n",
+            options.format == NIYAH_EVAL_FORMAT_TEXT ? "raw_file_sha256" : "structured_shard_sha256") < 0) {
+        exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+        goto cleanup;
+    }
+    if (options.format == NIYAH_EVAL_FORMAT_TEXT && fprintf(stdout,
+            "byte_denominator=%zu\nexcluded_tail_tokens=0\n"
+            "bpb_likelihood=all_text_tokens_plus_eos\nbos=context_only\n",
+            heldout_byte_size) < 0) {
+        exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
+        goto cleanup;
+    }
+
     if (fprintf(stdout, "EVAL_EXIT=0\n") < 0 ||
         fflush(stdout) == EOF) {
         exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
@@ -1678,6 +1687,16 @@ cleanup:
     return exit_code;
 }
 
+static int parse_positive_size_decimal(const char *text, size_t *out)
+{
+    const unsigned char *p = (const unsigned char *)text;
+    if (text == NULL || text[0] == '\0' || out == NULL) return 0;
+    for (; *p != 0U; ++p) {
+        if (*p < (unsigned char)'0' || *p > (unsigned char)'9') return 0;
+    }
+    return parse_size(text, out) && *out != 0U;
+}
+
 static int parse_run_options(
     int argc,
     char **argv,
@@ -1688,6 +1707,8 @@ static int parse_run_options(
     memset(options, 0, sizeof(*options));
     options->temperature = 0.0f;
     options->seed = UINT64_C(1);
+    options->repetition.penalty = 1.0f;
+    options->repetition.window = 64U;
 
     for (i = 2; i < argc; ++i) {
         const char *key = argv[i];
@@ -1732,6 +1753,14 @@ static int parse_run_options(
                 !parse_u64(value, &options->seed)) {
                 return 0;
             }
+        } else if (strcmp(key, "--repetition-penalty") == 0) {
+            value = next_value(argc, argv, &i);
+            if (!parse_float_value(value, &options->repetition.penalty) ||
+                options->repetition.penalty < 1.0f) return 0;
+        } else if (strcmp(key, "--repetition-window") == 0) {
+            value = next_value(argc, argv, &i);
+            if (!parse_positive_size_decimal(value, &options->repetition.window))
+                return 0;
         } else if (strcmp(key, "--backend") == 0) {
             value = next_value(argc, argv, &i);
             if (value == NULL) {
@@ -1765,6 +1794,7 @@ static int run_command(int argc, char **argv)
     NiyahKVCache cache;
     NiyahGenerationConfig generation_config;
     NiyahGenerationResult generation_result;
+    NiyahGenerationStopReport generation_stop;
 #ifdef NIYAH_CLI_ENABLE_CUDA
     NiyahCudaModelState cuda_model;
     NiyahCudaDecodeState cuda_decode;
@@ -1773,7 +1803,7 @@ static int run_command(int argc, char **argv)
     uint32_t *generated_tokens = NULL;
     float *workspace = NULL;
 #ifdef NIYAH_CLI_ENABLE_CUDA
-    float *cuda_logits = NULL;
+    float *cuda_workspace = NULL;
 #endif
     uint8_t *decoded = NULL;
     char *runtime_prompt = NULL;
@@ -1796,6 +1826,7 @@ static int run_command(int argc, char **argv)
     memset(&cache, 0, sizeof(cache));
     memset(&generation_config, 0, sizeof(generation_config));
     memset(&generation_result, 0, sizeof(generation_result));
+    memset(&generation_stop, 0, sizeof(generation_stop));
 #ifdef NIYAH_CLI_ENABLE_CUDA
     memset(&cuda_model, 0, sizeof(cuda_model));
     memset(&cuda_decode, 0, sizeof(cuda_decode));
@@ -1829,6 +1860,11 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
+    if (model.config.n_segments != 0U) {
+        exit_code = fail_status("segment_conditioning_unsupported", NIYAH_ERR_INVALID_CONFIG);
+        goto cleanup;
+    }
+
     if (options.prompt_prefix == NULL &&
         !read_prompt_sidecar(
             options.checkpoint_path,
@@ -1851,8 +1887,7 @@ static int run_command(int argc, char **argv)
 
     if (sidecar_prefix_present || sidecar_suffix_present) {
         uint8_t checkpoint_identity[NIYAH_CHECKPOINT_IDENTITY_SHA256_SIZE];
-        char checkpoint_hex[65];
-        size_t identity_size;
+        int legacy = 0;
 
         if (!read_prompt_sidecar(
                 options.checkpoint_path,
@@ -1864,18 +1899,6 @@ static int run_command(int argc, char **argv)
             goto cleanup;
         }
 
-        identity_size = strlen(sidecar_prompt_sha);
-        while (identity_size != 0U &&
-               (sidecar_prompt_sha[identity_size - 1U] == '\n' ||
-                sidecar_prompt_sha[identity_size - 1U] == '\r')) {
-            sidecar_prompt_sha[--identity_size] = '\0';
-        }
-        if (identity_size != 64U) {
-            exit_code = fail_status(
-                "prompt_contract", NIYAH_ERR_INVALID_CONFIG);
-            goto cleanup;
-        }
-
         status = niyah_checkpoint_identity_sha256(
             options.checkpoint_path,
             checkpoint_identity);
@@ -1883,12 +1906,13 @@ static int run_command(int argc, char **argv)
             exit_code = fail_status("prompt_contract", status);
             goto cleanup;
         }
-        sha256_to_hex(checkpoint_identity, checkpoint_hex);
-        if (strcmp(sidecar_prompt_sha, checkpoint_hex) != 0) {
-            exit_code = fail_status(
-                "prompt_contract", NIYAH_ERR_INVALID_CONFIG);
+        if (!niyah_prompt_contract_validate(sidecar_prompt_sha, checkpoint_identity,
+                options.prompt_prefix != NULL ? NULL : (sidecar_prompt_prefix != NULL ? sidecar_prompt_prefix : ""),
+                options.prompt_suffix != NULL ? NULL : (sidecar_prompt_suffix != NULL ? sidecar_prompt_suffix : ""), &legacy)) {
+            exit_code = fail_status("prompt_contract", NIYAH_ERR_INVALID_CONFIG);
             goto cleanup;
         }
+        if (legacy) fprintf(stderr, "prompt_contract=legacy_checkpoint_only template_content_integrity=unverified\n");
     }
 
     vocab_size = niyah_tokenizer_vocab_size(tokenizer);
@@ -2059,34 +2083,41 @@ static int run_command(int argc, char **argv)
             goto cleanup;
         }
 
-        if (vocab_size > SIZE_MAX / sizeof(*cuda_logits)) {
+        status = niyah_cuda_generation_workspace_floats_with_repetition(
+            &model.config, &options.repetition, &workspace_count);
+        if (status != NIYAH_OK) {
+            exit_code = fail_status("cuda_workspace_query", status);
+            goto cleanup;
+        }
+        if (workspace_count > SIZE_MAX / sizeof(*cuda_workspace)) {
             exit_code = fail_status(
-                "cuda_logits_allocation",
+                "cuda_workspace_allocation",
                 NIYAH_ERR_OVERFLOW);
             goto cleanup;
         }
 
-        cuda_logits = (float *)calloc(
-            vocab_size,
-            sizeof(*cuda_logits));
-        if (cuda_logits == NULL) {
+        cuda_workspace = (float *)calloc(
+            workspace_count,
+            sizeof(*cuda_workspace));
+        if (cuda_workspace == NULL) {
             exit_code = fail_status(
-                "cuda_logits_allocation",
+                "cuda_workspace_allocation",
                 NIYAH_ERR_OUT_OF_MEMORY);
             goto cleanup;
         }
 
-        status = niyah_cuda_generate(
+        status = niyah_cuda_generate_with_repetition_ex(
             &cuda_model,
             &cuda_decode,
             prompt_tokens,
             prompt_count,
             &generation_config,
+            &options.repetition,
             generated_tokens,
             options.max_new_tokens,
             &generation_result,
-            cuda_logits,
-            vocab_size);
+            cuda_workspace,
+            workspace_count, &generation_stop);
         if (status != NIYAH_OK) {
             exit_code = fail_status("cuda_generation", status);
             goto cleanup;
@@ -2105,8 +2136,9 @@ static int run_command(int argc, char **argv)
             goto cleanup;
         }
 
-        status = niyah_generation_workspace_floats(
+        status = niyah_generation_workspace_floats_with_repetition(
             &model.config,
+            &options.repetition,
             &workspace_count);
         if (status != NIYAH_OK) {
             exit_code = fail_status("workspace_query", status);
@@ -2131,22 +2163,28 @@ static int run_command(int argc, char **argv)
             goto cleanup;
         }
 
-        status = niyah_generate(
+        status = niyah_generate_with_repetition_ex(
             &model,
             &cache,
             prompt_tokens,
             prompt_count,
             &generation_config,
+            &options.repetition,
             generated_tokens,
             options.max_new_tokens,
             &generation_result,
             workspace,
-            workspace_count);
+            workspace_count, &generation_stop);
         if (status != NIYAH_OK) {
             exit_code = fail_status("generation", status);
             goto cleanup;
         }
     }
+
+    fprintf(stderr,
+        "execution_status=NIYAH_OK stop_reason=%s cycle_period=%u "
+        "context_commit_allowed=0 quality_status=not_validated\n",
+        niyah_stop_name(generation_stop.reason), generation_stop.detected_period);
 
     status = niyah_tokenizer_decode(
         tokenizer,
@@ -2181,23 +2219,32 @@ static int run_command(int argc, char **argv)
         goto cleanup;
     }
 
+    /* Preserve decoded bytes on Windows instead of translating LF to CRLF. */
+#if defined(_WIN32)
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+        exit_code = fail_status("stdout_mode", NIYAH_ERR_IO);
+        goto cleanup;
+    }
+#endif
     if (decoded_size > 0U &&
         fwrite(decoded, 1U, decoded_size, stdout) != decoded_size) {
         exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
         goto cleanup;
     }
 
-    if (fputc('\n', stdout) == EOF) {
+    if (fputc('\n', stdout) == EOF || fflush(stdout) == EOF) {
         exit_code = fail_status("stdout_write", NIYAH_ERR_IO);
         goto cleanup;
     }
 
-    exit_code = 0;
+    exit_code = (generation_stop.reason == NIYAH_STOP_SINGLE_TOKEN_LOOP ||
+        generation_stop.reason == NIYAH_STOP_MULTI_TOKEN_LOOP ||
+        generation_stop.reason == NIYAH_STOP_ENTROPY_FLOOR) ? 20 : 0;
 
 cleanup:
     free(decoded);
 #ifdef NIYAH_CLI_ENABLE_CUDA
-    free(cuda_logits);
+    free(cuda_workspace);
     niyah_cuda_decode_state_destroy(&cuda_decode);
     niyah_cuda_model_state_destroy(&cuda_model);
 #endif

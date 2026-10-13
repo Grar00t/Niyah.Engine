@@ -3393,7 +3393,45 @@ static NiyahStatus niyah_cuda_generation_fail(
     return status;
 }
 
-extern "C" NiyahStatus niyah_cuda_generate(
+
+/* NIYAH_CUDA_STOP_POLICY_PARITY_V1 */
+#define NIYAH_CUDA_SAME_TOKEN_LIMIT 8U
+#define NIYAH_CUDA_ENTROPY_FLOOR 0.05f
+
+static NiyahStatus niyah_cuda_policy_entropy(
+    const float *logits, size_t count, float *out_entropy)
+{
+    size_t i;
+    float max_logit;
+    double sum = 0.0;
+    double weighted = 0.0;
+
+    if (logits == NULL || count == 0U) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    max_logit = logits[0];
+    for (i = 0U; i < count; ++i) {
+        if (!isfinite(logits[i])) {
+            return NIYAH_ERR_INVALID_CONFIG;
+        }
+        if (logits[i] > max_logit) {
+            max_logit = logits[i];
+        }
+    }
+    for (i = 0U; i < count; ++i) {
+        const double e = exp((double)logits[i] - (double)max_logit);
+        sum += e;
+        weighted += e * ((double)logits[i] - (double)max_logit);
+    }
+    if (!(sum > 0.0) || !isfinite(sum) || !isfinite(weighted)) {
+        return NIYAH_ERR_INVALID_CONFIG;
+    }
+    *out_entropy = (float)(log(sum) - weighted / sum);
+    return isfinite(*out_entropy) ? NIYAH_OK : NIYAH_ERR_INVALID_CONFIG;
+}
+
+
+static NiyahStatus niyah_cuda_generate_impl(
     const NiyahCudaModelState *model_state,
     NiyahCudaDecodeState *decode_state,
     const uint32_t *prompt_tokens,
@@ -3403,13 +3441,15 @@ extern "C" NiyahStatus niyah_cuda_generate(
     size_t output_capacity,
     NiyahGenerationResult *result,
     float *host_logits,
-    size_t host_logits_count)
+    size_t host_logits_count,
+    NiyahGenerationStopReport *stop_report)
 {
     const NiyahModelConfig *model_config;
     size_t required_context;
     size_t vocab;
     size_t i;
     size_t generated = 0U;
+    NiyahGuard shared_guard;
     NiyahSampler sampler;
     NiyahStatus status;
 
@@ -3490,10 +3530,34 @@ extern "C" NiyahStatus niyah_cuda_generate(
         }
     }
 
+    {
+        NiyahGuardConfig gc;
+        memset(&gc, 0, sizeof(gc));
+        gc.max_tokens = config->max_new_tokens;
+        gc.same_limit = 8U;
+        gc.max_period = 8U;
+        gc.cycles = 4U;
+        gc.entropy_floor = 0.05f;
+        gc.eos_token = config->eos_token;
+        gc.stop_on_eos = config->stop_on_eos;
+        (void)niyah_guard_init(&shared_guard, &gc);
+    }
     result->prompt_tokens = prompt_count;
 
     while (generated < config->max_new_tokens) {
         uint32_t token = 0U;
+        float entropy;
+        status = niyah_cuda_policy_entropy(host_logits, vocab, &entropy);
+        if (status != NIYAH_OK && stop_report != NULL)
+            stop_report->reason = NIYAH_STOP_NUMERIC_ERROR;
+        if (status != NIYAH_OK) {
+            return niyah_cuda_generation_fail(decode_state, result, status);
+        }
+
+        if (entropy < 0.05f) {
+            shared_guard.reason = NIYAH_STOP_ENTROPY_FLOOR;
+            break;
+        }
 
         status = niyah_sampler_sample(
             &sampler,
@@ -3511,9 +3575,15 @@ extern "C" NiyahStatus niyah_cuda_generate(
         generated += 1U;
         result->generated_tokens = generated;
 
+
         if (config->stop_on_eos != 0 &&
             token == config->eos_token) {
             result->stopped_on_eos = 1;
+            break;
+        }
+
+        if (niyah_guard_token(&shared_guard, token) == NIYAH_STOP_SINGLE_TOKEN_LOOP ||
+            shared_guard.reason == NIYAH_STOP_MULTI_TOKEN_LOOP) {
             break;
         }
 
@@ -3530,5 +3600,48 @@ extern "C" NiyahStatus niyah_cuda_generate(
         }
     }
 
+    if (stop_report != NULL) {
+        stop_report->reason = result->stopped_on_eos ? NIYAH_STOP_EOS :
+            (shared_guard.reason == NIYAH_STOP_NONE ?
+                NIYAH_STOP_TOKEN_BUDGET : shared_guard.reason);
+        stop_report->detected_period = shared_guard.detected_period;
+    }
     return NIYAH_OK;
+}
+
+extern "C" NiyahStatus niyah_cuda_generate(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaDecodeState *decode_state,
+    const uint32_t *prompt_tokens,
+    size_t prompt_count,
+    const NiyahGenerationConfig *config,
+    uint32_t *output_tokens,
+    size_t output_capacity,
+    NiyahGenerationResult *result,
+    float *host_logits,
+    size_t host_logits_count)
+{
+    return niyah_cuda_generate_impl(model_state, decode_state, prompt_tokens, prompt_count, config, output_tokens, output_capacity, result, host_logits, host_logits_count, NULL);
+}
+
+extern "C" NiyahStatus niyah_cuda_generate_ex(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaDecodeState *decode_state,
+    const uint32_t *prompt_tokens,
+    size_t prompt_count,
+    const NiyahGenerationConfig *config,
+    uint32_t *output_tokens,
+    size_t output_capacity,
+    NiyahGenerationResult *result,
+    float *host_logits,
+    size_t host_logits_count,
+    NiyahGenerationStopReport *stop_report)
+{
+    NiyahStatus status;
+    if (stop_report != NULL) memset(stop_report, 0, sizeof(*stop_report));
+    status = niyah_cuda_generate_impl(model_state, decode_state, prompt_tokens, prompt_count, config, output_tokens, output_capacity, result, host_logits, host_logits_count, stop_report);
+    if (status != NIYAH_OK && stop_report != NULL &&
+        stop_report->reason == NIYAH_STOP_NONE)
+        stop_report->reason = NIYAH_STOP_BACKEND_ERROR;
+    return status;
 }

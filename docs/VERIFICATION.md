@@ -5,7 +5,13 @@ This document separates repository-backed implementation evidence from local dia
 **Documentation snapshot:** 2026-09-21  
 **Documentation branch base:** `732f84fc34b2b5cad2ac40b4195e293fc2fad9aa`
 
-## 1. Current repository/CI evidence
+For the later local working trees and original test receipts, see the
+[2026-10-13 audit](LOCAL_AUDIT_2026-10-13.md). The sections below retain the
+**2026-09-21 historical snapshot**, including its CLI and PR-status observations;
+they are not a current inventory or a CI attestation for unpublished changes.
+The current CLI reference is [CLI.md](CLI.md).
+
+## 1. Historical repository/CI evidence
 
 The documentation branch was created from `main` at commit:
 

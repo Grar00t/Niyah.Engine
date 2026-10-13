@@ -1,119 +1,138 @@
 #!/usr/bin/env python3
-"""Offline validator for benign onion-source manifests.
+"""Offline onion manifest metadata validation; no network or content inspection.
 
-This tool does not crawl Tor and does not make network requests. It validates
-newline-delimited JSON metadata before a source is admitted to an external
-collection/RAG/training pipeline.
+URL validation checks hostname syntax only, NOT onion v3 checksum/version.
+Hashes, license evidence and review labels are declarations; this tool does
+not verify content hashes, legal permission, malware absence or actual PII.
+REFERENCE_ONLY and QUARANTINE do not grant training/RAG permissions.
 """
-
-from __future__ import annotations
-
 import argparse
+from datetime import datetime
 import hashlib
 import json
+from pathlib import Path
 import re
 import sys
-from pathlib import Path
+from urllib.parse import urlsplit
 
 ALLOWED_DECISIONS = {"REFERENCE_ONLY", "RAG_ALLOWED", "TRAIN_ALLOWED", "QUARANTINE"}
-ALLOWED_CATEGORIES = {
-    "academic", "archive", "books", "culture", "journalism", "language",
-    "open_source_docs", "public_interest", "privacy_rights", "technical", "forum",
-}
-REQUIRED = {
-    "source_url", "source_name", "retrieved_at", "content_type", "language",
-    "category", "license", "license_evidence", "sha256", "bytes", "pii_review",
-    "malware_review", "redistribution_allowed", "training_allowed", "rag_allowed",
-    "decision",
-}
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-ONION_RE = re.compile(r"^https?://[a-z2-7]{56}\.onion(?:/|$)", re.I)
+ALLOWED_CATEGORIES = {"academic", "archive", "books", "culture", "journalism", "language",
+                      "open_source_docs", "public_interest", "privacy_rights", "technical", "forum"}
+STRING_FIELDS = {"source_url", "source_name", "retrieved_at", "content_type", "language", "category",
+                 "license", "license_evidence", "sha256", "pii_review", "malware_review", "decision"}
+PERMISSIONS = {"redistribution_allowed", "training_allowed", "rag_allowed"}
+REQUIRED = STRING_FIELDS | PERMISSIONS | {"bytes"}
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+ONION_HOST_RE = re.compile(r"[a-z2-7]{56}\.onion", re.I)
 
 
-def validate_record(obj: dict, line_no: int) -> list[str]:
-    errors: list[str] = []
+def valid_url(value):
+    if not isinstance(value, str) or any(c.isspace() or ord(c) < 32 for c in value):
+        return False
+    try:
+        parts = urlsplit(value)
+        return (parts.scheme in {"http", "https"} and parts.username is None and parts.password is None
+                and parts.port is None and ONION_HOST_RE.fullmatch(parts.hostname or "") is not None)
+    except ValueError:
+        return False
+
+
+def validate_record(obj, line_no):
+    prefix = f"line_{line_no}:"
+    if not isinstance(obj, dict):
+        return [prefix + "record_must_be_object"]
     missing = sorted(REQUIRED - obj.keys())
     if missing:
-        return [f"line_{line_no}:missing:{','.join(missing)}"]
-
-    if not isinstance(obj["source_url"], str) or not ONION_RE.match(obj["source_url"]):
-        errors.append(f"line_{line_no}:invalid_onion_url")
-    if obj["category"] not in ALLOWED_CATEGORIES:
-        errors.append(f"line_{line_no}:invalid_category:{obj['category']}")
-    if obj["decision"] not in ALLOWED_DECISIONS:
-        errors.append(f"line_{line_no}:invalid_decision:{obj['decision']}")
+        return [prefix + "missing:" + ",".join(missing)]
+    errors = []
+    for key in sorted(STRING_FIELDS):
+        if not isinstance(obj[key], str) or not obj[key].strip():
+            errors.append(prefix + key + "_must_be_nonempty_string")
+    for key in sorted(PERMISSIONS):
+        if type(obj[key]) is not bool:
+            errors.append(prefix + key + "_must_be_boolean")
+    if type(obj["bytes"]) is not int or obj["bytes"] < 0:
+        errors.append(prefix + "invalid_bytes")
+    if not valid_url(obj["source_url"]):
+        errors.append(prefix + "invalid_onion_url")
+    for field, choices in (("category", ALLOWED_CATEGORIES), ("decision", ALLOWED_DECISIONS)):
+        if not isinstance(obj[field], str) or obj[field] not in choices:
+            errors.append(prefix + "invalid_" + field)
     if not isinstance(obj["sha256"], str) or not SHA256_RE.fullmatch(obj["sha256"]):
-        errors.append(f"line_{line_no}:invalid_sha256")
-    if not isinstance(obj["bytes"], int) or obj["bytes"] < 0:
-        errors.append(f"line_{line_no}:invalid_bytes")
-
-    for key in ("redistribution_allowed", "training_allowed", "rag_allowed"):
-        if not isinstance(obj[key], bool):
-            errors.append(f"line_{line_no}:{key}_must_be_boolean")
-
-    if obj["decision"] == "TRAIN_ALLOWED":
-        if not obj["training_allowed"]:
-            errors.append(f"line_{line_no}:train_decision_without_training_permission")
-        if not obj["redistribution_allowed"]:
-            errors.append(f"line_{line_no}:train_decision_without_redistribution_permission")
-        if str(obj["license"]).strip().lower() in {"", "unknown", "none", "n/a"}:
-            errors.append(f"line_{line_no}:train_decision_without_license")
-        if not str(obj["license_evidence"]).strip():
-            errors.append(f"line_{line_no}:train_decision_without_license_evidence")
-
-    if obj["decision"] == "RAG_ALLOWED" and not obj["rag_allowed"]:
-        errors.append(f"line_{line_no}:rag_decision_without_rag_permission")
-
-    if obj["decision"] != "QUARANTINE":
-        for key in ("pii_review", "malware_review"):
-            if str(obj[key]).upper() not in {"PASS", "NOT_APPLICABLE"}:
-                errors.append(f"line_{line_no}:{key}_not_cleared")
-
+        errors.append(prefix + "invalid_sha256")
+    try:
+        value = obj["retrieved_at"]
+        if not isinstance(value, str):
+            raise ValueError("not a timestamp")
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if stamp.tzinfo is None or "T" not in value:
+            raise ValueError("timestamp requires date, time and timezone")
+    except (ValueError, TypeError, OverflowError):
+        errors.append(prefix + "invalid_retrieved_at")
+    decision = obj["decision"]
+    if decision == "TRAIN_ALLOWED":
+        for key in ("training_allowed", "redistribution_allowed"):
+            if obj[key] is not True:
+                errors.append(prefix + "train_decision_without_" + key)
+        if isinstance(obj["license"], str) and obj["license"].strip().lower() in {"unknown", "none", "n/a"}:
+            errors.append(prefix + "train_decision_without_license")
+    if decision == "RAG_ALLOWED" and obj["rag_allowed"] is not True:
+        errors.append(prefix + "rag_decision_without_rag_permission")
+    if decision == "REFERENCE_ONLY" or decision == "QUARANTINE":
+        if obj["training_allowed"] is True or obj["rag_allowed"] is True:
+            errors.append(prefix + "decision_conflicts_with_permissions")
+    for key in ("pii_review", "malware_review"):
+        if not isinstance(obj[key], str) or obj[key] not in {"PASS", "NOT_APPLICABLE", "FAIL", "PENDING"}:
+            errors.append(prefix + key + "_invalid_review")
+        elif decision != "QUARANTINE" and obj[key] not in {"PASS", "NOT_APPLICABLE"}:
+            errors.append(prefix + key + "_not_cleared")
     return errors
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
+def validate_bytes(raw):
+    errors, count = [], 0
+    decisions = {x: 0 for x in sorted(ALLOWED_DECISIONS)}
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeError as exc:
+        return [f"invalid_utf8:{exc.start}"], count, decisions
+    for line_no, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        count += 1
+        try:
+            obj = json.loads(line)
+        except ValueError as exc:
+            errors.append(f"line_{line_no}:invalid_json:{exc}")
+            continue
+        errors.extend(validate_record(obj, line_no))
+        decision = obj.get("decision") if isinstance(obj, dict) else None
+        if isinstance(decision, str) and decision in decisions:
+            decisions[decision] += 1
+    if count == 0:
+        errors.append("empty_manifest")
+    return errors, count, decisions
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("manifest", type=Path)
     args = ap.parse_args()
-
-    if not args.manifest.is_file():
-        print("VALID=NO\nFAIL=manifest_not_found", file=sys.stderr)
+    try:
+        raw = args.manifest.read_bytes()
+    except OSError as exc:
+        print(f"VALID=NO\nFAIL=manifest_read:{exc}", file=sys.stderr)
         return 2
-
-    errors: list[str] = []
-    count = 0
-    decisions = {x: 0 for x in sorted(ALLOWED_DECISIONS)}
-
-    with args.manifest.open("r", encoding="utf-8") as f:
-        for line_no, line in enumerate(f, 1):
-            if not line.strip():
-                continue
-            count += 1
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError as e:
-                errors.append(f"line_{line_no}:invalid_json:{e.msg}")
-                continue
-            if not isinstance(obj, dict):
-                errors.append(f"line_{line_no}:record_must_be_object")
-                continue
-            errors.extend(validate_record(obj, line_no))
-            if obj.get("decision") in decisions:
-                decisions[obj["decision"]] += 1
-
-    print(f"MANIFEST={args.manifest}")
-    print(f"MANIFEST_SHA256={hashlib.sha256(args.manifest.read_bytes()).hexdigest()}")
-    print(f"RECORDS={count}")
-    for key in sorted(decisions):
-        print(f"{key}={decisions[key]}")
-
+    errors, count, decisions = validate_bytes(raw)
+    print(f"MANIFEST={args.manifest}\nMANIFEST_SHA256={hashlib.sha256(raw).hexdigest()}\nRECORDS={count}")
+    print("VALIDATION_SCOPE=metadata_only\nONION_VALIDATION=hostname_pattern_only")
+    for key, value in decisions.items():
+        print(f"{key}={value}")
     if errors:
         print("VALID=NO")
-        for e in errors[:100]:
-            print(f"FAIL={e}", file=sys.stderr)
+        for error in errors[:100]:
+            print(f"FAIL={error}", file=sys.stderr)
         return 1
-
     print("VALID=YES")
     return 0
 
