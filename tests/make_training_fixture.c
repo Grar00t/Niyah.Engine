@@ -19,7 +19,15 @@ int main(int argc, char **argv)
     int i;
 
     if (argc < 4) return 2;
-    for (i = 1; i < argc; ++i) (void)remove(argv[i]);
+    for (i = 1; i < argc; ++i) {
+        char sidecar[4096];
+        int written;
+        (void)remove(argv[i]);
+        written = snprintf(sidecar, sizeof(sidecar), "%s.pending", argv[i]);
+        if (written > 0 && (size_t)written < sizeof(sidecar)) (void)remove(sidecar);
+        written = snprintf(sidecar, sizeof(sidecar), "%s.complete", argv[i]);
+        if (written > 0 && (size_t)written < sizeof(sidecar)) (void)remove(sidecar);
+    }
     memset(&shard, 0, sizeof(shard));
 
     config.target_vocab_size = 266U;

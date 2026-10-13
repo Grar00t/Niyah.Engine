@@ -1,3 +1,4 @@
+#include "niyah_publish_internal.h"
 #include "niyah/dataset.h"
 
 #include <limits.h>
@@ -26,13 +27,7 @@ typedef struct NiyahDatasetCrc32 {
 
 static FILE *niyah_dataset_fopen(const char *path, const char *mode)
 {
-#if defined(_MSC_VER)
-    FILE *file = NULL;
-    if (fopen_s(&file, path, mode) != 0) return NULL;
-    return file;
-#else
-    return fopen(path, mode);
-#endif
+    return niyah_file_open(path, mode);
 }
 
 static uint64_t mix64(uint64_t x)
@@ -279,7 +274,7 @@ NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
     uint32_t flags;
     NiyahDatasetCrc32 crc;
     NiyahStatus status;
-    int close_result;
+    NiyahPublication stage = {0};
 
     if (path == NULL || path[0] == '\0') return NIYAH_ERR_INVALID_ARGUMENT;
     status = validate_cursor(cursor);
@@ -323,7 +318,7 @@ NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
     store_u32_le(footer, NIYAH_DATASET_CURSOR_CHECKSUM_CRC32);
     store_u32_le(footer+4U, crc_final(&crc));
 
-    file = niyah_dataset_fopen(path, "wb");
+    file = niyah_atomic_open(path, &stage);
     if (file == NULL) return NIYAH_ERR_IO;
 
     status = fwrite(header,1U,header_size,file)==header_size ? NIYAH_OK : NIYAH_ERR_IO;
@@ -331,10 +326,7 @@ NiyahStatus niyah_dataset_cursor_save(const NiyahDatasetCursor *cursor,
         status = fwrite(footer,1U,sizeof(footer),file)==sizeof(footer) ? NIYAH_OK : NIYAH_ERR_IO;
     if (status == NIYAH_OK && fflush(file) != 0) status = NIYAH_ERR_IO;
 
-    close_result=fclose(file);
-    if (status == NIYAH_OK && close_result != 0) status=NIYAH_ERR_IO;
-    if (status != NIYAH_OK) (void)remove(path);
-    return status;
+    return niyah_atomic_finish(file, &stage, path, status);
 }
 
 NiyahStatus niyah_dataset_cursor_load(const char *path,

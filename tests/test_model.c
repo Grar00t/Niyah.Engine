@@ -166,6 +166,25 @@ static int test_math(void)
     CHECK(fabsf(out[0] - 3.0f) < 1.0e-6f);
     CHECK(fabsf(out[1] - 7.0f) < 1.0e-6f);
 
+    {
+        float wide_matrix[38];
+        float wide_x[19];
+        float wide_out[2] = {0.0f, 0.0f};
+        float expected0 = 0.0f;
+        float expected1 = 0.0f;
+        size_t i;
+        for (i = 0U; i < 19U; ++i) {
+            wide_x[i] = (float)(i + 1U) * 0.125f;
+            wide_matrix[i] = (float)(i + 3U) * 0.03125f;
+            wide_matrix[19U + i] = (float)(37U - i) * -0.015625f;
+            expected0 += wide_matrix[i] * wide_x[i];
+            expected1 += wide_matrix[19U + i] * wide_x[i];
+        }
+        niyah_matvec(wide_out, wide_matrix, wide_x, 2U, 19U);
+        CHECK(fabsf(wide_out[0] - expected0) < 1.0e-5f);
+        CHECK(fabsf(wide_out[1] - expected1) < 1.0e-5f);
+    }
+
     CHECK(niyah_rmsnorm(norm_out, norm_x, norm_w, 2U, eps) == NIYAH_OK);
     CHECK(fabsf(norm_out[0] - 3.0f * inv) < 1.0e-6f);
     CHECK(fabsf(norm_out[1] - 4.0f * inv) < 1.0e-6f);

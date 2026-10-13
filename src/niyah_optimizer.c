@@ -62,6 +62,7 @@ static int niyah_layout_equal(const NiyahModelLayout *a,
                               const NiyahModelLayout *b)
 {
     return a->token_embedding == b->token_embedding &&
+           a->segment_embedding == b->segment_embedding &&
            a->layers == b->layers &&
            a->layer_stride == b->layer_stride &&
            a->final_norm == b->final_norm &&
@@ -77,7 +78,8 @@ static NiyahStatus niyah_adamw_validate_model(const NiyahModel *model,
     NiyahModelLayout canonical;
     NiyahStatus status;
 
-    if (model == NULL || model->weights == NULL || model->weight_count == 0U) {
+    if (model == NULL || model->weights == NULL || model->weight_count == 0U ||
+        model->storage_kind != NIYAH_MODEL_STORAGE_OWNED) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
     status = niyah_model_layout_compute(&model->config, &canonical);

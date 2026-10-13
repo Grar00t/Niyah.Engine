@@ -1,3 +1,9 @@
+string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef _niyah_fixture_id)
+if(DEFINED NIYAH_TRAIN_MULTI_PREFIX)
+    set(NIYAH_TRAIN_MULTI_PREFIX "${NIYAH_TRAIN_MULTI_PREFIX}/fixture-${_niyah_fixture_id}")
+    get_filename_component(_fixture_parent "${NIYAH_TRAIN_MULTI_PREFIX}" DIRECTORY)
+    file(MAKE_DIRECTORY "${_fixture_parent}")
+endif()
 if(NOT DEFINED NIYAH_TRAIN_EXE OR
    NOT DEFINED NIYAH_TRAIN_TOK OR
    NOT DEFINED NIYAH_TRAIN_SHARD_A OR

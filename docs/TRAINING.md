@@ -27,6 +27,13 @@ niyah run / niyah_evaluate() / niyah_probe
 
 Tokenizer, dataset, checkpoint, and cursor identities form explicit compatibility boundaries. Do not mix artifacts from unrelated preparation/training runs unless compatibility is established.
 
+The local trainer's [persistence protocol](PERSISTENCE_PROTOCOL.md) reserves a
+pending name and publishes completion metadata after both artifacts validate.
+The pending marker remains after success; it must be interpreted with completion
+metadata. This is not an atomic two-file transaction. For model-only adaptation,
+`niyah-train finetune` starts fresh optimizer/cursor state; `resume` continues
+existing state. Exact syntax is in the [CLI reference](CLI.md).
+
 ## Corpus preparation
 
 Basic preparation:

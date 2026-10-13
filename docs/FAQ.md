@@ -40,7 +40,7 @@ Loss measures how well the model predicts the distribution it is trained/evaluat
 
 The current diagnostic corpus is known to have quality concerns, but data quality has not been established as the sole cause of every weak generation.
 
-## What is the current held-out result?
+## What is the historical pilot held-out result?
 
 The recorded pilot trajectory is:
 
@@ -52,6 +52,10 @@ step 1905: loss 3.643954027, ppl  38.242751050
 ```
 
 See [EVALUATION.md](EVALUATION.md) for methodology and limitations.
+
+The later Wikipedia checkpoint and repetition runs are separate evidence in
+the [2026-10-13 audit](LOCAL_AUDIT_2026-10-13.md); they do not replace these
+historical measurements or establish broad generation quality.
 
 ## Is that a final test score?
 
@@ -67,13 +71,16 @@ No. Segment IDs provide a learned modeling signal. They are not a security bound
 
 ## Does the repository currently have `niyah eval`?
 
-Not on the documented `main` revision. The current primary CLI exposes `prepare` and `run`; evaluation exists as a native API and has been exercised with diagnostic helpers.
+Yes. The inspected CLI exposes `prepare`, `shard`, `eval`, and `run`.
+Evaluation is read-only and supports raw text and tokenizer-bound shards.
 
 See [CLI.md](CLI.md).
 
 ## Is the open Evidence V1 PR part of main?
 
-No. PR #56 remains an open draft at the current documentation snapshot. Its IR/receipt/evidence additions should not be described as merged main functionality until merged.
+The 2026-09-21 [verification snapshot](VERIFICATION.md) recorded PR #56 as an
+open draft. That historical observation is not a live PR-status check. Use the
+exact source revision and current GitHub state before making a merge claim.
 
 ## Where should I start?
 

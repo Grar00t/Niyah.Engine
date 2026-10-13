@@ -124,9 +124,9 @@ static void test_forward_changes_with_segment_id(void)
                   &model, tokens, 3U, segments_b, logits_b, logits_count, ws, ws_count) ==
               NIYAH_OK);
         for (i = 0U; i < logits_count; ++i) {
+            CHECK(isfinite(logits_a[i]) && isfinite(logits_b[i]));
             if (logits_a[i] != logits_b[i]) {
                 differs = 1;
-                break;
             }
         }
         CHECK(differs != 0);
@@ -198,6 +198,7 @@ static float loss_for_segment_weight(NiyahModel *model,
                                      const uint32_t *targets,
                                      const uint32_t *segment_ids,
                                      size_t token_count,
+                                     size_t loss_start,
                                      size_t weight_index,
                                      float delta)
 {
@@ -217,9 +218,9 @@ static float loss_for_segment_weight(NiyahModel *model,
                     model, tokens, token_count, segment_ids,
                     logits, logits_count, ws, ws_count) == NIYAH_OK) {
                 float direct_loss = NAN;
-                (void)niyah_cross_entropy_loss(logits, targets, token_count,
+                (void)niyah_cross_entropy_loss_masked(logits, targets, token_count,
                                                model->config.vocab_size,
-                                               &direct_loss, NULL, 0U);
+                                               loss_start, &direct_loss, NULL, 0U);
                 loss = direct_loss;
             }
         }
@@ -237,11 +238,13 @@ static void test_segment_gradient_finite_difference(void)
     NiyahModelGradients gradients;
     const uint32_t tokens[3] = {1U, 2U, 3U};
     const uint32_t targets[3] = {2U, 3U, 4U};
-    const uint32_t segment_ids[3] = {0U, 1U, 1U};
+    const uint32_t patterns[4][3] = {{0U, 1U, 1U}, {0U, 0U, 0U},
+                                      {1U, 1U, 1U}, {1U, 0U, 1U}};
     size_t ws_count = 0U;
     float *ws;
     float loss = 0.0f;
-    size_t index;
+    size_t index, pattern, start, segment, dim;
+    const size_t dims[3] = {0U, 3U, 7U};
     const float eps = 1.0e-3f;
 
     memset(&model, 0, sizeof(model));
@@ -253,23 +256,30 @@ static void test_segment_gradient_finite_difference(void)
     ws = (float *)calloc(ws_count, sizeof(float));
     CHECK(ws != NULL);
     if (ws != NULL) {
-        CHECK(niyah_train_backward_masked_with_segments(
-                  &model, tokens, targets, 3U, 0U, segment_ids,
-                  &loss, &gradients, ws, ws_count) == NIYAH_OK);
-        CHECK(isfinite(loss));
-
-        /* sample one float inside the segment_embedding region (segment 1, dim 3) */
-        index = model.layout.segment_embedding + 1U * config.embedding_dim + 3U;
-        {
-            const float plus = loss_for_segment_weight(
-                &model, tokens, targets, segment_ids, 3U, index, eps);
-            const float minus = loss_for_segment_weight(
-                &model, tokens, targets, segment_ids, 3U, index, -eps);
-            const float numerical = (plus - minus) / (2.0f * eps);
-            const float analytic = gradients.values[index];
-            const float scale = fmaxf(fabsf(analytic), fabsf(numerical));
-            CHECK(isfinite(plus) && isfinite(minus));
-            CHECK(fabsf(analytic - numerical) <= 2.5e-3f + 0.15f * scale);
+        for (pattern = 0U; pattern < 4U; ++pattern) {
+            for (start = 0U; start < 3U; ++start) {
+                CHECK(niyah_train_backward_masked_with_segments(
+                          &model, tokens, targets, 3U, start, patterns[pattern],
+                          &loss, &gradients, ws, ws_count) == NIYAH_OK);
+                CHECK(isfinite(loss));
+                for (segment = 0U; segment < 2U; ++segment) {
+                    for (dim = 0U; dim < 3U; ++dim) {
+                        float plus, minus, numerical, analytic, scale;
+                        index = model.layout.segment_embedding +
+                                segment * config.embedding_dim + dims[dim];
+                        plus = loss_for_segment_weight(&model, tokens, targets,
+                            patterns[pattern], 3U, start, index, eps);
+                        minus = loss_for_segment_weight(&model, tokens, targets,
+                            patterns[pattern], 3U, start, index, -eps);
+                        numerical = (plus - minus) / (2.0f * eps);
+                        analytic = gradients.values[index];
+                        scale = fmaxf(fabsf(analytic), fabsf(numerical));
+                        CHECK(isfinite(plus) && isfinite(minus) &&
+                              isfinite(numerical) && isfinite(analytic));
+                        CHECK(fabsf(analytic - numerical) <= 2.5e-3f + 0.15f * scale);
+                    }
+                }
+            }
         }
     }
 

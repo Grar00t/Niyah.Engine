@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <limits.h>
+#include <math.h>
 #include <stddef.h>
 
 static int range_ok(size_t offset, size_t count, size_t capacity)
@@ -64,25 +65,19 @@ extern "C" int niyah_cuda_train_state_accumulate_gradients(
 {
     const unsigned int threads = 256U;
     unsigned int blocks;
+    size_t needed_blocks;
 
     if (state == NULL ||
         state->device_gradients == NULL ||
         state->device_accumulated_gradients == NULL ||
-        state->gradient_capacity == 0U) {
+        state->gradient_capacity == 0U ||
+        state->gradient_capacity > ((size_t)-1) / sizeof(float) ||
+        !isfinite(scale)) {
         return 1;
     }
 
-    blocks = (unsigned int)(
-        (state->gradient_capacity + (size_t)threads - 1U) /
-        (size_t)threads);
-
-    if (blocks == 0U) {
-        return 1;
-    }
-
-    if (blocks > 65535U) {
-        blocks = 65535U;
-    }
+    needed_blocks = (state->gradient_capacity - 1U) / (size_t)threads + 1U;
+    blocks = needed_blocks > 65535U ? 65535U : (unsigned int)needed_blocks;
 
     niyah_cuda_gradient_accumulate_kernel<<<blocks, threads>>>(
         (float *)state->device_accumulated_gradients,
@@ -120,24 +115,18 @@ extern "C" int niyah_cuda_train_state_scale_accumulated_gradients(
 {
     const unsigned int threads = 256U;
     unsigned int blocks;
+    size_t needed_blocks;
 
     if (state == NULL ||
         state->device_accumulated_gradients == NULL ||
-        state->gradient_capacity == 0U) {
+        state->gradient_capacity == 0U ||
+        state->gradient_capacity > ((size_t)-1) / sizeof(float) ||
+        !isfinite(scale)) {
         return 1;
     }
 
-    blocks = (unsigned int)(
-        (state->gradient_capacity + (size_t)threads - 1U) /
-        (size_t)threads);
-
-    if (blocks == 0U) {
-        return 1;
-    }
-
-    if (blocks > 65535U) {
-        blocks = 65535U;
-    }
+    needed_blocks = (state->gradient_capacity - 1U) / (size_t)threads + 1U;
+    blocks = needed_blocks > 65535U ? 65535U : (unsigned int)needed_blocks;
 
     niyah_cuda_gradient_scale_kernel<<<blocks, threads>>>(
         (float *)state->device_accumulated_gradients,

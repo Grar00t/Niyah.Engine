@@ -49,11 +49,15 @@ if(NIYAH_ENABLE_CUDA)
         message(FATAL_ERROR "NIYAH_ENABLE_CUDA=ON but no CUDA compiler was found")
     endif()
 
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES "60;75")
+    endif()
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
 
     add_library(niyah_cuda_backend STATIC
         src/niyah_cuda_matvec.cu
+        src/niyah_cuda_generate_repetition.c
     )
     target_include_directories(niyah_cuda_backend
         PRIVATE
@@ -75,6 +79,9 @@ endif()
 
 add_library(niyah STATIC
     src/niyah_model.c
+    src/niyah_publish_internal.c
+    src/niyah_pair_internal.c
+    src/niyah_casper.c
     src/niyah_math.c
     src/niyah_sha256.c
     src/niyah_tokenizer.c
@@ -92,6 +99,7 @@ add_library(niyah STATIC
     src/niyah_optimizer.c
     src/niyah_checkpoint.c
     src/niyah_coordination.c
+    src/niyah_oracle.c
     src/niyah_receipt.c
     src/niyah_receipt_chain.c
 )
@@ -155,6 +163,7 @@ endif()
 add_executable(niyah_train tools/niyah_train.c)
 set_target_properties(niyah_train PROPERTIES OUTPUT_NAME "niyah-train")
 target_link_libraries(niyah_train PRIVATE niyah)
+target_include_directories(niyah_train PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 if(NIYAH_ENABLE_CUDA)
     target_include_directories(
@@ -607,6 +616,37 @@ if(NIYAH_BUILD_TESTS)
     add_executable(niyah_model_test tests/test_model.c)
     target_link_libraries(niyah_model_test PRIVATE niyah)
 
+    add_executable(niyah_casper_mmap_test tests/test_casper_mmap.c)
+    target_link_libraries(niyah_casper_mmap_test PRIVATE niyah)
+    add_test(NAME niyah_casper_mmap_test COMMAND niyah_casper_mmap_test)
+
+    add_executable(
+        niyah_casper_external_mmap_test
+        tests/test_casper_external_mmap.c
+    )
+    target_link_libraries(niyah_casper_external_mmap_test PRIVATE niyah)
+    add_test(
+        NAME niyah_casper_external_mmap_test
+        COMMAND niyah_casper_external_mmap_test
+    )
+    set_tests_properties(
+        niyah_casper_external_mmap_test
+        PROPERTIES
+            LABELS "external;casper;mmap"
+            SKIP_RETURN_CODE 77
+    )
+
+    add_test(
+        NAME niyah_casper_external_identity_test
+        COMMAND ${CMAKE_COMMAND}
+            -DTEST_EXECUTABLE=$<TARGET_FILE:niyah_casper_external_mmap_test>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_casper_external_identity.cmake
+    )
+    set_tests_properties(niyah_casper_external_identity_test PROPERTIES
+        LABELS "external;casper;mmap"
+        SKIP_REGULAR_EXPRESSION "SKIP: external model is not configured"
+    )
+
     add_executable(niyah_tokenizer_test tests/test_tokenizer.c)
     target_link_libraries(niyah_tokenizer_test PRIVATE niyah)
 
@@ -1007,6 +1047,28 @@ if(NIYAH_BUILD_TESTS)
 endif()
 
 if(NIYAH_BUILD_TESTS)
+    add_executable(niyah_oracle_test tests/test_oracle.c)
+    target_link_libraries(niyah_oracle_test PRIVATE niyah)
+    if(MSVC)
+        target_compile_options(niyah_oracle_test PRIVATE /W4 /WX)
+    else()
+        target_compile_options(niyah_oracle_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME niyah_oracle_test COMMAND niyah_oracle_test)
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(niyah_oracle_coordination_test tests/test_oracle_coordination.c)
+    target_link_libraries(niyah_oracle_coordination_test PRIVATE niyah)
+    if(MSVC)
+        target_compile_options(niyah_oracle_coordination_test PRIVATE /W4 /WX)
+    else()
+        target_compile_options(niyah_oracle_coordination_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME niyah_oracle_coordination_test COMMAND niyah_oracle_coordination_test)
+endif()
+
+if(NIYAH_BUILD_TESTS)
     add_executable(
         niyah_receipt_test
         tests/test_receipt.c
@@ -1070,4 +1132,122 @@ if(NIYAH_BUILD_TESTS)
         NAME niyah_receipt_chain_test
         COMMAND niyah_receipt_chain_test
     )
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    foreach(_test IN ITEMS probe sampler prompt_contract)
+        add_executable(niyah_${_test}_test tests/test_${_test}.c)
+        target_link_libraries(niyah_${_test}_test PRIVATE niyah)
+        target_include_directories(niyah_${_test}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        if(MSVC)
+            target_compile_options(niyah_${_test}_test PRIVATE /W4 /WX)
+        else()
+            target_compile_options(niyah_${_test}_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        add_test(NAME niyah_${_test}_test COMMAND niyah_${_test}_test)
+    endforeach()
+    add_executable(niyah_publication_driver tests/publication_driver.c)
+    target_link_libraries(niyah_publication_driver PRIVATE niyah)
+    target_include_directories(niyah_publication_driver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    if(MSVC)
+        target_compile_options(niyah_publication_driver PRIVATE /W4 /WX)
+    else()
+        target_compile_options(niyah_publication_driver PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME niyah_publication_test COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_publication.py
+        $<TARGET_FILE:niyah_cli> $<TARGET_FILE:niyah_train> $<TARGET_FILE:niyah_publication_driver>)
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(niyah_sha256_test tests/test_sha256.c src/niyah_sha256.c)
+    target_include_directories(niyah_sha256_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    if(MSVC)
+        target_compile_options(niyah_sha256_test PRIVATE /W4 /WX)
+    else()
+        target_compile_options(niyah_sha256_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME niyah_sha256_test COMMAND niyah_sha256_test)
+    add_test(NAME niyah_corpus_tools_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_corpus_tools.py)
+    add_test(NAME niyah_profile_nsys_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_profile_nsys.py)
+    set_tests_properties(niyah_profile_nsys_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_executable(niyah_demo_logging tools/demo_logging.c)
+    target_include_directories(niyah_demo_logging PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    if(MSVC)
+        target_compile_options(niyah_demo_logging PRIVATE /W4 /WX)
+    else()
+        target_compile_options(niyah_demo_logging PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_definitions(niyah_demo_logging PRIVATE _POSIX_C_SOURCE=200809L)
+        target_link_libraries(niyah_demo_logging PRIVATE m)
+    endif()
+    add_test(NAME niyah_demo_logging_test COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_demo_logging.py $<TARGET_FILE:niyah_demo_logging>)
+    add_test(NAME niyah_stdout_failure_test COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_stdout_failure.py
+        $<TARGET_FILE:niyah_cli> $<TARGET_FILE:niyah_probe>
+        $<TARGET_FILE:niyah_training_fixture> $<TARGET_FILE:niyah_train>)
+endif()
+
+if(NIYAH_BUILD_TESTS)
+    add_test(NAME niyah_unicode_paths_test COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_unicode_paths.py
+        $<TARGET_FILE:niyah_cli> $<TARGET_FILE:niyah_train> $<TARGET_FILE:niyah_probe>)
+endif()
+
+# Repetition control is a unit test with deterministic decoder/CUDA doubles.
+# Real CPU/GPU integration is registered separately; never equate the gates.
+if(NIYAH_BUILD_TESTS)
+    add_executable(niyah_repetition_control_test
+        tests/test_repetition_control.c
+        src/niyah_generate.c
+        src/niyah_sampler.c
+        src/niyah_cuda_generate_repetition.c)
+    target_include_directories(niyah_repetition_control_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    if(NOT MSVC)
+        target_link_libraries(niyah_repetition_control_test PRIVATE m)
+        target_compile_options(niyah_repetition_control_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    else()
+        target_compile_options(niyah_repetition_control_test PRIVATE /W4 /WX)
+    endif()
+    add_test(NAME niyah_repetition_control_test COMMAND niyah_repetition_control_test)
+
+    add_executable(niyah_generation_repetition_test tests/test_generation_repetition.c)
+    target_link_libraries(niyah_generation_repetition_test PRIVATE niyah)
+    if(NOT MSVC)
+        target_compile_options(niyah_generation_repetition_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    else()
+        target_compile_options(niyah_generation_repetition_test PRIVATE /W4 /WX)
+    endif()
+    add_test(NAME niyah_generation_repetition_test COMMAND niyah_generation_repetition_test)
+
+    if(NIYAH_ENABLE_CUDA)
+        add_executable(niyah_cuda_generation_repetition_test tests/test_generation_repetition.c)
+        target_compile_definitions(niyah_cuda_generation_repetition_test PRIVATE NIYAH_REPETITION_TEST_CUDA=1)
+        target_include_directories(niyah_cuda_generation_repetition_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(niyah_cuda_generation_repetition_test PRIVATE niyah niyah_cuda_backend)
+        if(NOT MSVC)
+            target_compile_options(niyah_cuda_generation_repetition_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        else()
+            target_compile_options(niyah_cuda_generation_repetition_test PRIVATE /W4 /WX)
+        endif()
+        add_test(NAME niyah_cuda_generation_repetition_test COMMAND niyah_cuda_generation_repetition_test)
+    endif()
+endif()
+
+# NIYAH_SHARED_GUARD_INTEGRATION_V1
+if(NIYAH_BUILD_TESTS)
+    add_executable(niyah_shared_guard_test tests/test_shared_guard.c)
+    target_include_directories(niyah_shared_guard_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    if(MSVC)
+        target_compile_options(niyah_shared_guard_test PRIVATE /W4 /WX)
+    else()
+        target_compile_options(niyah_shared_guard_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_link_libraries(niyah_shared_guard_test PRIVATE m)
+    endif()
+    add_test(NAME niyah_shared_guard_test COMMAND niyah_shared_guard_test)
 endif()

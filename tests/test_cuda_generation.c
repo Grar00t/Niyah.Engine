@@ -2,6 +2,7 @@
 #include "niyah/generate.h"
 #include "niyah_cuda_matvec.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -299,6 +300,47 @@ int main(void)
     CHECK(gpu_result.prompt_tokens == 0U);
     CHECK(gpu_result.generated_tokens == 0U);
     CHECK(gpu_result.stopped_on_eos == 0);
+
+    /* Invalid logits must be an error, not a successful entropy-floor stop.
+     * The real CUDA LM-head matvec sees 0 * nonfinite in this zero model.
+     * Use both the first and last vocabulary rows to cover the maximum scan.
+     */
+    {
+        const float nonfinite[] = {NAN, INFINITY, -INFINITY};
+        size_t row;
+        config.max_new_tokens = 1U;
+        config.stop_on_eos = 0;
+        for (row = 0U; row < 2U; ++row) {
+            const size_t offset = model.layout.lm_head +
+                (row == 0U ? 0U : (size_t)(model.config.vocab_size - 1U) *
+                 (size_t)model.config.embedding_dim);
+            for (i = 0U; i < sizeof(nonfinite) / sizeof(nonfinite[0]); ++i) {
+                model.weights[offset] = nonfinite[i];
+                CHECK(niyah_cuda_model_state_sync(&cuda_model, &model) == 0);
+                memset(&gpu_result, 0xA5, sizeof(gpu_result));
+                gpu_output[0] = 99U;
+                CHECK(niyah_cuda_generate(
+                    &cuda_model, &cuda_decode, prompt, 1U, &config,
+                    gpu_output, 4U, &gpu_result, gpu_logits, 16U) ==
+                    NIYAH_ERR_INVALID_CONFIG);
+                CHECK(!isfinite(gpu_logits[row == 0U ? 0U : 15U]));
+                CHECK(gpu_output[0] == 99U);
+                CHECK(gpu_result.prompt_tokens == 0U);
+                CHECK(gpu_result.generated_tokens == 0U);
+                CHECK(gpu_result.stopped_on_eos == 0);
+                CHECK(cuda_decode.next_position == 0U);
+            }
+            model.weights[offset] = 0.0f;
+        }
+        CHECK(niyah_cuda_model_state_sync(&cuda_model, &model) == 0);
+        CHECK(niyah_cuda_generate(
+            &cuda_model, &cuda_decode, prompt, 1U, &config,
+            gpu_output, 4U, &gpu_result, gpu_logits, 16U) == NIYAH_OK);
+        CHECK(gpu_result.prompt_tokens == 1U);
+        CHECK(gpu_result.generated_tokens == 1U);
+        CHECK(gpu_output[0] == 0U);
+        CHECK(cuda_decode.next_position == 2U);
+    }
 
     niyah_cuda_decode_state_destroy(&cuda_decode);
     niyah_cuda_model_state_destroy(&cuda_model);

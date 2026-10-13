@@ -32,6 +32,9 @@ typedef NiyahStatus (*NiyahTrainingBackwardFn)(
  * The training loop retains ownership of sample ordering, cursor rollback,
  * loss weighting, and the optimizer update. A backend may keep gradients
  * off-host until finalize() is invoked once per optimizer update.
+ * A failed callback leaves model weights and optimizer state unchanged for
+ * that group and restores the complete deterministic cursor state. Backend
+ * scratch buffers may change; begin() must reset them before the next group.
  */
 typedef struct NiyahTrainingGradientAccumulatorOps {
     NiyahStatus (*begin)(void *user_data);
@@ -93,8 +96,10 @@ NiyahStatus niyah_training_run_steps(
 
 /* One optimizer update over batch_size * accumulation_steps samples.
  *
- * Each sample backward produces a mean-loss gradient. Gradients are averaged
- * equally across all consumed samples before the single AdamW update.
+ * Each sample backward produces a mean-loss gradient. Means are weighted by
+ * the number of supervised targets (token_count - loss_start) before the
+ * single AdamW update. Equal supervised lengths retain the historical
+ * equal-sample averaging path.
  * The dataset cursor is restored to its pre-call epoch/position if selection,
  * backward, accumulation, or optimizer update fails.
  */

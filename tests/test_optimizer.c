@@ -4,6 +4,7 @@
 
 #include <float.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -765,6 +766,70 @@ static void test_linear_warmup_applied_to_adamw(void)
     niyah_model_destroy(&scheduled_model);
 }
 
+
+static void test_every_layout_and_config_field(void)
+{
+    static const size_t offsets[] = {
+        offsetof(NiyahModelLayout, token_embedding),
+        offsetof(NiyahModelLayout, segment_embedding),
+        offsetof(NiyahModelLayout, layers),
+        offsetof(NiyahModelLayout, layer_stride),
+        offsetof(NiyahModelLayout, final_norm),
+        offsetof(NiyahModelLayout, lm_head),
+        offsetof(NiyahModelLayout, total_floats),
+        offsetof(NiyahModelLayout, head_dim),
+        offsetof(NiyahModelLayout, kv_dim)
+    };
+    NiyahModelConfig config = test_config(0);
+    NiyahModel model = {0};
+    NiyahModelGradients gradients = {0};
+    NiyahAdamWState state = {0};
+    NiyahAdamWConfig opt = default_optimizer_config();
+    size_t i;
+    config.n_segments = 2U;
+    CHECK(niyah_model_create(&model, &config) == NIYAH_OK);
+    CHECK(niyah_model_reset_parameters(&model, 987U) == NIYAH_OK);
+    CHECK(niyah_model_gradients_create(&gradients, &model) == NIYAH_OK);
+    CHECK(niyah_adamw_state_create(&state, &model) == NIYAH_OK);
+    for (i = 0U; i < sizeof(offsets) / sizeof(offsets[0]); ++i) {
+        size_t *field = (size_t *)((unsigned char *)&model.layout + offsets[i]);
+        const size_t saved = *field;
+        *field += 1U;
+        check_rejection_preserves(&model, &gradients, &state, &opt, NIYAH_ERR_INVALID_CONFIG);
+        *field = saved;
+        field = (size_t *)((unsigned char *)&state.model_layout + offsets[i]);
+        *field += 1U;
+        check_rejection_preserves(&model, &gradients, &state, &opt, NIYAH_ERR_INVALID_CONFIG);
+        *field = saved;
+    }
+#define CORRUPT_CONFIG(field, value) do { \
+    state.model_config.field = (value); \
+    check_rejection_preserves(&model, &gradients, &state, &opt, NIYAH_ERR_INVALID_CONFIG); \
+    state.model_config = config; \
+} while (0)
+    CORRUPT_CONFIG(vocab_size, 9U);
+    CORRUPT_CONFIG(context_length, 5U);
+    CORRUPT_CONFIG(embedding_dim, 8U);
+    CORRUPT_CONFIG(n_layers, 2U);
+    CORRUPT_CONFIG(n_heads, 1U);
+    CORRUPT_CONFIG(n_kv_heads, 2U);
+    CORRUPT_CONFIG(ffn_hidden_dim, 9U);
+    CORRUPT_CONFIG(rms_norm_eps, 0.1f);
+    CORRUPT_CONFIG(tie_word_embeddings, 1);
+    CORRUPT_CONFIG(n_segments, 3U);
+#undef CORRUPT_CONFIG
+    gradients.count -= 1U;
+    check_rejection_preserves(&model, &gradients, &state, &opt, NIYAH_ERR_INVALID_CONFIG);
+    gradients.count += 1U;
+    state.count -= 1U;
+    check_rejection_preserves(&model, &gradients, &state, &opt, NIYAH_ERR_INVALID_CONFIG);
+    state.count += 1U;
+    CHECK(niyah_adamw_step(&model, &gradients, &state, &opt) == NIYAH_OK);
+    niyah_adamw_state_destroy(&state);
+    niyah_model_gradients_destroy(&gradients);
+    niyah_model_destroy(&model);
+}
+
 int main(void)
 {
     test_state_initialization_and_identity();
@@ -776,6 +841,7 @@ int main(void)
     test_decay_policy(1);
     test_decay_policy(0);
     test_zero_decay_zero_gradient();
+    test_every_layout_and_config_field();
     test_failure_atomicity_and_corrupt_state();
     run_training_chain(1);
     run_training_chain(0);

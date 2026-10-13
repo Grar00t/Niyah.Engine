@@ -1,4 +1,12 @@
 #include "niyah/niyah.h"
+#include "niyah_model_internal.h"
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
 
 #include <math.h>
 #include <stdlib.h>
@@ -248,6 +256,7 @@ NiyahStatus niyah_model_create(NiyahModel *model, const NiyahModelConfig *config
     model->config = *config;
     model->layout = layout;
     model->weight_count = layout.total_floats;
+    model->storage_kind = NIYAH_MODEL_STORAGE_OWNED;
     return NIYAH_OK;
 }
 
@@ -256,7 +265,18 @@ void niyah_model_destroy(NiyahModel *model)
     if (model == NULL) {
         return;
     }
-    free(model->weights);
+    if (model->storage_kind == NIYAH_MODEL_STORAGE_CASPER_MMAP &&
+        model->mapping_base != NULL) {
+#if defined(_WIN32)
+        (void)UnmapViewOfFile(model->mapping_base);
+#else
+        if (model->mapping_bytes != 0U) {
+            (void)munmap(model->mapping_base, model->mapping_bytes);
+        }
+#endif
+    } else {
+        free(model->weights);
+    }
     memset(model, 0, sizeof(*model));
 }
 
@@ -285,7 +305,8 @@ NiyahStatus niyah_model_reset_parameters(NiyahModel *model, uint64_t seed)
     NiyahLayerLayout layer;
     NiyahStatus status;
 
-    if (model == NULL || model->weights == NULL || model->weight_count == 0U) {
+    if (model == NULL || model->weights == NULL || model->weight_count == 0U ||
+        model->storage_kind != NIYAH_MODEL_STORAGE_OWNED) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
 
@@ -307,5 +328,101 @@ NiyahStatus niyah_model_reset_parameters(NiyahModel *model, uint64_t seed)
     for (i = 0U; i < (size_t)model->config.embedding_dim; ++i) {
         model->weights[model->layout.final_norm + i] = 1.0f;
     }
+    return NIYAH_OK;
+}
+
+
+int niyah_model_is_read_only(const NiyahModel *model)
+{
+    return model != NULL &&
+           model->storage_kind == NIYAH_MODEL_STORAGE_CASPER_MMAP;
+}
+
+const float *niyah_model_token_embedding_weights(const NiyahModel *model)
+{
+    size_t offset;
+    if (model == NULL || model->weights == NULL) return NULL;
+    if (model->storage_kind == NIYAH_MODEL_STORAGE_CASPER_MMAP) {
+        offset = (size_t)model->config.n_layers * model->layout.layer_stride;
+        return model->weights + offset;
+    }
+    return model->weights + model->layout.token_embedding;
+}
+
+const float *niyah_model_segment_embedding_weights(const NiyahModel *model)
+{
+    if (model == NULL || model->weights == NULL ||
+        model->storage_kind != NIYAH_MODEL_STORAGE_OWNED) return NULL;
+    return model->weights + model->layout.segment_embedding;
+}
+const float *niyah_model_final_norm_weights(const NiyahModel *model)
+{
+    size_t offset;
+    size_t token_count;
+    if (model == NULL || model->weights == NULL) return NULL;
+    if (model->storage_kind == NIYAH_MODEL_STORAGE_CASPER_MMAP) {
+        token_count = (size_t)model->config.vocab_size *
+                      (size_t)model->config.embedding_dim;
+        offset = (size_t)model->config.n_layers * model->layout.layer_stride +
+                 token_count;
+        return model->weights + offset;
+    }
+    return model->weights + model->layout.final_norm;
+}
+
+const float *niyah_model_lm_head_weights(const NiyahModel *model)
+{
+    const float *final_norm;
+    if (model == NULL || model->weights == NULL) return NULL;
+    if (model->storage_kind == NIYAH_MODEL_STORAGE_CASPER_MMAP) {
+        final_norm = niyah_model_final_norm_weights(model);
+        return final_norm == NULL ? NULL :
+               final_norm + (size_t)model->config.embedding_dim;
+    }
+    return model->weights + model->layout.lm_head;
+}
+NiyahStatus niyah_model_layer_weights_view(const NiyahModel *model,
+                                           uint32_t layer_index,
+                                           NiyahLayerWeightsView *out)
+{
+    NiyahLayerLayout layer;
+    size_t cursor;
+    const size_t dim = model != NULL ? (size_t)model->config.embedding_dim : 0U;
+    const size_t kv = model != NULL ? model->layout.kv_dim : 0U;
+    const size_t ffn = model != NULL ? (size_t)model->config.ffn_hidden_dim : 0U;
+
+    if (model == NULL || out == NULL || model->weights == NULL ||
+        layer_index >= model->config.n_layers) {
+        return NIYAH_ERR_INVALID_ARGUMENT;
+    }
+    if (model->storage_kind == NIYAH_MODEL_STORAGE_OWNED) {
+        NiyahStatus status = niyah_model_layer_layout(
+            &model->config, &model->layout, layer_index, &layer);
+        if (status != NIYAH_OK) return status;
+        out->attn_norm = model->weights + layer.attn_norm;
+        out->wq = model->weights + layer.wq;
+        out->wk = model->weights + layer.wk;
+        out->wv = model->weights + layer.wv;
+        out->wo = model->weights + layer.wo;
+        out->ffn_norm = model->weights + layer.ffn_norm;
+        out->w_gate = model->weights + layer.w_gate;
+        out->w_up = model->weights + layer.w_up;
+        out->w_down = model->weights + layer.w_down;
+        return NIYAH_OK;
+    }
+    if (model->storage_kind != NIYAH_MODEL_STORAGE_CASPER_MMAP) {
+        return NIYAH_ERR_INVALID_CONFIG;
+    }
+
+    cursor = (size_t)layer_index * model->layout.layer_stride;
+    out->wq = model->weights + cursor; cursor += dim * dim;
+    out->wk = model->weights + cursor; cursor += kv * dim;
+    out->wv = model->weights + cursor; cursor += kv * dim;
+    out->wo = model->weights + cursor; cursor += dim * dim;
+    out->w_gate = model->weights + cursor; cursor += ffn * dim;
+    out->w_up = model->weights + cursor; cursor += ffn * dim;
+    out->w_down = model->weights + cursor; cursor += dim * ffn;
+    out->attn_norm = model->weights + cursor; cursor += dim;
+    out->ffn_norm = model->weights + cursor;
     return NIYAH_OK;
 }

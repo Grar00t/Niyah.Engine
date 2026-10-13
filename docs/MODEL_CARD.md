@@ -6,6 +6,12 @@
 
 This document describes the current implementation and the diagnostic model evidence available as of **2026-09-21**. It is not a production model release card.
 
+The [2026-10-13 local audit](LOCAL_AUDIT_2026-10-13.md) adds later working-tree,
+Wikipedia adaptation, and repetition-control evidence. The later checkpoint
+improves Wikipedia validation loss while the recorded original-distribution
+result worsens; generated language remains weak. The historical scores below
+are not measurements of that checkpoint or of the current source tree.
+
 ## System classification
 
 | Property | Current state |

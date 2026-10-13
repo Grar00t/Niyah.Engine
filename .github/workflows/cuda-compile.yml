@@ -30,6 +30,7 @@ jobs:
             cmake \
             git \
             make \
+            python3 \
             g++
           rm -rf /var/lib/apt/lists/*
 
@@ -40,6 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           nvcc --version
+          python3 --version
           cmake -S . -B build/verify-cuda-12-4 \
             -DCMAKE_BUILD_TYPE=Release \
             -DNIYAH_ENABLE_CUDA=ON \

@@ -24,6 +24,12 @@ typedef struct NiyahSampler {
 NiyahStatus niyah_sampler_init(NiyahSampler *sampler,
                                const NiyahSamplerConfig *config);
 
+/* Caller-owned scratch must not overlap logits. No allocation occurs. */
+NiyahStatus niyah_sampler_sample_with_history(
+    NiyahSampler *sampler, const float *logits, size_t vocab_size,
+    const uint32_t *history, size_t history_count, float penalty,
+    float *scratch, size_t scratch_count, uint32_t *out_token);
+
 NiyahStatus niyah_sampler_sample(NiyahSampler *sampler,
                                  const float *logits,
                                  size_t vocab_size,
