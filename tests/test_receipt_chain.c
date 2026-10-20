@@ -6,9 +6,11 @@
 
 
 static int failures = 0;
+static unsigned long executed_checks = 0UL;
 
 
 #define CHECK(expr) do { \
+    ++executed_checks; \
     if (!(expr)) { \
         fprintf( \
             stderr, \
@@ -655,6 +657,7 @@ int main(void)
     test_non_genesis_first_receipt_rejected();
     test_sequence_overflow_no_mutation();
 
+    printf("RECEIPT_EXECUTED_CHECKS=%lu\n", executed_checks);
     if (failures != 0) {
         fprintf(
             stderr,
