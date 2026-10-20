@@ -115,6 +115,8 @@ static int test_forward_determinism_and_causality(void)
                                     workspace,
                                     workspace_count) == NIYAH_OK);
 
+    CHECK(all_finite(logits_repeat, logits_count));
+    CHECK(all_finite(logits_b, logits_count));
     /* A future-token change must not affect logits at earlier causal positions. */
     CHECK(memcmp(logits_a,
                  logits_b,
@@ -124,7 +126,7 @@ static int test_forward_determinism_and_causality(void)
         final_delta += fabsf(logits_a[2U * (size_t)config.vocab_size + i] -
                              logits_b[2U * (size_t)config.vocab_size + i]);
     }
-    CHECK(final_delta > 1.0e-7f);
+    CHECK(isfinite(final_delta) && final_delta > 1.0e-7f);
 
     CHECK(niyah_transformer_forward(&model,
                                     tokens_a,

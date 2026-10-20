@@ -1,0 +1,70 @@
+{
+  "observed_utc": "2026-10-13T18:33:24.643429+00:00",
+  "source_base_head": "6ec58869fca15cb6034bd5a689e9a04483651d4c",
+  "source_manifest_sha256": "595e3d5c907164328b024c4a76926fb2aa896a3d34dbcb981df2ebb4b8b8a585",
+  "source_was_dirty": true,
+  "training_mode": "resume",
+  "additional_updates": 100,
+  "optimizer_step": 200,
+  "checkpoint_sha256": "c2bdbdd8114fab49c750fe4360c0613ea5175dea7775523a126864d1299186c3",
+  "cursor_sha256": "048955df6a68b8ce25956835aebbd555047e2e9487544a8a58c6742c1372136d",
+  "eval": {
+    "old": {
+      "loss_before": 5.45725436,
+      "loss_after": 5.44654386,
+      "ppl_before": 234.45281605,
+      "ppl_after": 231.95511051,
+      "ppl_change_pct": -1.0653339900457137
+    },
+    "wiki": {
+      "loss_before": 6.04486456,
+      "loss_after": 5.99492294,
+      "ppl_before": 421.94060712,
+      "ppl_after": 401.38575107,
+      "ppl_change_pct": -4.871504591676845
+    }
+  },
+  "generation_cases": 24,
+  "generation_exit_counts": {
+    "20": 24
+  },
+  "generation_stop_reasons": {
+    "MULTI_TOKEN_LOOP": 6,
+    "SINGLE_TOKEN_LOOP": 18
+  },
+  "generation_utf8_valid": true,
+  "model_conversation_quality": "NOT_ACCEPTABLE_IN_TESTED_PROMPTS",
+  "new_quran_data_used_in_resume": false,
+  "quran_source_sha256": "228df2a717671aeb9d2ff573002bd28d6b3f973f4bc7153554e3a81663d67610",
+  "quran_verses": 6236,
+  "quran_train_verses": 5950,
+  "quran_validation_verses": 286,
+  "quran_exact_text_overlap": 5,
+  "independent_canonical_quran_comparison": "NOT_VERIFIED",
+  "remaining": [
+    "Live decoder deadline/cancellation integration",
+    "Incremental character guard integration",
+    "Session commit/rollback integration",
+    "Model Arabic generation quality"
+  ],
+  "tests": {
+    "cpu": {
+      "total": 57,
+      "passed": 55,
+      "skipped": [
+        "niyah_casper_external_mmap_test",
+        "niyah_casper_external_identity_test"
+      ],
+      "junit_sha256": "0980b850f1b00f8fe3d17372edc9172d43fa7b8c43ed092776da649972a4ff5f"
+    },
+    "cuda": {
+      "total": 72,
+      "passed": 70,
+      "skipped": [
+        "niyah_casper_external_mmap_test",
+        "niyah_casper_external_identity_test"
+      ],
+      "junit_sha256": "39e0fac6f80f20cade75421398e0137d6bdb10072c95f436982edd870e3eff80"
+    }
+  }
+}

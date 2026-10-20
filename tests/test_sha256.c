@@ -38,12 +38,26 @@ static int test_abc(void)
 static int test_overflow_guard(void)
 {
     const unsigned char byte = 0U;
-    NiyahSha256 sha;
+    NiyahSha256 sha, before;
 
+    memset(&sha, 0x5a, sizeof(sha));
     niyah_sha256_init(&sha);
+    if (!check(niyah_sha256_update(&sha, &byte, 1U) != 0, "prefix update")) return 0;
     sha.bit_count = UINT64_MAX - UINT64_C(7);
-    return check(niyah_sha256_update(&sha, &byte, 1U) == 0,
-                 "bit count overflow guard");
+    before = sha;
+    if (!check(niyah_sha256_update(&sha, &byte, 1U) == 0,
+               "bit count overflow guard") ||
+        !check(memcmp(&sha, &before, sizeof(sha)) == 0,
+               "overflow rejection preserves complete state")) return 0;
+#if SIZE_MAX > UINT64_MAX / 8U
+    if (!check(niyah_sha256_update(&sha, &byte, SIZE_MAX) == 0,
+               "size overflow guard") ||
+        !check(memcmp(&sha, &before, sizeof(sha)) == 0,
+               "size rejection preserves complete state")) return 0;
+#endif
+    return check(niyah_sha256_update(&sha, NULL, 0U) != 0 &&
+                 memcmp(&sha, &before, sizeof(sha)) == 0,
+                 "zero-byte update at boundary preserves state");
 }
 
 int main(void)

@@ -1,3 +1,8 @@
+string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef _niyah_fixture_id)
+if(DEFINED WORK_DIR)
+    set(WORK_DIR "${WORK_DIR}/fixture-${_niyah_fixture_id}")
+    file(MAKE_DIRECTORY "${WORK_DIR}")
+endif()
 if(NOT DEFINED NIYAH_FIXTURE OR
    NOT DEFINED NIYAH_TRAIN OR
    NOT DEFINED NIYAH_CLI OR
@@ -77,7 +82,9 @@ if(NOT train_result EQUAL 0)
     message(FATAL_ERROR "eval checkpoint training failed: ${train_result}")
 endif()
 
-file(WRITE "${HELDOUT}" "held-out Ω eval text\n")
+# None of these byte pairs occurs in the tokenizer training fixture. Five UTF-8
+# bytes plus the EOS target yield six transitions: full span 4 and tail 2.
+file(WRITE "${HELDOUT}" "xyzΩ")
 file(SHA256 "${CKPT}" checkpoint_sha_before)
 
 execute_process(
@@ -109,6 +116,24 @@ string(FIND "${eval_output}" "objective=all_tokens" eval_objective_index)
 if(eval_objective_index EQUAL -1)
     message(FATAL_ERROR "eval output missing objective=all_tokens: ${eval_output}")
 endif()
+file(SIZE "${HELDOUT}" heldout_bytes)
+file(SHA256 "${HELDOUT}" heldout_raw_sha)
+foreach(required_line IN ITEMS
+    "tokenizer_identity_kind=structured_tokenizer_sha256"
+    "checkpoint_identity_kind=raw_file_sha256"
+    "heldout_identity_kind=raw_file_sha256"
+    "heldout_sha256=${heldout_raw_sha}"
+    "baseline_fit=evaluated_supervised_transitions"
+    "baseline_score=same_supervised_transitions"
+    "byte_denominator=${heldout_bytes}"
+    "excluded_tail_tokens=0"
+    "sample_count=2"
+    "token_count=6")
+    string(FIND "\n${eval_output}" "\n${required_line}\n" required_index)
+    if(required_index EQUAL -1)
+        message(FATAL_ERROR "missing exact eval coverage contract ${required_line}: ${eval_output}")
+    endif()
+endforeach()
 
 string(TOLOWER "${eval_output}" eval_output_lower)
 if(eval_output_lower MATCHES "(^|[^a-z])(nan|inf|infinity)([^a-z]|$)")

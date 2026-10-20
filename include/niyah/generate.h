@@ -3,6 +3,7 @@
 
 #include "niyah/decode.h"
 #include "niyah/sampler.h"
+#include "niyah/shared_guard.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -10,6 +11,12 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* NIYAH_SHARED_GUARD_INTEGRATION_V1: ABI-additive stop report. */
+typedef struct NiyahGenerationStopReport {
+    NiyahStopReason reason;
+    unsigned detected_period;
+} NiyahGenerationStopReport;
 
 typedef struct NiyahGenerationConfig {
     size_t max_new_tokens;
@@ -45,6 +52,66 @@ NiyahStatus niyah_generate(const NiyahModel *model,
                            NiyahGenerationResult *result,
                            float *workspace,
                            size_t workspace_count);
+
+/* Repetition applies once per distinct token in the trailing window of
+ * generated output only. Prompt tokens are not included. penalty == 1.0f
+ * delegates to the legacy API, including its workspace and RNG behavior.
+ * penalty must be finite and >= 1.0f; window must be nonzero. */
+typedef struct NiyahRepetitionConfig {
+    float penalty;
+    size_t window;
+} NiyahRepetitionConfig;
+
+/* Enabled layout: [decode workspace][raw logits: V][sampling scratch: V].
+ * Disabled layout is exactly the legacy workspace. Counts are in floats. */
+NiyahStatus niyah_generation_workspace_floats_with_repetition(
+    const NiyahModelConfig *config,
+    const NiyahRepetitionConfig *repetition,
+    size_t *out_floats);
+
+/* All arrays are caller-owned and must not overlap each other or model/cache
+ * storage. output_tokens doubles as generated-token history; no extra history
+ * allocation and no allocation/free per token. Raw logits remain unmodified
+ * by the penalty. Existing raw-entropy and same-token stop guards are retained.
+ * An enabled-path failure resets the cache and zeroes result; output contents
+ * after a failure are unspecified and must not be consumed. */
+NiyahStatus niyah_generate_with_repetition(
+    const NiyahModel *model,
+    NiyahKVCache *cache,
+    const uint32_t *prompt_tokens,
+    size_t prompt_count,
+    const NiyahGenerationConfig *config,
+    const NiyahRepetitionConfig *repetition,
+    uint32_t *output_tokens,
+    size_t output_capacity,
+    NiyahGenerationResult *result,
+    float *workspace,
+    size_t workspace_count);
+
+NiyahStatus niyah_generate_ex(const NiyahModel *model,
+                           NiyahKVCache *cache,
+                           const uint32_t *prompt_tokens,
+                           size_t prompt_count,
+                           const NiyahGenerationConfig *config,
+                           uint32_t *output_tokens,
+                           size_t output_capacity,
+                           NiyahGenerationResult *result,
+                           float *workspace,
+                           size_t workspace_count,
+    NiyahGenerationStopReport *stop_report);
+
+NiyahStatus niyah_generate_with_repetition_ex(const NiyahModel *model,
+                           NiyahKVCache *cache,
+                           const uint32_t *prompt_tokens,
+                           size_t prompt_count,
+                           const NiyahGenerationConfig *config,
+                           const NiyahRepetitionConfig *repetition,
+                           uint32_t *output_tokens,
+                           size_t output_capacity,
+                           NiyahGenerationResult *result,
+                           float *workspace,
+                           size_t workspace_count,
+    NiyahGenerationStopReport *stop_report);
 
 #ifdef __cplusplus
 }

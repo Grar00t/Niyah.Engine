@@ -60,11 +60,19 @@ typedef struct NiyahModelLayout {
     size_t kv_dim;
 } NiyahModelLayout;
 
+typedef enum NiyahModelStorageKind {
+    NIYAH_MODEL_STORAGE_OWNED = 0,
+    NIYAH_MODEL_STORAGE_CASPER_MMAP = 1
+} NiyahModelStorageKind;
+
 typedef struct NiyahModel {
     NiyahModelConfig config;
     NiyahModelLayout layout;
     float *weights;
     size_t weight_count;
+    NiyahModelStorageKind storage_kind;
+    void *mapping_base;
+    size_t mapping_bytes;
 } NiyahModel;
 
 NiyahStatus niyah_model_config_validate(const NiyahModelConfig *config);

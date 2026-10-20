@@ -247,6 +247,19 @@ NiyahStatus niyah_cuda_generate(
     float *host_logits,
     size_t host_logits_count);
 
+NiyahStatus niyah_cuda_generate_ex(
+    const NiyahCudaModelState *model_state,
+    NiyahCudaDecodeState *decode_state,
+    const uint32_t *prompt_tokens,
+    size_t prompt_count,
+    const NiyahGenerationConfig *config,
+    uint32_t *output_tokens,
+    size_t output_capacity,
+    NiyahGenerationResult *result,
+    float *host_logits,
+    size_t host_logits_count,
+    NiyahGenerationStopReport *stop_report);
+
 #ifdef __cplusplus
 }
 #endif

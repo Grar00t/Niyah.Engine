@@ -1,3 +1,8 @@
+string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef _niyah_fixture_id)
+if(DEFINED WORK_DIR)
+    set(WORK_DIR "${WORK_DIR}/fixture-${_niyah_fixture_id}")
+    file(MAKE_DIRECTORY "${WORK_DIR}")
+endif()
 if(NOT DEFINED NIYAH_CLI)
     message(FATAL_ERROR "NIYAH_CLI is required")
 endif()
@@ -468,3 +473,31 @@ if(shard_invalid_path_result EQUAL 0)
 endif()
 
 message("P87_INVALID_PATH_REJECTION=PASS")
+
+# 3. Early tokenizer failure must not delete an existing output.
+file(WRITE "${WORK_DIR}/owned-preservation.srd" "DO_NOT_DELETE")
+file(SHA256 "${WORK_DIR}/owned-preservation.srd" owned_before)
+
+execute_process(
+    COMMAND "${NIYAH_CLI}" shard
+        --tokenizer "${WORK_DIR}/missing-tokenizer.tok"
+        --corpus "${CORPUS}"
+        --shard-out "${WORK_DIR}/owned-preservation.srd"
+        --sequence-length 4
+    RESULT_VARIABLE shard_missing_tokenizer_result
+    OUTPUT_VARIABLE shard_missing_tokenizer_out
+    ERROR_VARIABLE shard_missing_tokenizer_err)
+
+file(SHA256 "${WORK_DIR}/owned-preservation.srd" owned_after)
+
+if(shard_missing_tokenizer_result EQUAL 0)
+    message(FATAL_ERROR "Missing-tokenizer test unexpectedly succeeded")
+endif()
+if(NOT EXISTS "${WORK_DIR}/owned-preservation.srd")
+    message(FATAL_ERROR "Existing output was deleted on early failure")
+endif()
+if(NOT owned_before STREQUAL owned_after)
+    message(FATAL_ERROR "Existing output was modified on early failure")
+endif()
+
+message("P87_EARLY_FAILURE_PRESERVATION=PASS")

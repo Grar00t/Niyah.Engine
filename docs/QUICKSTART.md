@@ -9,6 +9,7 @@ This guide exercises the native Niyah.Engine lifecycle without introducing an ex
 
 - CMake 3.20+
 - a C11 compiler
+- Python 3 when `NIYAH_BUILD_TESTS=ON`
 - optional CUDA toolkit only when configuring `NIYAH_ENABLE_CUDA=ON`
 
 ## 2. Configure and build

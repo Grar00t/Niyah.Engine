@@ -4,6 +4,7 @@
 #include "niyah/transformer.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -140,6 +141,7 @@ static int config_equal(const NiyahModelConfig *a, const NiyahModelConfig *b)
 static int layout_equal(const NiyahModelLayout *a, const NiyahModelLayout *b)
 {
     return a->token_embedding == b->token_embedding &&
+           a->segment_embedding == b->segment_embedding &&
            a->layers == b->layers &&
            a->layer_stride == b->layer_stride &&
            a->final_norm == b->final_norm &&
@@ -586,6 +588,50 @@ static void test_save_preflight_no_truncate(void)
     niyah_adamw_state_destroy(&state); niyah_model_destroy(&model); (void)remove(path);
 }
 
+
+static void test_save_rejects_every_layout_field(void)
+{
+    static const size_t offsets[] = {
+        offsetof(NiyahModelLayout, token_embedding),
+        offsetof(NiyahModelLayout, segment_embedding),
+        offsetof(NiyahModelLayout, layers),
+        offsetof(NiyahModelLayout, layer_stride),
+        offsetof(NiyahModelLayout, final_norm),
+        offsetof(NiyahModelLayout, lm_head),
+        offsetof(NiyahModelLayout, total_floats),
+        offsetof(NiyahModelLayout, head_dim),
+        offsetof(NiyahModelLayout, kv_dim)
+    };
+    const char *path = "niyah_checkpoint_layout_preflight.bin";
+    const unsigned char sentinel[] = {'K', 'E', 'E', 'P', 0, 255};
+    NiyahModelConfig config = test_model_config(1);
+    NiyahModel model = {0};
+    NiyahAdamWState state = {0};
+    NiyahAdamWConfig opt = test_optimizer_config();
+    size_t i;
+    config.n_segments = 2U;
+    CHECK(niyah_model_create(&model, &config) == NIYAH_OK);
+    CHECK(niyah_model_reset_parameters(&model, 719U) == NIYAH_OK);
+    CHECK(niyah_adamw_state_create(&state, &model) == NIYAH_OK);
+    CHECK(write_bytes(path, sentinel, sizeof(sentinel)));
+    for (i = 0U; i < sizeof(offsets) / sizeof(offsets[0]); ++i) {
+        size_t *field = (size_t *)((unsigned char *)&model.layout + offsets[i]);
+        const size_t saved = *field;
+        *field += 1U;
+        CHECK(niyah_checkpoint_save(path, &model, &state, &opt) == NIYAH_ERR_INVALID_CONFIG);
+        CHECK(file_equals(path, sentinel, sizeof(sentinel)));
+        *field = saved;
+        field = (size_t *)((unsigned char *)&state.model_layout + offsets[i]);
+        *field += 1U;
+        CHECK(niyah_checkpoint_save(path, &model, &state, &opt) == NIYAH_ERR_INVALID_CONFIG);
+        CHECK(file_equals(path, sentinel, sizeof(sentinel)));
+        *field = saved;
+    }
+    CHECK(remove(path) == 0);
+    niyah_adamw_state_destroy(&state);
+    niyah_model_destroy(&model);
+}
+
 static void test_public_adamw_validator(void)
 {
     NiyahAdamWConfig c = test_optimizer_config();
@@ -838,6 +884,7 @@ int main(void)
     test_legacy_v2_68_byte_header_load();
     test_format_and_malformed();
     test_save_preflight_no_truncate();
+    test_save_rejects_every_layout_field();
 
     if (failures != 0) {
         fprintf(stderr, "niyah_checkpoint_test: %d failure(s)\n", failures);

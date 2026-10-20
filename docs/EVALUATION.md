@@ -1,6 +1,11 @@
 # Evaluation
 
-This document defines how Niyah.Engine evaluation results should be interpreted and records the current pilot held-out trajectory without promoting it into a broader benchmark claim.
+This document defines how Niyah.Engine evaluation results should be interpreted and records the historical pilot held-out trajectory without promoting it into a broader benchmark claim.
+
+The pilot trajectory below is historical. Later Wikipedia adaptation and its
+original-distribution tradeoff are recorded separately in the
+[2026-10-13 local audit](LOCAL_AUDIT_2026-10-13.md), with checkpoint identity,
+scored-target geometry, original log paths, and provenance limitations.
 
 ## Metric definition
 
@@ -46,6 +51,9 @@ P(next | previous)
 For all-token samples, all sample-local targets are included. Independent sample/record boundaries are not invented as model targets. For V3 supervised shards, only transitions at or after each sample's persisted `loss_start` contribute to baseline counts and NLL, matching the model objective.
 
 The baseline mean NLL is averaged across the included transitions. The implementation sorts encoded observed token pairs and does not allocate a `vocab_size × vocab_size` table.
+
+The baseline is fitted and scored on those same evaluation transitions. It is
+an in-sample descriptive baseline, not a separately trained held-out competitor.
 
 The baseline is deliberately simple. Beating it is useful evidence that the model captures more predictive structure than a smoothed first-order token model on that evaluation geometry; it is not a claim of broad language competence.
 

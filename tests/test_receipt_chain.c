@@ -617,8 +617,33 @@ static void test_sequence_overflow_no_mutation(void)
 }
 
 
+
+static void test_independent_chain_hashes(void)
+{
+    static const uint8_t first_hash[32] = {
+        0x99, 0x84, 0x4b, 0x5b, 0x98, 0x90, 0x28, 0x90, 0x97, 0x66, 0xb4, 0xc4,
+        0x60, 0x4d, 0x46, 0x1b, 0x17, 0xf1, 0x27, 0xa2, 0x8e, 0xd9, 0xef, 0x4f,
+        0x6e, 0x5b, 0xa5, 0xfb, 0xca, 0x89, 0xf4, 0x12,
+    };
+    static const uint8_t second_hash[32] = {
+        0x88, 0xa5, 0xff, 0x9c, 0xd4, 0xb5, 0x1c, 0xb9, 0x88, 0x27, 0xa0, 0xe7,
+        0x80, 0x0c, 0x24, 0x9c, 0xac, 0xfb, 0x15, 0xdc, 0x4a, 0xac, 0xe4, 0xfe,
+        0xf8, 0x3c, 0xe4, 0x6b, 0x48, 0x15, 0xa8, 0x57,
+    };
+    NiyahReceiptChainV1 state = new_chain();
+    NiyahReceiptV1 r = receipt_for_state(&state, 61U);
+    NiyahCoordinationGate gate;
+    NiyahReceiptStatus status;
+    CHECK(apply_promote(&state, &r, &gate, &status) == NIYAH_RECEIPT_CHAIN_OK);
+    CHECK(memcmp(state.head_receipt_sha256.bytes, first_hash, 32U) == 0);
+    r = receipt_for_state(&state, 93U);
+    CHECK(apply_promote(&state, &r, &gate, &status) == NIYAH_RECEIPT_CHAIN_OK);
+    CHECK(memcmp(state.head_receipt_sha256.bytes, second_hash, 32U) == 0);
+}
+
 int main(void)
 {
+    test_independent_chain_hashes();
     test_genesis_acceptance();
     test_two_receipt_chain();
     test_replay_rejected_without_mutation();

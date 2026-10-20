@@ -19,6 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Verify Tanzil importer (offline)
+        run: python -B tests/test_tanzil_import.py -v
+
       - name: Verify (POSIX)
         if: runner.os != 'Windows'
         run: bash scripts/verify.sh release

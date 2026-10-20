@@ -352,12 +352,12 @@ static void test_accumulated_step_token_weighted(void)
 {
     static const uint32_t short_tokens[] = {1U};
     static const uint32_t short_targets[] = {2U};
-    static const uint32_t long_tokens[] = {1U, 2U, 3U};
-    static const uint32_t long_targets[] = {2U, 3U, 4U};
+    static const uint32_t long_tokens[] = {1U, 2U, 3U, 4U};
+    static const uint32_t long_targets[] = {2U, 3U, 4U, 5U};
 
     const NiyahTrainingSample samples[] = {
         {short_tokens, short_targets, 1U, 0U},
-        {long_tokens, long_targets, 3U, 0U}
+        {long_tokens, long_targets, 4U, 1U}
     };
 
     NiyahModelConfig config = test_config();
@@ -419,7 +419,7 @@ static void test_accumulated_step_token_weighted(void)
               &accum_expected, &expected) == NIYAH_OK);
 
     CHECK(niyah_train_backward_workspace_floats(
-              &config, 3U, &workspace_count) == NIYAH_OK);
+              &config, 4U, &workspace_count) == NIYAH_OK);
 
     workspace = (float *)calloc(
         workspace_count, sizeof(float));

@@ -1,5 +1,6 @@
 #include "niyah/train.h"
 #include "niyah/transformer.h"
+#include "niyah_model_validation.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -20,11 +21,14 @@ NiyahStatus niyah_model_gradients_create(NiyahModelGradients *gradients,
                                          const NiyahModel *model)
 {
     size_t bytes;
+    NiyahStatus status;
 
     if (gradients == NULL || model == NULL || model->weights == NULL ||
         model->weight_count == 0U) {
         return NIYAH_ERR_INVALID_ARGUMENT;
     }
+    status = niyah_training_model_validate(model);
+    if (status != NIYAH_OK) return status;
     memset(gradients, 0, sizeof(*gradients));
     if (!niyah_size_mul_ok(model->weight_count, sizeof(float), &bytes)) {
         return NIYAH_ERR_OVERFLOW;
@@ -85,6 +89,10 @@ NiyahStatus niyah_cross_entropy_loss_masked(
         return NIYAH_ERR_OVERFLOW;
     }
 
+    if (required > SIZE_MAX / sizeof(float)) {
+        return NIYAH_ERR_OVERFLOW;
+    }
+
     if (dlogits != NULL &&
         dlogits_count < required) {
         return NIYAH_ERR_BUFFER_TOO_SMALL;
@@ -109,8 +117,10 @@ NiyahStatus niyah_cross_entropy_loss_masked(
         if ((size_t)targets[t] >= vocab_size) {
             return NIYAH_ERR_INVALID_ARGUMENT;
         }
+        if (!isfinite(max_logit)) return NIYAH_ERR_INVALID_ARGUMENT;
 
         for (v = 1U; v < vocab_size; ++v) {
+            if (!isfinite(row[v])) return NIYAH_ERR_INVALID_ARGUMENT;
             if (row[v] > max_logit) {
                 max_logit = row[v];
             }

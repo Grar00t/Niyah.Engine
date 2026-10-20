@@ -30,9 +30,19 @@ The tokenizer has a stable SHA-256 identity. Dataset/checkpoint compatibility co
 
 A historical token file with IDs inside the current vocabulary range is **not** automatically compatible. Numeric range is not semantic identity.
 
-## Current diagnostic corpus status
+## Local corpus evidence: 2026-10-13
 
-The current v6 pilot training run discussed in project diagnostics was assembled from Hugging Face/web-sourced material. The run record also identifies known quality defects, including factual errors in at least part of the collected material.
+The [dated local audit](LOCAL_AUDIT_2026-10-13.md) records the later Arabic
+Wikipedia preparation: 17,448 training documents and 350 validation documents,
+with a cleaned-document hash split. Its preflight receipt leaves upstream
+provenance re-attestation and training rights unresolved; near-duplicate
+checking was not performed. The local [corpus tools](CORPUS_TOOLS.md) record
+provenance claims but do not independently verify permission or corpus quality.
+The earlier v6 observations below concern a separate historical pilot.
+
+## Historical diagnostic corpus status
+
+The historical v6 pilot training run discussed in project diagnostics was assembled from Hugging Face/web-sourced material. The run record also identifies known quality defects, including factual errors in at least part of the collected material.
 
 Therefore:
 

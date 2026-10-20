@@ -1,3 +1,8 @@
+string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef _niyah_fixture_id)
+if(DEFINED WORK_DIR)
+    set(WORK_DIR "${WORK_DIR}/fixture-${_niyah_fixture_id}")
+    file(MAKE_DIRECTORY "${WORK_DIR}")
+endif()
 if(NOT DEFINED NIYAH_TRAIN)
     message(FATAL_ERROR "NIYAH_TRAIN is required")
 endif()
