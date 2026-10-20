@@ -149,7 +149,7 @@ static int cpu_prefill_and_decode_fail_reset(void) {
 static int nonfinite_raw_and_stop_guards(void) {
     NiyahRepetitionConfig r={2,64};setup();logits_mode=1;
     CHECK(cpu(&r,12U)==NIYAH_ERR_INVALID_CONFIG);CHECK(cache.next_position==0U);
-    setup();logits_mode=2;CHECK(cpu(&r,12U)==NIYAH_OK);CHECK(result.generated_tokens==0U);
+    setup();logits_mode=2;cfg.max_new_tokens=10U;CHECK(cpu(&r,12U)==NIYAH_OK);CHECK(result.generated_tokens==8U);
     setup();logits_mode=3;cfg.max_new_tokens=10U;CHECK(cpu(&r,12U)==NIYAH_OK);CHECK(result.generated_tokens==8U);return 0;
 }
 static int cuda_enabled_control_parity(void) {
@@ -179,7 +179,7 @@ static int cuda_fault_reset_and_eos(void) {
 static int cuda_invalid_and_guards(void) {
     NiyahRepetitionConfig r={NAN,64};setup();CHECK(gpu(&r,8U)==NIYAH_ERR_INVALID_CONFIG);
     r.penalty=2;setup();logits_mode=1;CHECK(gpu(&r,8U)==NIYAH_ERR_INVALID_CONFIG);CHECK(cd.next_position==0);
-    setup();logits_mode=2;CHECK(gpu(&r,8U)==NIYAH_OK);CHECK(result.generated_tokens==0);
+    setup();logits_mode=2;cfg.max_new_tokens=10U;CHECK(gpu(&r,8U)==NIYAH_OK);CHECK(result.generated_tokens==8U);
     setup();logits_mode=3;cfg.max_new_tokens=10;CHECK(gpu(&r,8U)==NIYAH_OK);CHECK(result.generated_tokens==8U);return 0;
 }
 static int shared_cpu_cycle_report(void) {

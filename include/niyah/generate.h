@@ -72,7 +72,8 @@ NiyahStatus niyah_generation_workspace_floats_with_repetition(
 /* All arrays are caller-owned and must not overlap each other or model/cache
  * storage. output_tokens doubles as generated-token history; no extra history
  * allocation and no allocation/free per token. Raw logits remain unmodified
- * by the penalty. Existing raw-entropy and same-token stop guards are retained.
+ * by the penalty. Finite-logit validation and generated-token loop guards remain.
+ * Low entropy alone is not a stop condition; a confident prediction can be correct.
  * An enabled-path failure resets the cache and zeroes result; output contents
  * after a failure are unspecified and must not be consumed. */
 NiyahStatus niyah_generate_with_repetition(
