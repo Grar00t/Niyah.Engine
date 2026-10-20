@@ -169,7 +169,7 @@ static NiyahStatus niyah_generate_impl(const NiyahModel *model,
         gc.same_limit = 8U;
         gc.max_period = 8U;
         gc.cycles = 4U;
-        gc.entropy_floor = 0.05f;
+        gc.entropy_floor = 0.0f;
         gc.eos_token = config->eos_token;
         gc.stop_on_eos = config->stop_on_eos;
         (void)niyah_guard_init(&shared_guard, &gc);
@@ -187,10 +187,8 @@ static NiyahStatus niyah_generate_impl(const NiyahModel *model,
             return niyah_generation_fail(cache, result, status);
         }
 
-        if (entropy < 0.05f) {
-            shared_guard.reason = NIYAH_STOP_ENTROPY_FLOOR;
-            break;
-        }
+        /* Low entropy is confidence, not proof of a loop. Finite-logit
+         * validation above remains mandatory; generated-token guards follow. */
 
         status = niyah_sampler_sample(&sampler,
                                       logits,
@@ -402,7 +400,7 @@ static NiyahStatus niyah_generate_with_repetition_impl(const NiyahModel *model,
         gc.same_limit = 8U;
         gc.max_period = 8U;
         gc.cycles = 4U;
-        gc.entropy_floor = 0.05f;
+        gc.entropy_floor = 0.0f;
         gc.eos_token = config->eos_token;
         gc.stop_on_eos = config->stop_on_eos;
         (void)niyah_guard_init(&shared_guard, &gc);
@@ -420,10 +418,8 @@ static NiyahStatus niyah_generate_with_repetition_impl(const NiyahModel *model,
             return niyah_generation_fail(cache, result, status);
         }
 
-        if (entropy < 0.05f) {
-            shared_guard.reason = NIYAH_STOP_ENTROPY_FLOOR;
-            break;
-        }
+        /* Low entropy is confidence, not proof of a loop. Finite-logit
+         * validation above remains mandatory; generated-token guards follow. */
 
         {
             const size_t history_count = generated < repetition->window
