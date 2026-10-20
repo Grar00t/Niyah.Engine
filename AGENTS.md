@@ -89,3 +89,19 @@ When evidence is incomplete, write the limitation explicitly. Do not assign an o
 Keep PRs reviewable. A PR should normally have one primary objective, a stated scope boundary, a regression gate, and no unrelated formatting churn.
 
 If review finds a real but separable issue, either fix it within the objective or track it explicitly as a follow-up; do not mark it solved by documentation alone.
+
+## Base44 sandbox environment
+
+This section describes the sandbox preview harness only. It does not change the project build, public contracts, or the canonical verification gate; CI and releases continue to use `scripts/verify.sh`.
+
+- Start with `docker compose -f docker-compose.base44.yml up -d --build`. The service builds the tools from the bind-mounted working tree inside `niyah-base44-toolchain:local` (Debian + gcc + cmake; no source is baked into the image) and then serves the console on host port 3000.
+- Niyah.Engine is a CLI toolchain and serves no HTTP surface of its own, so the preview needs something on port 3000: `sandbox/` is a standard-library-only console that shells out to the compiled `niyah`, `niyah-train` and `niyah_probe` binaries and streams their real stdout. It performs no engine work itself and adds no dependency to the CMake build.
+- No external credentials are required: the model core needs no hosted API or external LLM runtime.
+- The console writes nothing inside the repository. Run artifacts (tokenizer, shard, checkpoints, cursors) go to `/tmp/niyah-console/runs/` inside the container, so a container recreate discards them.
+- `sandbox/corpus.txt` and `sandbox/heldout.txt` are small synthetic fixtures for the demo console only. They are not training data for any claim in `docs/`.
+- There is no hot reload for C. After editing `src/`, `include/` or `tools/`, press **Rebuild tools** in the console or run `docker compose -f docker-compose.base44.yml exec engine cmake --build build/base44 --parallel 2` before the next engine run.
+- Two constraints that bite when shaping a demo corpus:
+  - supervised shards require each whole record to fit: `prompt_tokens + response_tokens + 1 <= --sequence-length`, otherwise `niyah prepare` exits with `shard_build NIYAH_ERR_INVALID_CONFIG` (the demo uses `--target-vocab 512` so records compress under 64 tokens);
+  - `niyah run` requires `1 + prompt_tokens + max_new_tokens <= context_length`, otherwise it exits with `context_capacity` (the demo presets use a 128-token context to leave room for 48 generated tokens).
+- Verification in the sandbox: the console's **Run regression suite** button runs configure + build + `ctest --output-on-failure` (39/39 passing at the revision recorded in `.base44/environment.json`), or run `docker compose -f docker-compose.base44.yml exec engine bash scripts/verify.sh release`.
+- `BASE44_PREVIEW_MODE` is passed through to the container, but no application behavior is gated on it: the harness is confined to `sandbox/` and is started only by `docker-compose.base44.yml`.

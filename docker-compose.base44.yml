@@ -1,0 +1,53 @@
+# Base44 sandbox environment for Niyah.Engine.
+#
+# Niyah.Engine is a native C11 CLI toolchain, so there is no upstream dev server
+# to run. This compose file compiles the tools from the bind-mounted working
+# tree (never from a prebuilt image) and serves the sandbox console on port 3000
+# so the preview can drive the real binaries.
+#
+# Not used by CI or by the release process; see AGENTS.md.
+
+name: niyah-engine-base44
+
+services:
+  engine:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    image: niyah-base44-toolchain:local
+    working_dir: /work
+    # Compile from the mounted source, then hand the port over to the console.
+    # Recompiling on start keeps the binaries in step with the working tree.
+    command:
+      - sh
+      - -ec
+      - |
+        cmake -S . -B build/base44 \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DNIYAH_BUILD_TESTS=OFF \
+          -DNIYAH_ENABLE_OPENMP=OFF
+        cmake --build build/base44 --parallel 2
+        exec python3 sandbox/serve.py --host 0.0.0.0 --port 3000
+    volumes:
+      - ./:/work
+    ports:
+      - "3000:3000"
+    environment:
+      - BASE44_PREVIEW_MODE
+      - NIYAH_BUILD_DIR=build/base44
+    restart: on-failure
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - |
+          import urllib.request, sys
+          try:
+              sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:3000/healthz", timeout=5).status == 200 else 1)
+          except Exception:
+              sys.exit(1)
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 300s

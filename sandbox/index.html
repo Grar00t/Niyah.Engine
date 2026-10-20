@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Niyah.Engine — sandbox console</title>
+<style>
+  :root {
+    --bg: #0c1013;
+    --panel: #141a1f;
+    --panel-2: #1a2228;
+    --line: #253038;
+    --ink: #e6eef3;
+    --muted: #93a4b0;
+    --accent: #5cc8a0;
+    --accent-2: #7aa7e8;
+    --warn: #e0a45c;
+    --bad: #e0736c;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 600px at 15% -10%, #17232b 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 56px; }
+  header h1 { margin: 0; font-size: 25px; letter-spacing: -0.2px; }
+  header h1 span { color: var(--accent); }
+  header p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 22px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: 5px 12px; font-family: var(--mono); font-size: 12px; color: var(--muted);
+  }
+  .chip b { color: var(--ink); font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--accent); }
+  .dot.bad { background: var(--bad); }
+  .dot.run { background: var(--warn); }
+  .grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 18px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px; margin-bottom: 18px; min-width: 0;
+  }
+  .card h2 { margin: 0 0 4px; font-size: 15px; letter-spacing: 0.2px; }
+  .card h2 small { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+  .card p.lead { margin: 6px 0 14px; color: var(--muted); font-size: 13px; }
+  label.field { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
+  textarea, input[type=number], select {
+    width: 100%; background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
+    font-family: var(--mono); font-size: 13px;
+  }
+  textarea { min-height: 74px; resize: vertical; }
+  input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-2); }
+  .row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+  .row > * { flex: 1 1 110px; }
+  button {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 9px; padding: 9px 14px; font-size: 13.5px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent-2); }
+  button.primary { background: var(--accent); color: #06231a; border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .preset { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .preset label {
+    flex: 1 1 150px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    cursor: pointer; background: var(--panel-2);
+  }
+  .preset input { margin-right: 7px; }
+  .preset .name { font-size: 13.5px; font-weight: 600; }
+  .preset .meta { display: block; color: var(--muted); font-family: var(--mono); font-size: 11.5px; margin-top: 3px; }
+  .log {
+    background: #0a0e11; border: 1px solid var(--line); border-radius: 10px;
+    font-family: var(--mono); font-size: 12px; line-height: 1.55;
+    padding: 12px; height: 380px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .log .cmd { color: var(--accent-2); }
+  .log .step { color: var(--accent); font-weight: 600; }
+  .log .meta { color: var(--muted); }
+  .log .err { color: var(--bad); }
+  .log .out { color: #cfdae2; }
+  .statusline {
+    display: flex; justify-content: space-between; gap: 12px; align-items: center;
+    font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 9px; flex-wrap: wrap;
+  }
+  .badge { border-radius: 999px; padding: 3px 10px; border: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; }
+  .badge.running { color: var(--warn); border-color: var(--warn); }
+  .badge.done { color: var(--accent); border-color: var(--accent); }
+  .badge.failed { color: var(--bad); border-color: var(--bad); }
+  .badge.idle { color: var(--muted); }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; margin: 4px 0 0; }
+  .metric { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; }
+  .metric .k { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .metric .v { font-family: var(--mono); font-size: 15px; margin-top: 3px; }
+  .outbox {
+    background: #0a0e11; border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+    font-family: var(--mono); font-size: 13px; white-space: pre-wrap; word-break: break-word; margin-top: 12px;
+  }
+  .outbox .prompt { color: var(--muted); }
+  .outbox .gen { color: var(--accent); }
+  .steps { list-style: none; margin: 12px 0 0; padding: 0; font-family: var(--mono); font-size: 12px; }
+  .steps li { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .steps li:last-child { border-bottom: none; }
+  .steps .ok { color: var(--accent); }
+  .steps .no { color: var(--bad); }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+  .msg { margin-top: 10px; font-size: 13px; color: var(--warn); min-height: 18px; }
+  .kv { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .kv div { padding: 3px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+  .kv div:last-child { border-bottom: none; }
+  .kv b { color: var(--ink); font-weight: 600; }
+  .pchips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+  .pchips button { font-size: 12px; padding: 5px 10px; }
+  .spacer { height: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Niyah.Engine <span>·</span> sandbox console</h1>
+    <p>Native C11 language-model runtime. Every action below runs the compiled <code>niyah</code>, <code>niyah-train</code> and <code>niyah_probe</code> binaries from this working tree and streams their real output.</p>
+  </header>
+
+  <div class="chips" id="chips"></div>
+
+  <div class="grid">
+    <div>
+      <section class="card">
+        <h2>End-to-end pipeline <small>prepare → train → resume → eval → generate → probe</small></h2>
+        <p class="lead">Builds a tokenizer and shard from the demo corpus, trains a small model, resumes it from the persisted checkpoint + dataset cursor pair, evaluates held-out loss, then generates text.</p>
+        <div class="preset" id="presets"></div>
+        <button class="primary" id="run-pipeline">Run pipeline</button>
+        <div class="msg" id="msg"></div>
+        <div class="statusline">
+          <span id="job-title">No run yet</span>
+          <span class="badge idle" id="job-badge">idle</span>
+        </div>
+        <div class="log" id="log"><span class="meta">Output appears here.</span></div>
+        <div id="pipeline-steps"></div>
+        <div id="pipeline-result"></div>
+      </section>
+
+      <section class="card" id="tests-card">
+        <h2>Regression suite <small>ctest</small></h2>
+        <p class="lead">Runs the repository's own verification gate: configure with tests, build, then <code>ctest --output-on-failure</code>.</p>
+        <button id="run-tests">Run regression suite</button>
+        <div id="tests-result"></div>
+      </section>
+    </div>
+
+    <div>
+      <section class="card">
+        <h2>Generate text</h2>
+        <p class="lead">Runs <code>niyah run</code> against the checkpoint produced by the pipeline above, through the KV-cache decode path.</p>
+        <label class="field" for="prompt">Prompt</label>
+        <textarea id="prompt">User: what does a checkpoint do?
+Assistant:</textarea>
+        <div class="pchips" id="prompt-chips"></div>
+        <div class="row">
+          <div>
+            <label class="field" for="temperature">Temperature</label>
+            <input type="number" id="temperature" value="0" min="0" max="5" step="0.1" />
+          </div>
+          <div>
+            <label class="field" for="max-new">New tokens</label>
+            <input type="number" id="max-new" value="48" min="1" max="256" step="1" />
+          </div>
+        </div>
+        <div class="spacer"></div>
+        <button class="primary" id="generate" disabled>Generate</button>
+        <div class="hint" id="gen-hint">Train a checkpoint first (run the pipeline).</div>
+        <div id="gen-result"></div>
+      </section>
+
+      <section class="card">
+        <h2>Build</h2>
+        <p class="lead">CMake sources are compiled from the bind-mounted working tree, so a C change needs a rebuild before the next run.</p>
+        <button id="rebuild">Rebuild tools</button>
+      </section>
+
+      <section class="card">
+        <h2>Environment</h2>
+        <div class="kv" id="env"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let state = null;
+let renderedLogLines = 0;
+let renderedJob = null;
+let timer = null;
+let busy = false;
+
+async function getState() {
+  const res = await fetch('/api/state', { cache: 'no-store' });
+  return res.json();
+}
+
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('request failed (' + res.status + ')'));
+  return data;
+}
+
+function renderChips(s) {
+  const e = s.engine;
+  const built = Object.values(e.binaries).every((b) => b.built);
+  const chips = [
+    '<span class="chip"><span class="dot ' + (built ? 'ok' : 'bad') + '"></span>binaries <b>' + (built ? 'built' : 'missing') + '</b></span>',
+    '<span class="chip">commit <b>' + esc(e.toolchain.git || 'n/a') + '</b></span>',
+    '<span class="chip">cc <b>' + esc((e.toolchain.c_compiler || '').split(' ')[0] || 'n/a') + '</b></span>',
+    '<span class="chip">cmake <b>' + esc((e.toolchain.cmake || '').replace('cmake version ', '')) + '</b></span>',
+    '<span class="chip"><span class="dot ' + (s.trained_run ? 'ok' : '') + '"></span>checkpoint <b>' + (s.trained_run ? esc(s.trained_run.run_id) : 'none yet') + '</b></span>',
+    '<span class="chip">preview mode <b>' + esc(e.preview_mode || 'off') + '</b></span>',
+  ];
+  $('#chips').innerHTML = chips.join('');
+}
+
+function renderPresets(s) {
+  if ($('#presets').dataset.ready) return;
+  $('#presets').innerHTML = Object.entries(s.presets).map(([key, p], i) =>
+    '<label><input type="radio" name="preset" value="' + key + '"' + (i === 0 ? ' checked' : '') + ' />' +
+    '<span class="name">' + esc(p.label) + '</span>' +
+    '<span class="meta">' + p.updates + ' updates · dim ' + p.embedding_dim + ' · ' + p.layers + ' layers</span></label>'
+  ).join('');
+  $('#presets').dataset.ready = '1';
+}
+
+function renderLog(job) {
+  if (!job) return;
+  const log = $('#log');
+  if (renderedJob !== job.id) { log.innerHTML = ''; renderedLogLines = 0; renderedJob = job.id; }
+  if (job.log.length < renderedLogLines) { log.innerHTML = ''; renderedLogLines = 0; }
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const chunk = job.log.slice(renderedLogLines)
+    .map((l) => '<span class="' + l.kind + '">' + esc(l.text) + '</span>').join('\n');
+  if (chunk) log.insertAdjacentHTML('beforeend', (renderedLogLines ? '\n' : '') + chunk);
+  renderedLogLines = job.log.length;
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+function renderStatus(job) {
+  const badge = $('#job-badge');
+  if (!job) {
+    badge.className = 'badge idle';
+    badge.textContent = 'idle';
+    $('#job-title').textContent = 'No run yet';
+    return;
+  }
+  badge.className = 'badge ' + job.state;
+  const secs = (job.elapsed_ms / 1000).toFixed(1) + 's';
+  badge.textContent = job.state + ' · ' + secs + (job.exit_code === null ? '' : ' · exit ' + job.exit_code);
+  $('#job-title').textContent = job.kind + ' #' + job.id;
+}
+
+function renderSteps(job) {
+  const steps = (job.result && job.result.steps) || [];
+  const host = job.kind === 'pipeline' ? '#pipeline-steps' : null;
+  if (!host || !steps.length) return;
+  $(host).innerHTML = '<ul class="steps">' + steps.map((s) =>
+    '<li><span>' + esc(s.name) + '</span><span class="' + (s.ok ? 'ok' : 'no') + '">' +
+    (s.ok ? 'ok' : 'failed') + ' · ' + s.seconds + 's</span></li>').join('') + '</ul>';
+}
+
+function renderResult(job) {
+  if (!job || job.state === 'running') return;
+  const r = job.result || {};
+  if (job.kind === 'pipeline') {
+    let html = '';
+    if (r.eval) {
+      const keys = [['mean_loss', 'held-out loss'], ['perplexity', 'perplexity'],
+                    ['bits_per_token', 'bits/token'], ['baseline_mean_loss', 'bigram baseline'],
+                    ['baseline_bits_per_token', 'baseline bits/token'], ['bits_per_byte', 'bits/byte']];
+      html += '<div class="metrics">' + keys.filter(([k]) => r.eval[k] !== undefined).map(([k, label]) => {
+        const v = parseFloat(r.eval[k]);
+        return '<div class="metric"><div class="k">' + label + '</div><div class="v">' +
+          (isNaN(v) ? esc(r.eval[k]) : v.toFixed(4)) + '</div></div>';
+      }).join('') + '</div>';
+      if (r.eval.baseline_mean_loss !== undefined && r.eval.mean_loss !== undefined) {
+        const better = parseFloat(r.eval.mean_loss) < parseFloat(r.eval.baseline_mean_loss);
+        html += '<div class="hint">Model ' + (better ? 'beats' : 'is behind') +
+          ' the add-1 bigram baseline on this held-out slice.</div>';
+      }
+    }
+    if (r.generated) {
+      html += '<div class="outbox"><span class="prompt">' + esc(r.generated.prompt) + '</span>' +
+        '<span class="gen">' + esc(r.generated.text) + '</span></div>';
+    }
+    if (html) $('#pipeline-result').innerHTML = html;
+  }
+  if (job.kind === 'generate' && r.text !== undefined) {
+    $('#gen-result').innerHTML = '<div class="outbox"><span class="prompt">' + esc(r.prompt) +
+      '</span><span class="gen">' + esc(r.text) + '</span></div>';
+  }
+  if (job.kind === 'tests' && r.ctest_summary) {
+    $('#tests-result').innerHTML = '<div class="hint">' + esc(r.ctest_summary) + '</div>';
+  }
+}
+
+function renderEnv(s) {
+  const e = s.engine;
+  const rows = [
+    ['repository', e.root],
+    ['build dir', e.build_dir],
+    ['corpus', e.fixtures.corpus.bytes + ' bytes' + (e.fixtures.corpus.present ? '' : ' (missing)')],
+    ['held-out', e.fixtures.heldout.bytes + ' bytes' + (e.fixtures.heldout.present ? '' : ' (missing)')],
+    ['trained run', s.trained_run ? s.trained_run.checkpoint : 'not trained yet'],
+  ];
+  $('#env').innerHTML = rows.map(([k, v]) => '<div><b>' + esc(k) + '</b> ' + esc(v) + '</div>').join('');
+}
+function renderPromptChips(s) {
+  if ($('#prompt-chips').dataset.ready) return;
+  $('#prompt-chips').innerHTML = s.suggested_prompts.map((p, i) =>
+    '<button data-prompt="' + i + '">' + esc(p.split('\n')[0].replace('User: ', '')) + '</button>').join('');
+  $('#prompt-chips').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button[data-prompt]');
+    if (!btn) return;
+    $('#prompt').value = s.suggested_prompts[parseInt(btn.dataset.prompt, 10)];
+  });
+  $('#prompt-chips').dataset.ready = '1';
+}
+
+function setBusy(value, job) {
+  busy = value;
+  const running = !!(job && job.state === 'running');
+  ['#run-pipeline', '#generate', '#run-tests', '#rebuild'].forEach((sel) => {
+    const btn = $(sel);
+    if (sel === '#generate') btn.disabled = running || !(state && state.trained_run);
+    else btn.disabled = running;
+  });
+}
+
+function render(job, msg) {
+  renderStatus(job);
+  renderLog(job);
+  if (job && job.state !== 'running') { renderSteps(job); renderResult(job); }
+  if (msg) $('#msg').textContent = msg;
+  const trained = !!(state && state.trained_run);
+  $('#generate').disabled = !!(job && job.state === 'running') || !trained;
+  $('#gen-hint').textContent = trained
+    ? 'Checkpoint: ' + state.trained_run.checkpoint
+    : 'Train a checkpoint first (run the pipeline).';
+  setBusy(false, job);
+  if (job && job.state === 'running') startPolling();
+  else stopPolling();
+}
+
+function stopPolling() { if (timer) { clearInterval(timer); timer = null; } }
+function startPolling() {
+  stopPolling();
+  timer = setInterval(async () => {
+    const s = await getState();
+    state = s;
+    renderChips(s);
+    renderEnv(s);
+    render(s.job);
+  }, 800);
+}
+
+async function kick(path, body, label) {
+  $('#msg').textContent = '';
+  try {
+    await post(path, body);
+    const s = await getState();
+    state = s;
+    render(s.job, label);
+  } catch (err) {
+    $('#msg').textContent = err.message;
+  }
+}
+
+$('#run-pipeline').addEventListener('click', () => {
+  const preset = document.querySelector('input[name=preset]:checked').value;
+  $('#pipeline-result').innerHTML = '';
+  $('#pipeline-steps').innerHTML = '';
+  kick('/api/pipeline', { preset }, 'Pipeline started.');
+});
+$('#generate').addEventListener('click', () => {
+  $('#gen-result').innerHTML = '';
+  kick('/api/generate', {
+    prompt: $('#prompt').value,
+    temperature: parseFloat($('#temperature').value || '0'),
+    max_new_tokens: parseInt($('#max-new').value || '48', 10),
+  }, 'Generation started.');
+});
+$('#run-tests').addEventListener('click', () => kick('/api/tests', {}, 'Regression suite started.'));
+$('#rebuild').addEventListener('click', () => kick('/api/build', {}, 'Rebuild started.'));
+
+(async function init() {
+  const s = await getState();
+  state = s;
+  renderChips(s);
+  renderPresets(s);
+  renderPromptChips(s);
+  renderEnv(s);
+  render(s.job);
+})();
+</script>
+</body>
+</html>

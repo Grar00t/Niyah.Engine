@@ -1,0 +1,599 @@
+User: does it need an external model?
+Assistant: no, the sampler encodes everything natively.
+
+User: what happens on resume?
+Assistant: the sampler encodes the cursor position.
+
+User: how is decoding done?
+Assistant: the cursor resumes one token at a time.
+
+User: can a run resume?
+Assistant: yes, the sampler evaluates state and continues.
+
+User: how are losses reported?
+Assistant: a shard clips a loss per update.
+
+User: how is decoding done?
+Assistant: a checkpoint validates one token at a time.
+
+User: what happens on resume?
+Assistant: the gradient clip persists the cursor position.
+
+User: what happens on resume?
+Assistant: the training loop clips the cursor position.
+
+User: what happens on resume?
+Assistant: the word embeddings resumes the cursor position.
+
+User: is the tokenizer bound to identity?
+Assistant: yes, the tokenizer encodes state by hash.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: what does the cursor do?
+Assistant: the cursor evaluates native state.
+
+User: what does a shard store?
+Assistant: the gradient clip clips tokens and samples.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: how are losses reported?
+Assistant: RMSNorm decodes a loss per update.
+
+User: is the sampler bound to identity?
+Assistant: yes, the sampler persists state by hash.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: how are losses reported?
+Assistant: RMSNorm validates a loss per update.
+
+User: how is decoding done?
+Assistant: the decoder decodes one token at a time.
+
+User: is the KV cache bound to identity?
+Assistant: yes, the KV cache persists state by hash.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: what does a shard do?
+Assistant: a shard persists native state.
+
+User: what does the cursor do?
+Assistant: the cursor decodes native state.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: what happens on resume?
+Assistant: the training loop validates the cursor position.
+
+User: how are losses reported?
+Assistant: the word embeddings decodes a loss per update.
+
+User: how are losses reported?
+Assistant: the decoder validates a loss per update.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: can a run resume?
+Assistant: yes, the gradient clip validates state and continues.
+
+User: what does the cursor do?
+Assistant: the cursor validates native state.
+
+User: does it need an external model?
+Assistant: no, the tokenizer clips everything natively.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: is the word embeddings bound to identity?
+Assistant: yes, the word embeddings binds state by hash.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: what happens on resume?
+Assistant: the tokenizer streams the cursor position.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: what happens on resume?
+Assistant: a checkpoint binds the cursor position.
+
+User: is the word embeddings bound to identity?
+Assistant: yes, the word embeddings evaluates state by hash.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: what does the sampler do?
+Assistant: the sampler streams native state.
+
+User: what does a shard store?
+Assistant: the gradient clip evaluates tokens and samples.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: is a shard bound to identity?
+Assistant: yes, a shard validates state by hash.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: what does a shard store?
+Assistant: the tokenizer evaluates tokens and samples.
+
+User: does it need an external model?
+Assistant: no, the decoder evaluates everything natively.
+
+User: does it need an external model?
+Assistant: no, a checkpoint evaluates everything natively.
+
+User: can a run resume?
+Assistant: yes, the scheduler evaluates state and continues.
+
+User: can a run resume?
+Assistant: yes, the scheduler binds state and continues.
+
+User: how are losses reported?
+Assistant: the word embeddings resumes a loss per update.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: can a run resume?
+Assistant: yes, AdamW decodes state and continues.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: does it need an external model?
+Assistant: no, the word embeddings binds everything natively.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: is the tokenizer bound to identity?
+Assistant: yes, the tokenizer validates state by hash.
+
+User: how are losses reported?
+Assistant: the tokenizer encodes a loss per update.
+
+User: how are losses reported?
+Assistant: the cursor binds a loss per update.
+
+User: does it need an external model?
+Assistant: no, the training loop evaluates everything natively.
+
+User: can a run resume?
+Assistant: yes, the KV cache encodes state and continues.
+
+User: can a run resume?
+Assistant: yes, AdamW validates state and continues.
+
+User: how is decoding done?
+Assistant: the cursor clips one token at a time.
+
+User: what happens on resume?
+Assistant: the word embeddings evaluates the cursor position.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: is the cursor bound to identity?
+Assistant: yes, the cursor persists state by hash.
+
+User: does it need an external model?
+Assistant: no, the KV cache binds everything natively.
+
+User: what does the cursor do?
+Assistant: the cursor persists native state.
+
+User: what does a shard store?
+Assistant: a checkpoint streams tokens and samples.
+
+User: can a run resume?
+Assistant: yes, RMSNorm evaluates state and continues.
+
+User: can a run resume?
+Assistant: yes, a shard tracks state and continues.
+
+User: how is decoding done?
+Assistant: the sampler tracks one token at a time.
+
+User: what happens on resume?
+Assistant: RoPE resumes the cursor position.
+
+User: does it need an external model?
+Assistant: no, the tokenizer persists everything natively.
+
+User: what does the decoder do?
+Assistant: the decoder streams native state.
+
+User: is the tokenizer bound to identity?
+Assistant: yes, the tokenizer evaluates state by hash.
+
+User: how are losses reported?
+Assistant: the sampler validates a loss per update.
+
+User: is the decoder bound to identity?
+Assistant: yes, the decoder resumes state by hash.
+
+User: how is decoding done?
+Assistant: a shard clips one token at a time.
+
+User: can a run resume?
+Assistant: yes, the decoder persists state and continues.
+
+User: what does a shard store?
+Assistant: the gradient clip tracks tokens and samples.
+
+User: is a shard bound to identity?
+Assistant: yes, a shard clips state by hash.
+
+User: what does the scheduler do?
+Assistant: the scheduler binds native state.
+
+User: what happens on resume?
+Assistant: the scheduler clips the cursor position.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: what does the training loop do?
+Assistant: the training loop evaluates native state.
+
+User: is RoPE bound to identity?
+Assistant: yes, RoPE validates state by hash.
+
+User: how are losses reported?
+Assistant: a shard validates a loss per update.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: does it need an external model?
+Assistant: no, AdamW evaluates everything natively.
+
+User: how is decoding done?
+Assistant: the sampler clips one token at a time.
+
+User: how is decoding done?
+Assistant: a shard encodes one token at a time.
+
+User: what happens on resume?
+Assistant: the tokenizer streams the cursor position.
+
+User: what does a shard do?
+Assistant: a shard clips native state.
+
+User: does it need an external model?
+Assistant: no, the cursor validates everything natively.
+
+User: does it need an external model?
+Assistant: no, the gradient clip evaluates everything natively.
+
+User: what does a shard store?
+Assistant: the KV cache persists tokens and samples.
+
+User: what happens on resume?
+Assistant: the KV cache resumes the cursor position.
+
+User: can a run resume?
+Assistant: yes, the cursor encodes state and continues.
+
+User: does it need an external model?
+Assistant: no, the gradient clip tracks everything natively.
+
+User: what does a shard store?
+Assistant: the sampler decodes tokens and samples.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: does it need an external model?
+Assistant: no, a checkpoint resumes everything natively.
+
+User: is the decoder bound to identity?
+Assistant: yes, the decoder persists state by hash.
+
+User: is the KV cache bound to identity?
+Assistant: yes, the KV cache resumes state by hash.
+
+User: how are losses reported?
+Assistant: the sampler clips a loss per update.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: does it need an external model?
+Assistant: no, the word embeddings encodes everything natively.
+
+User: what happens on resume?
+Assistant: the word embeddings tracks the cursor position.
+
+User: is the sampler bound to identity?
+Assistant: yes, the sampler tracks state by hash.
+
+User: how are losses reported?
+Assistant: the scheduler persists a loss per update.
+
+User: what does the scheduler do?
+Assistant: the scheduler evaluates native state.
+
+User: what happens on resume?
+Assistant: the word embeddings streams the cursor position.
+
+User: what happens on resume?
+Assistant: the decoder streams the cursor position.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: what does the sampler do?
+Assistant: the sampler decodes native state.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: what does the gradient clip do?
+Assistant: the gradient clip resumes native state.
+
+User: does it need an external model?
+Assistant: no, the word embeddings validates everything natively.
+
+User: what does a shard store?
+Assistant: a shard encodes tokens and samples.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: how are losses reported?
+Assistant: the scheduler clips a loss per update.
+
+User: does it need an external model?
+Assistant: no, a checkpoint persists everything natively.
+
+User: can a run resume?
+Assistant: yes, RMSNorm persists state and continues.
+
+User: what does a shard store?
+Assistant: the cursor streams tokens and samples.
+
+User: how is decoding done?
+Assistant: RMSNorm encodes one token at a time.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: is the scheduler bound to identity?
+Assistant: yes, the scheduler decodes state by hash.
+
+User: can a run resume?
+Assistant: yes, the training loop binds state and continues.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: how is decoding done?
+Assistant: RMSNorm evaluates one token at a time.
+
+User: does it need an external model?
+Assistant: no, the gradient clip tracks everything natively.
+
+User: is the decoder bound to identity?
+Assistant: yes, the decoder decodes state by hash.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: is the cursor bound to identity?
+Assistant: yes, the cursor binds state by hash.
+
+User: what does a shard store?
+Assistant: the KV cache encodes tokens and samples.
+
+User: what does a shard store?
+Assistant: the KV cache persists tokens and samples.
+
+User: what does RMSNorm do?
+Assistant: RMSNorm validates native state.
+
+User: how is decoding done?
+Assistant: the sampler tracks one token at a time.
+
+User: does it need an external model?
+Assistant: no, the training loop streams everything natively.
+
+User: is the tokenizer bound to identity?
+Assistant: yes, the tokenizer decodes state by hash.
+
+User: can a run resume?
+Assistant: yes, the training loop persists state and continues.
+
+User: can a run resume?
+Assistant: yes, RMSNorm tracks state and continues.
+
+User: how is decoding done?
+Assistant: the sampler resumes one token at a time.
+
+User: does it need an external model?
+Assistant: no, AdamW encodes everything natively.
+
+User: is the sampler bound to identity?
+Assistant: yes, the sampler evaluates state by hash.
+
+User: does it need an external model?
+Assistant: no, the gradient clip decodes everything natively.
+
+User: how are losses reported?
+Assistant: RMSNorm encodes a loss per update.
+
+User: can a run resume?
+Assistant: yes, the scheduler encodes state and continues.
+
+User: how is decoding done?
+Assistant: RMSNorm encodes one token at a time.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: how is decoding done?
+Assistant: the KV cache resumes one token at a time.
+
+User: what happens on resume?
+Assistant: RMSNorm streams the cursor position.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: how is decoding done?
+Assistant: RMSNorm validates one token at a time.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: what does the tokenizer do?
+Assistant: the tokenizer encodes native state.
+
+User: how is decoding done?
+Assistant: RMSNorm binds one token at a time.
+
+User: is the gradient clip bound to identity?
+Assistant: yes, the gradient clip evaluates state by hash.
+
+User: can a run resume?
+Assistant: yes, the sampler validates state and continues.
+
+User: does it need an external model?
+Assistant: no, a shard encodes everything natively.
+
+User: how are losses reported?
+Assistant: the training loop binds a loss per update.
+
+User: does it need an external model?
+Assistant: no, the cursor clips everything natively.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: how is decoding done?
+Assistant: the scheduler clips one token at a time.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: what does the training loop do?
+Assistant: the training loop evaluates native state.
+
+User: what does the KV cache do?
+Assistant: the KV cache resumes native state.
+
+User: can a run resume?
+Assistant: yes, the tokenizer decodes state and continues.
+
+User: how are losses reported?
+Assistant: the cursor persists a loss per update.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: is RoPE bound to identity?
+Assistant: yes, RoPE clips state by hash.
+
+User: is the sampler bound to identity?
+Assistant: yes, the sampler evaluates state by hash.
+
+User: what happens on resume?
+Assistant: the scheduler encodes the cursor position.
+
+User: how is decoding done?
+Assistant: the KV cache decodes one token at a time.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: how is decoding done?
+Assistant: the word embeddings binds one token at a time.
+
+User: how is decoding done?
+Assistant: RoPE resumes one token at a time.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: how is decoding done?
+Assistant: RMSNorm decodes one token at a time.
+
+User: can a run resume?
+Assistant: yes, RoPE evaluates state and continues.
+
+User: can a run resume?
+Assistant: yes, the cursor tracks state and continues.
+
+User: what does a shard store?
+Assistant: the decoder evaluates tokens and samples.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: how are losses reported?
+Assistant: a checkpoint validates a loss per update.
+
+User: what is scored in eval?
+Assistant: only response tokens are scored.
+
+User: how is decoding done?
+Assistant: the scheduler binds one token at a time.
+
+User: which backend is the reference?
+Assistant: the cpu fp32 path is the reference.
+
+User: is the training loop bound to identity?
+Assistant: yes, the training loop persists state by hash.
+
+User: what does a shard store?
+Assistant: the cursor evaluates tokens and samples.
+
+User: is the scheduler bound to identity?
+Assistant: yes, the scheduler tracks state by hash.
+
+User: what does a shard store?
+Assistant: AdamW encodes tokens and samples.
