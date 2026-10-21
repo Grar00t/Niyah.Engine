@@ -78,6 +78,7 @@ target_link_libraries(niyah_cuda_backend PRIVATE CUDA::cudart)
 endif()
 
 add_library(niyah STATIC
+    src/niyah_core.c
     src/niyah_model.c
     src/niyah_publish_internal.c
     src/niyah_pair_internal.c
@@ -613,6 +614,8 @@ if(NIYAH_BUILD_TESTS)
         )
     endif()
 
+    add_executable(niyah_core_test tests/test_core.c)
+    target_link_libraries(niyah_core_test PRIVATE niyah)
     add_executable(niyah_model_test tests/test_model.c)
     target_link_libraries(niyah_model_test PRIVATE niyah)
 
@@ -705,6 +708,7 @@ if(NIYAH_BUILD_TESTS)
     target_link_libraries(niyah_training_fixture PRIVATE niyah)
 
     if(MSVC)
+        target_compile_options(niyah_core_test PRIVATE /W4 /WX)
         target_compile_options(niyah_model_test PRIVATE /W4 /WX)
         target_compile_options(niyah_tokenizer_test PRIVATE /W4 /WX)
         target_compile_options(niyah_dataset_test PRIVATE /W4 /WX)
@@ -726,6 +730,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_segment_embeddings_test PRIVATE /W4 /WX)
         target_compile_options(niyah_training_fixture PRIVATE /W4 /WX)
     else()
+        target_compile_options(niyah_core_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_tokenizer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         target_compile_options(niyah_dataset_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -748,6 +753,7 @@ if(NIYAH_BUILD_TESTS)
         target_compile_options(niyah_training_fixture PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
 
+    add_test(NAME niyah_core_test COMMAND niyah_core_test)
     add_test(NAME niyah_model_test COMMAND niyah_model_test)
     add_test(NAME niyah_tokenizer_test COMMAND niyah_tokenizer_test)
     add_test(NAME niyah_dataset_test COMMAND niyah_dataset_test)
